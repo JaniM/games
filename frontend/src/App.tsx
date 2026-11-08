@@ -1,33 +1,29 @@
-import { useOp, useQuery } from "millpond/react";
-import { BACKEND_ID, backendHealth, checkBackend } from "./features/backend";
+import { GAMES, gameHref } from "./games";
 
 export function App() {
   return (
-    <main>
-      <h1>Games</h1>
-      <BackendStatus />
+    <main className="page">
+      <header className="page-header">
+        <h1>Games</h1>
+        <p>Simple board games, played live or at your own pace.</p>
+      </header>
+
+      <ul className="game-list">
+        {GAMES.map((game) => (
+          <li key={game.id}>
+            <a className="game-card" href={gameHref(game)}>
+              <h2>{game.name}</h2>
+              <p>{game.description}</p>
+              <span className="game-card-footer">
+                <span>{game.players}</span>
+                <span className="game-card-play" aria-hidden="true">
+                  Play →
+                </span>
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
     </main>
-  );
-}
-
-function BackendStatus() {
-  // Rebuilding the query every render is free: equal queries share a subscription.
-  const health = useQuery(backendHealth.get(BACKEND_ID));
-  const check = useOp(checkBackend);
-
-  const label =
-    health === undefined || health.state === "checking"
-      ? "Checking…"
-      : health.state === "ok"
-        ? "Backend is up"
-        : `Backend is down (${health.error})`;
-
-  return (
-    <p>
-      {label}{" "}
-      <button type="button" onClick={() => check()} disabled={health?.state === "checking"}>
-        Check again
-      </button>
-    </p>
   );
 }

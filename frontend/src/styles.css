@@ -1,0 +1,136 @@
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f4ef;
+  --fg: #1d1b18;
+  --muted: #6b655c;
+  --card: #fffdf9;
+  --border: #e0dacd;
+  --accent: #a4472b;
+
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16140f;
+    --fg: #efebe3;
+    --muted: #a39c8f;
+    --card: #1f1c16;
+    --border: #353128;
+    --accent: #e08a6a;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+.page-header {
+  margin-bottom: 2.5rem;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(2.25rem, 6vw, 3.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.page-header p {
+  margin: 0.5rem 0 0;
+  font-size: 1.125rem;
+  color: var(--muted);
+}
+
+.game-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.game-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 100%;
+  padding: 1.5rem;
+  color: inherit;
+  text-decoration: none;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.game-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.game-card:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.game-card h2 {
+  margin: 0;
+  font-size: 1.375rem;
+  line-height: 1.2;
+}
+
+.game-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.game-card-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.game-card-play {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-card {
+    transition: none;
+  }
+
+  .game-card:hover {
+    transform: none;
+  }
+}
