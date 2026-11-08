@@ -1,5 +1,6 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent } from "react";
+import { type CSSProperties, type KeyboardEvent, type MouseEvent, useEffect, useRef } from "react";
 import type { LongBackgammonState, Seat, Step } from "../features/game";
+import { type TimedCue, cuesFor } from "./cues";
 import { Dice } from "./Dice";
 import {
   BAR_WIDTH,
@@ -56,16 +57,31 @@ interface BoardProps {
   selected: number | null;
   /** The viewer may move now: it is their turn and nothing is in flight. */
   interactive: boolean;
+  /** The viewer plays in this game, rather than watches it: only then is a result a win or a loss. */
+  player: boolean;
   onSelect: (point: number | null) => void;
   onMove: (step: Step) => void;
+  /** A sound goes with what just happened. The caller plays it, or not. */
+  onCue: (cue: TimedCue) => void;
 }
 
-export function Board(props: BoardProps) {
-  const { motion, rolls } = useMotion(props.state, props.revision, props.viewer);
+export function Board({ player, onCue, ...props }: BoardProps) {
+  const { state, revision, viewer } = props;
+  const { motion, rolls, ended } = useMotion(state, revision, viewer);
+
+  // The sounds go with the motion, once per position. The one the board opened on has none,
+  // and nor does the same position again with new labels.
+  const heard = useRef(revision);
+  useEffect(() => {
+    if (heard.current === revision) return;
+    heard.current = revision;
+    for (const timed of cuesFor({ motion, ended, state, viewer, player })) onCue(timed);
+  }, [revision, motion, ended, state, viewer, player, onCue]);
+
   return <BoardView {...props} motion={motion} rolls={rolls} />;
 }
 
-interface BoardViewProps extends BoardProps {
+interface BoardViewProps extends Omit<BoardProps, "player" | "onCue"> {
   /** What led to this position, if it can be followed with the eye. */
   motion: Motion | null;
   /** How many rolls this board has seen; 0 on a board that opened mid-game, whose dice lie still. */

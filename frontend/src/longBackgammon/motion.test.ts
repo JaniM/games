@@ -186,7 +186,12 @@ describe("nothing to follow", () => {
 });
 
 describe("what the board holds on to", () => {
-  const first = advance({ revision: 1, state: startingState(), motion: null, rolls: 0 }, startingState(), 1, 0);
+  const first = advance(
+    { revision: 1, state: startingState(), motion: null, rolls: 0, ended: false },
+    startingState(),
+    1,
+    0,
+  );
 
   it("starts with nothing happening and no rolls, wherever the game stands", () => {
     expect(first).toMatchObject({ motion: null, rolls: 0 });
@@ -212,5 +217,42 @@ describe("what the board holds on to", () => {
     });
     const jumped = advance(afterStep, missed, 9, 0);
     expect(jumped).toMatchObject({ revision: 9, motion: null, rolls: 1 });
+  });
+});
+
+describe("seeing a game end", () => {
+  const nearlyOver = startingState({
+    points: [board({ 24: 1 }), board({ 1: 15 })],
+    off: [14, 0],
+    ...moving([1, 2], [{ from: 24, die: 1 }]),
+  });
+  const over = startingState({
+    points: [board({}), board({ 1: 15 })],
+    off: [15, 0],
+    phase: { type: "over", winner: 0, points: 1 },
+  });
+  const held = (state: typeof nearlyOver, revision: number) => ({
+    revision,
+    state,
+    motion: null,
+    rolls: 0,
+    ended: false,
+  });
+
+  it("marks the position in which it ended, and only that one", () => {
+    const ended = advance(held(nearlyOver, 5), over, 6, 0);
+    expect(ended.ended).toBe(true);
+
+    // Labels changing at the same revision leave it as it was; the next position does not repeat it.
+    expect(advance(ended, over, 6, 0)).toBe(ended);
+    expect(advance(ended, over, 7, 0).ended).toBe(false);
+  });
+
+  it("does not mark a game that was already over when the board opened", () => {
+    expect(advance(held(over, 6), over, 7, 0).ended).toBe(false);
+  });
+
+  it("marks an end reached over several missed moves", () => {
+    expect(advance(held(startingState(), 2), over, 9, 0)).toMatchObject({ motion: null, ended: true });
   });
 });

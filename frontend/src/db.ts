@@ -5,6 +5,7 @@ import { lobby } from "./features/lobby";
 import { profile } from "./features/profile";
 import { router } from "./features/router";
 import { session } from "./features/session";
+import { sound } from "./features/sound";
 
 /**
  * The app's one db. Every table, op and effect must be registered here through
@@ -14,5 +15,5 @@ import { session } from "./features/session";
  * fresh microtask, so they show up in the browser console.
  */
 export const db = createDb({
-  features: { backend, game, lobby, profile, router, session },
+  features: { backend, game, lobby, profile, router, session, sound },
 });

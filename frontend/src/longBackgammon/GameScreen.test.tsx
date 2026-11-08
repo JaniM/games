@@ -50,6 +50,9 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         onAutoplay={noop}
         onSelect={noop}
         onMove={noop}
+        volume={0.7}
+        onVolume={noop}
+        onCue={noop}
         {...extra}
       />
     </DbProvider>,
@@ -398,5 +401,29 @@ describe("the view from each side", () => {
     const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state: mover }) }));
 
     expect(html).toContain("Move a checker from point 21");
+  });
+});
+
+describe("the strip along the top", () => {
+  const view = viewOf();
+
+  it("has the way back to the games before the title, so it costs no height of its own", () => {
+    const html = render(ADA, view);
+
+    expect(html).toContain("← All games");
+    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf("Long backgammon"));
+    expect(html.indexOf('class="game-top"')).toBeLessThan(html.indexOf("← All games"));
+  });
+
+  it("has a volume slider beside it, set to the volume it is given", () => {
+    const html = render(ADA, view, { volume: 0.5 });
+
+    expect(html).toMatch(/<input[^>]*type="range"[^>]*value="10"/);
+    expect(html).toContain('aria-valuetext="50%"');
+    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf('class="volume-slider"'));
+  });
+
+  it("calls the slider's left end Off", () => {
+    expect(render(ADA, view, { volume: 0 })).toContain('aria-valuetext="Off"');
   });
 });

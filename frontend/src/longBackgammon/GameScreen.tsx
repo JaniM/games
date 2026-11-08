@@ -10,6 +10,7 @@ import {
   seatOf,
 } from "../features/game";
 import { Board } from "./Board";
+import type { TimedCue } from "./cues";
 import { underDiceSpot } from "./geometry";
 import { type Colour, colourOf } from "./layout";
 import {
@@ -20,6 +21,7 @@ import {
   turnText,
   viewerSeat,
 } from "./status";
+import { VolumeControl } from "./VolumeControl";
 
 export type GameViewRow = RowOf<typeof gameViews>;
 export type JoinRequestRow = RowOf<typeof joinRequests>;
@@ -40,16 +42,24 @@ export interface GameScreenProps {
   onAutoplay: (on: boolean) => void;
   onSelect: (point: number | null) => void;
   onMove: (step: Step) => void;
+  /** How loud the sounds are, from 0 (silent) to 1. */
+  volume: number;
+  onVolume: (volume: number) => void;
+  /** Plays a sound. The caller applies the volume, and may play nothing. */
+  onCue: (cue: TimedCue) => void;
 }
 
 const HOME = "/";
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ volume, children }: { volume?: React.ReactNode; children: React.ReactNode }) {
   return (
     <main className="page game-page">
-      <p className="crumbs">
-        <Link to={HOME}>← All games</Link>
-      </p>
+      <div className="game-top">
+        <p className="crumbs">
+          <Link to={HOME}>← All games</Link>
+        </p>
+        {volume}
+      </div>
       <h1 className="game-title">Long backgammon</h1>
       {children}
     </main>
@@ -71,6 +81,9 @@ export function GameScreen({
   onAutoplay,
   onSelect,
   onMove,
+  volume,
+  onVolume,
+  onCue,
 }: GameScreenProps) {
   if (view?.connection === "missing") {
     return (
@@ -114,7 +127,16 @@ export function GameScreen({
   const turn = turnText(snapshot, mySeat);
 
   return (
-    <Shell>
+    <Shell
+      volume={
+        // Letting go of the slider plays a knock, so that the new level can be heard.
+        <VolumeControl
+          volume={volume}
+          onChange={onVolume}
+          onSettle={() => onCue({ cue: "move", afterMs: 0 })}
+        />
+      }
+    >
       {!connected && (
         <p className="notice" role="status">
           Connection lost. Reconnecting…
@@ -154,8 +176,10 @@ export function GameScreen({
           viewer={viewer}
           selected={view.selected}
           interactive={canAct}
+          player={mySeat !== null}
           onSelect={onSelect}
           onMove={onMove}
+          onCue={onCue}
         />
         {/* One button at a time: the roll comes before there are steps to take back. */}
         {canAct && state?.phase.type === "roll" && (
