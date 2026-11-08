@@ -1081,11 +1081,16 @@ form.name-control {
   font-size: 0.9em;
 }
 
-/* --- The foot of every page --- */
+/* --- The privacy link on the front page --- */
 
+/*
+ * In the bottom right corner of the viewport, not of the page: it stays there while the page
+ * scrolls. Its right edge lines up with the name in the top right corner (`.top-right`).
+ */
 .site-footer {
-  padding: 1rem 1.5rem 2rem;
-  text-align: center;
+  position: fixed;
+  right: 1.5rem;
+  bottom: 0.5rem;
   font-size: 0.9375rem;
 }
 

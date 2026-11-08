@@ -21,7 +21,8 @@ export function App() {
       {route.page === "game" && <GamePage key={route.gameId} gameId={route.gameId} />}
       {route.page === "privacy" && <Privacy />}
       {route.page === "notFound" && <NotFound />}
-      <SiteFooter />
+      {/* Only the front page links to the privacy policy. */}
+      {route.page === "home" && <SiteFooter />}
     </>
   );
 }

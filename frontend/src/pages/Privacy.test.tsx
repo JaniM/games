@@ -103,7 +103,7 @@ describe("the privacy policy", () => {
   });
 });
 
-describe("the foot of every page", () => {
+describe("the privacy link on the front page", () => {
   it("links to the privacy policy", () => {
     const html = render(<SiteFooter />);
 
