@@ -1,0 +1,106 @@
+use std::{env, error::Error, time::Duration};
+
+use axum::{Router, extract::State, http::StatusCode, routing::get};
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use tokio::{net::TcpListener, signal};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    let database_url = env::var("DATABASE_URL").map_err(|_| "DATABASE_URL must be set")?;
+    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&database_url)
+        .await
+        .map_err(|err| format!("could not connect to the database: {err}"))?;
+    tracing::info!("connected to database");
+
+    let listener = TcpListener::bind(&bind_addr).await?;
+    tracing::info!("listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app(pool))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+fn app(pool: PgPool) -> Router {
+    Router::new()
+        .route("/api/health", get(health))
+        .with_state(pool)
+}
+
+/// Returns 200 if the database answers a trivial query, 503 otherwise.
+async fn health(State(pool): State<PgPool>) -> StatusCode {
+    match sqlx::query("SELECT 1").execute(&pool).await {
+        Ok(_) => StatusCode::OK,
+        Err(err) => {
+            tracing::error!(%err, "health check failed");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
+}
+
+/// Resolves on Ctrl+C or SIGTERM. Without the SIGTERM handler, `docker stop` waits
+/// out its timeout and SIGKILLs the server, because PID 1 ignores signals it doesn't handle.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    async fn health_status(pool: PgPool) -> StatusCode {
+        let request = Request::get("/api/health").body(Body::empty()).unwrap();
+        app(pool).oneshot(request).await.unwrap().status()
+    }
+
+    // `#[sqlx::test]` creates a fresh database per test from `DATABASE_URL`.
+    #[sqlx::test]
+    async fn health_is_ok_when_database_is_reachable(pool: PgPool) {
+        assert_eq!(health_status(pool).await, StatusCode::OK);
+    }
+
+    // A lazy pool never connects, so this runs without a database.
+    #[tokio::test]
+    async fn health_is_unavailable_when_pool_is_closed() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        pool.close().await;
+        assert_eq!(health_status(pool).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
