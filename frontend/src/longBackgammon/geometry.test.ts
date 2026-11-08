@@ -1,15 +1,47 @@
 import { describe, expect, it } from "vitest";
 import {
+  BETWEEN_TRAYS,
   BOTTOM,
+  DIE_SIZE,
   MAX_STACK,
   POINT_HEIGHT,
+  POINT_WIDTH,
   RADIUS,
   STACK_STEP,
   TOP,
+  TRAY_WIDTH,
+  TRAY_X,
+  betweenTraysSpot,
+  columnX,
+  diceSpots,
   slotCentre,
   slotY,
   stackStep,
+  trayY,
 } from "./geometry";
+
+describe("the gap between the trays", () => {
+  it("is in the trays' column, between the top tray and the bottom one", () => {
+    expect(BETWEEN_TRAYS.x).toBe(TRAY_X + TRAY_WIDTH / 2);
+    expect(BETWEEN_TRAYS.y).toBeGreaterThan(trayY(true) + POINT_HEIGHT);
+    expect(BETWEEN_TRAYS.y).toBeLessThan(trayY(false));
+  });
+
+  it("is to the right of every point, so that no stack can be under a button there", () => {
+    const rightmost = columnX(11) + POINT_WIDTH;
+    expect(TRAY_X).toBeGreaterThanOrEqual(rightmost);
+  });
+
+  it("is to the right of the dice, even four of them", () => {
+    const last = diceSpots(4).at(-1);
+    expect(last).toBeDefined();
+    expect(BETWEEN_TRAYS.x).toBeGreaterThan((last?.x ?? 0) + DIE_SIZE);
+  });
+
+  it("is given as percentages of the board", () => {
+    expect(betweenTraysSpot()).toEqual({ left: "92.78%", top: "50.00%" });
+  });
+});
 
 describe("stackStep", () => {
   it("is the full step up to a full stack", () => {

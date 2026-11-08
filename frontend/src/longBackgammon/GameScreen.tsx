@@ -13,7 +13,7 @@ import {
 } from "../features/game";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
-import { underDiceSpot } from "./geometry";
+import { betweenTraysSpot, underDiceSpot } from "./geometry";
 import { type Colour, colourOf } from "./layout";
 import {
   barNameOf,
@@ -188,7 +188,8 @@ export function GameScreen({
           onMove={onMove}
           onCue={onCue}
         />
-        {/* One button at a time: the roll comes before there are steps to take back. */}
+        {/* Roll goes under the dice: nothing can be moved until they are thrown. Undo is there
+            while checkers are being moved, so it goes between the trays, where it covers no stack. */}
         {canAct && state?.phase.type === "roll" && (
           <button className="button under-dice" type="button" style={underDiceSpot()} onClick={onRoll}>
             Roll dice
@@ -196,9 +197,9 @@ export function GameScreen({
         )}
         {canUndo && (
           <button
-            className="button button-quiet under-dice"
+            className="button button-quiet between-trays"
             type="button"
-            style={underDiceSpot()}
+            style={betweenTraysSpot()}
             onClick={onUndo}
           >
             Undo

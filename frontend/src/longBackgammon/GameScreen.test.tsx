@@ -243,21 +243,18 @@ describe("a game with both players", () => {
     expect(render(STRANGER, view)).not.toContain("Undo");
   });
 
-  it("shows the undo where the roll button was, under the dice, and never both", () => {
+  it("puts the undo on the board, between the trays, where it covers no stack", () => {
     const state = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
 
     const wrap = html.slice(html.indexOf('class="board-wrap"'), html.indexOf('aria-label="Turn"'));
+    // After the board, positioned by percentages of it: the trays' column, halfway down.
     expect(wrap.indexOf("</svg>")).toBeLessThan(wrap.indexOf("Undo"));
-    expect(wrap).toMatch(/class="button button-quiet under-dice"[^>]*style="left:65\.56%;top:\d+\.\d+%"/);
+    expect(wrap).toMatch(/class="button button-quiet between-trays"[^>]*style="left:92\.78%;top:50\.00%"/);
+    expect(wrap).not.toContain("under-dice");
     expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Undo");
     // The roll button comes before the first step and is not there now.
     expect(html).not.toContain("Roll dice");
-    // And both sit in the same spot.
-    const roll = render(ADA, viewOf());
-    const spot = (s: string) => /style="(left:[^"]*)"/.exec(s)?.[1];
-    expect(spot(roll)).toBeDefined();
-    expect(spot(html)).toBe(spot(roll));
   });
 
   it("offers no undo before the first step, before the roll, or while a step is on its way", () => {

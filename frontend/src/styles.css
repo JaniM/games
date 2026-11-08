@@ -933,16 +933,30 @@ form.name-control {
   container-type: inline-size;
 }
 
-/* Under the dice, in the middle strip of the board (`underDiceSpot` gives left and top). */
-.under-dice {
+.under-dice,
+.between-trays {
   position: absolute;
-  transform: translateX(-50%);
   white-space: nowrap;
   font-size: clamp(0.8rem, 2.2cqw, 1.05rem);
 }
 
-/* A quiet button is see-through, which would not read over the points of the board. */
-.under-dice.button-quiet {
+/* Under the dice, in the middle strip of the board (`underDiceSpot` gives left and top). */
+.under-dice {
+  transform: translateX(-50%);
+}
+
+/*
+ * Centred in the gap between the two trays (`betweenTraysSpot` gives left and top). The gap is
+ * 80 board units wide, which is under 50px on a phone, so the button gives up some of its side
+ * padding to stay inside the board.
+ */
+.between-trays {
+  transform: translate(-50%, -50%);
+  padding-inline: 0.5rem;
+}
+
+/* A quiet button is see-through, which would not read over the board's frame. */
+.between-trays.button-quiet {
   background: var(--card);
 }
 

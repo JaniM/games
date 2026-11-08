@@ -120,15 +120,40 @@ const DICE_CENTRE: Xy = {
 const ROLL_GAP = 12;
 
 /**
- * Where the button under the dice goes (Roll before the dice are thrown, Undo after), as CSS
- * percentages of the board: centred under the dice. The button is HTML laid over the board,
- * so it stays a button of a usable size when the board is scaled down on a phone.
+ * Where the Roll button goes, as CSS percentages of the board: centred under the dice. The
+ * button is HTML laid over the board, so it stays a button of a usable size when the board is
+ * scaled down on a phone. That size does not shrink with the board, so on a phone the button
+ * reaches past the middle strip over the tops of the bottom row's stacks: only a button that is
+ * shown when no checker can be moved (Roll is) may go here.
  */
 export function underDiceSpot(): { left: string; top: string } {
   const top = DICE_CENTRE.y + DIE_SIZE / 2 + ROLL_GAP;
+  return percentOfBoard(DICE_CENTRE.x, top);
+}
+
+/**
+ * The middle of the gap between the two trays: the column of the trays, halfway down. Nothing
+ * is drawn there, and the dice, which are towards the other side, stay clear even when there
+ * are four.
+ */
+export const BETWEEN_TRAYS: Xy = {
+  x: TRAY_X + TRAY_WIDTH / 2,
+  y: (trayY(true) + POINT_HEIGHT + trayY(false)) / 2,
+};
+
+/**
+ * Where the Undo button goes, as CSS percentages of the board: its middle is `BETWEEN_TRAYS`.
+ * It is a place the stacks do not reach, so the button covers no checker and no landing mark,
+ * however the board is scaled.
+ */
+export function betweenTraysSpot(): { left: string; top: string } {
+  return percentOfBoard(BETWEEN_TRAYS.x, BETWEEN_TRAYS.y);
+}
+
+function percentOfBoard(x: number, y: number): { left: string; top: string } {
   return {
-    left: `${((DICE_CENTRE.x / WIDTH) * 100).toFixed(2)}%`,
-    top: `${((top / HEIGHT) * 100).toFixed(2)}%`,
+    left: `${((x / WIDTH) * 100).toFixed(2)}%`,
+    top: `${((y / HEIGHT) * 100).toFixed(2)}%`,
   };
 }
 // Dice that lie in a perfectly straight row look placed, not thrown.
