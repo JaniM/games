@@ -2,7 +2,7 @@ use std::{env, error::Error, time::Duration};
 
 use axum::{
     Router,
-    extract::State,
+    extract::{FromRef, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -10,9 +10,15 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::EnvFilter;
 
+use crate::{game::Games, room::Rooms};
+
 mod auth;
 mod error;
+mod game;
+mod lobby;
 mod profile;
+mod room;
+mod socket;
 #[cfg(test)]
 mod test_util;
 
@@ -44,18 +50,52 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app(pool))
+    axum::serve(listener, app(AppState::new(pool, game::registry())))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
 }
 
-fn app(pool: PgPool) -> Router {
+/// What handlers share. They take the parts they need with `State<PgPool>` or `State<Rooms>`.
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    rooms: Rooms,
+}
+
+impl AppState {
+    fn new(pool: PgPool, games: Games) -> Self {
+        Self {
+            rooms: Rooms::new(pool.clone(), games),
+            pool,
+        }
+    }
+}
+
+impl FromRef<AppState> for PgPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+impl FromRef<AppState> for Rooms {
+    fn from_ref(state: &AppState) -> Self {
+        state.rooms.clone()
+    }
+}
+
+fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/register", post(auth::register))
         .route("/api/me", get(profile::me).patch(profile::set_name))
-        .with_state(pool)
+        .route(
+            "/api/games",
+            get(lobby::list_games).post(lobby::create_game),
+        )
+        .route("/api/games/{id}/join", post(lobby::join_game))
+        .route("/api/games/{id}/ws", get(socket::connect))
+        .with_state(state)
 }
 
 /// Returns 200 if the database answers a trivial query, 503 otherwise.
@@ -104,7 +144,11 @@ mod tests {
 
     async fn health_status(pool: PgPool) -> StatusCode {
         let request = Request::get("/api/health").body(Body::empty()).unwrap();
-        app(pool).oneshot(request).await.unwrap().status()
+        app(AppState::new(pool, Games::default()))
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status()
     }
 
     // `#[sqlx::test]` creates a fresh database per test from `DATABASE_URL`.

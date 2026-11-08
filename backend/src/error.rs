@@ -9,6 +9,10 @@ pub enum ApiError {
     Unauthorized,
     /// The request is well-formed but its content is not acceptable.
     Invalid(&'static str),
+    /// There is no such thing.
+    NotFound,
+    /// The request is fine, but the current state of things doesn't allow it.
+    Conflict(&'static str),
     /// Our fault: the database or the system's random source failed.
     Internal,
 }
@@ -32,6 +36,8 @@ impl IntoResponse for ApiError {
             )
                 .into_response(),
             Self::Invalid(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason).into_response(),
+            Self::NotFound => StatusCode::NOT_FOUND.into_response(),
+            Self::Conflict(reason) => (StatusCode::CONFLICT, reason).into_response(),
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }

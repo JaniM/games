@@ -1,11 +1,13 @@
 //! Anonymous accounts. The site registers every new browser as a user and hands
 //! it an access token, which the client then sends as `Authorization: Bearer <token>`.
+//! A WebSocket can't carry that header from a browser, so it sends the token in its
+//! first message instead (see `socket`).
 //!
 //! The token is 32 random bytes, hex-encoded, and is stored as given.
 
 use axum::{
     Json,
-    extract::{FromRequestParts, State},
+    extract::{FromRef, FromRequestParts, State},
     http::{HeaderMap, StatusCode, header, request::Parts},
 };
 use serde::Serialize;
@@ -47,19 +49,30 @@ pub async fn register(
 /// require authentication; the request is rejected with 401 before the handler runs.
 pub struct AuthUser(pub Uuid);
 
-impl FromRequestParts<PgPool> for AuthUser {
+impl<S> FromRequestParts<S> for AuthUser
+where
+    PgPool: FromRef<S>,
+    S: Send + Sync,
+{
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, pool: &PgPool) -> Result<Self, ApiError> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
         let token = bearer_token(&parts.headers).ok_or(ApiError::Unauthorized)?;
-        let user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE access_token = $1")
-                .bind(token)
-                .fetch_optional(pool)
-                .await
-                .map_err(ApiError::database("could not look up an access token"))?;
-        user_id.map(Self).ok_or(ApiError::Unauthorized)
+        authenticate(&PgPool::from_ref(state), token)
+            .await
+            .map(Self)
     }
+}
+
+/// The user an access token belongs to, or `Unauthorized` if no user has it. For
+/// callers that get the token some other way than the `Authorization` header.
+pub async fn authenticate(pool: &PgPool, token: &str) -> Result<Uuid, ApiError> {
+    let user_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE access_token = $1")
+        .bind(token)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::database("could not look up an access token"))?;
+    user_id.ok_or(ApiError::Unauthorized)
 }
 
 fn new_token() -> Result<String, ApiError> {
