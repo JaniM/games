@@ -353,6 +353,11 @@ impl Game for Solo {
         SoloState { count: 0 }
     }
 
+    /// Over after three actions.
+    fn is_over(state: &SoloState) -> bool {
+        state.count >= 3
+    }
+
     fn apply(state: &SoloState, _seat: usize, _action: Value) -> Result<SoloState, Rejection> {
         Ok(SoloState {
             count: state.count + 1,

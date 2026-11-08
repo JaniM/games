@@ -7,6 +7,11 @@ export default defineConfig({
   // Keep the host on the default: a cache the jail can write is code the host would run.
   cacheDir: process.env.GAMES_SANDBOX ? `${process.env.HOME}/vite-cache` : undefined,
   server: {
+    // Vite refuses requests whose Host header it doesn't know, as a guard against DNS
+    // rebinding. `localhost` and IP addresses are always fine; a name that reaches this
+    // machine from another device (`pnpm dev:lan`) has to be listed. A leading dot allows
+    // the domain and all its subdomains: here, every Tailscale name.
+    allowedHosts: [".ts.net"],
     // The axum backend (compose.yaml publishes it on 3000).
     // `ws` lets the game sockets (/api/games/<id>/ws) through.
     proxy: { "/api": { target: "http://127.0.0.1:3000", ws: true } },

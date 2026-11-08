@@ -1,8 +1,9 @@
 import { createDb } from "millpond";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GAME_ID, moving, snapshotMessage, startingState } from "../../fixtures";
+import { GAME_ID, board, moving, snapshotMessage, startingState } from "../../fixtures";
 import { FakeWebSocket, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
 import { SESSION_ID, session, sessionState } from "../session";
+import { AUTOPLAY_PAUSE_MS } from "./autoplay";
 import { game, gameActions, gameViews, joinRequests } from "./index";
 
 // A fresh db per test, from the same features the app uses.
@@ -515,13 +516,281 @@ describe("selecting a checker", () => {
     expect(selected(db)).toBeNull();
   });
 
-  it("is dropped when a move is sent", async () => {
+  it("is dropped when a roll or an undo is sent", async () => {
     const { db } = await playing(0);
-    db.ops.game.selectPoint({ gameId: GAME_ID, point: 1 });
 
-    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "move", from: 1, die: 6 } });
+    db.ops.game.selectPoint({ gameId: GAME_ID, point: 1 });
+    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "undo" } });
 
     expect(selected(db)).toBeNull();
+  });
+});
+
+describe("a checker that has moved", () => {
+  /** A game in which this browser's user is seat 0, mid-turn with a 6 and a 3 to play. */
+  async function midTurn() {
+    const ctx = setup();
+    await settle(); // the session registers as issued(1), so its user id is user-1
+    const players = [issued(1).userId, "other"];
+    const state = startingState({
+      ...moving([6, 3], [{ from: 1, die: 6 }, { from: 1, die: 3 }, { from: 5, die: 3 }]),
+    });
+    const socket = await connected(ctx.db, { players, state });
+    ctx.db.ops.game.selectPoint({ gameId: GAME_ID, point: 5 });
+    ctx.db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "move", from: 5, die: 3 } });
+    return { ...ctx, socket, players };
+  }
+  const selected = (db: TestDb) => view(db)?.selected;
+
+  /** The answer to the move 5 to 8: the 6 is left to play, with these steps legal. */
+  const answer = (players: string[], legal: { from: number; die: number }[]) =>
+    snapshotMessage({
+      revision: 2,
+      players,
+      state: startingState({ ...moving([6, 3], legal, [{ from: 5, die: 3 }], [6]) }),
+    });
+
+  it("is selected again where it lands, for the next die", async () => {
+    const { db, socket, players } = await midTurn();
+    expect(selected(db)).toBe(8);
+
+    socket.receive(answer(players, [{ from: 8, die: 6 }, { from: 1, die: 6 }]));
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, selected: 8 });
+  });
+
+  it("is let go when it cannot move on, even if another checker can", async () => {
+    const { db, socket, players } = await midTurn();
+
+    socket.receive(answer(players, [{ from: 1, die: 6 }]));
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, selected: null });
+  });
+
+  it("is let go when the move ended the turn", async () => {
+    const { db, socket, players } = await midTurn();
+
+    // The other seat is to roll. A point that happens to be playable by them is not ours.
+    socket.receive(
+      snapshotMessage({ revision: 2, players, state: startingState({ turn: 1, legal: [{ from: 8, die: 6 }] }) }),
+    );
+    await settle();
+
+    expect(selected(db)).toBeNull();
+  });
+
+  it("is let go when the server refuses the move", async () => {
+    const { db, socket } = await midTurn();
+
+    socket.receive({ type: "error", code: "rejected", message: "that move is blocked" });
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, selected: null, error: "that move is blocked" });
+  });
+
+  it("is not followed off the board", async () => {
+    const { db } = setup();
+    await settle();
+    const players = [issued(1).userId, "other"];
+    const state = startingState({ ...moving([6, 5], [{ from: 20, die: 5 }]), points: [board({ 20: 15 }), board({ 1: 15 })] });
+    await connected(db, { players, state });
+    db.ops.game.selectPoint({ gameId: GAME_ID, point: 20 });
+
+    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "move", from: 20, die: 5 } });
+
+    expect(selected(db)).toBeNull();
+  });
+
+  it("is let go when the move could not be sent", async () => {
+    const { db, socket } = await midTurn();
+
+    // The socket drops before the queued move goes out, which the server never sees.
+    socket.serverClose(1006);
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, selected: null });
+  });
+});
+
+describe("auto-play", () => {
+  // Fake timers freeze the pauses. `settle` waits on a timer, so these tests flush with `tick`.
+  const tick = () => vi.advanceTimersByTimeAsync(0);
+  const actionsOf = (socket: FakeWebSocket) =>
+    socket.sent.filter((m) => m.type === "action").map((m) => m.action);
+  const legal = [
+    { from: 1, die: 6 },
+    { from: 1, die: 3 },
+    { from: 5, die: 3 },
+  ];
+
+  /** A game in which this browser's user holds `seat`, with White (seat 0) to roll. */
+  async function playing(seat: 0 | 1 = 0, state = startingState()) {
+    vi.useFakeTimers();
+    const ctx = setup();
+    await tick();
+    await tick(); // the session registers as issued(1), so its user id is user-1
+    ctx.db.ops.game.openGame({ gameId: GAME_ID });
+    await tick();
+    const socket = FakeWebSocket.last;
+    socket.open();
+    const players = seat === 0 ? [issued(1).userId, "other"] : ["other", issued(1).userId];
+    socket.receive(snapshotMessage({ players, state }));
+    await tick();
+    return { ...ctx, socket, players };
+  }
+  const auto = (db: TestDb) => view(db)?.auto;
+  const pause = async (ms = AUTOPLAY_PAUSE_MS) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    await tick();
+  };
+
+  it("is off when a game opens", async () => {
+    const { db, socket } = await playing();
+
+    expect(auto(db)).toBe(false);
+    await pause(AUTOPLAY_PAUSE_MS * 5);
+    expect(actionsOf(socket)).toEqual([]);
+  });
+
+  it("rolls for the player after a pause", async () => {
+    const { db, socket } = await playing();
+
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS - 1);
+    expect(actionsOf(socket)).toEqual([]);
+    await pause(1);
+
+    expect(actionsOf(socket)).toEqual([{ type: "roll" }]);
+  });
+
+  it("then takes a checker off the head, as it does whenever it can, once the dice are rolled", async () => {
+    const { db, socket, players } = await playing();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.99); // the last of the two off the head
+    try {
+      db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+      await pause();
+
+      socket.receive(
+        snapshotMessage({ revision: 2, players, state: startingState(moving([6, 3], legal)) }),
+      );
+      await tick();
+      await pause();
+
+      expect(actionsOf(socket)).toEqual([{ type: "roll" }, { type: "move", from: 1, die: 3 }]);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it("leaves nothing selected, since it never selected anything", async () => {
+    const { db, socket, players } = await playing();
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    socket.receive(
+      snapshotMessage({ revision: 2, players, state: startingState(moving([6, 3], legal)) }),
+    );
+    await tick();
+    await pause();
+
+    expect(view(db)).toMatchObject({ busy: true, selected: null });
+  });
+
+  it("waits for the answer to an action before sending the next", async () => {
+    const { db, socket } = await playing();
+
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS * 6);
+
+    expect(actionsOf(socket)).toEqual([{ type: "roll" }]);
+  });
+
+  it("does nothing while it is the opponent's turn", async () => {
+    const { db, socket } = await playing(1); // seat 0 is to roll
+
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS * 5);
+
+    expect(auto(db)).toBe(true);
+    expect(actionsOf(socket)).toEqual([]);
+  });
+
+  it("starts again when the turn comes round", async () => {
+    const { db, socket, players } = await playing(1);
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS * 2);
+    expect(actionsOf(socket)).toEqual([]);
+
+    socket.receive(snapshotMessage({ revision: 5, players, state: startingState({ turn: 1 }) }));
+    await tick();
+    await pause();
+
+    expect(actionsOf(socket)).toEqual([{ type: "roll" }]);
+  });
+
+  it("stops at once when it is switched off", async () => {
+    const { db, socket } = await playing();
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS - 100);
+
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: false });
+    await pause(AUTOPLAY_PAUSE_MS * 3);
+
+    expect(auto(db)).toBe(false);
+    expect(actionsOf(socket)).toEqual([]);
+  });
+
+  it("can be switched on only by a player", async () => {
+    vi.useFakeTimers();
+    const { db } = setup();
+    await tick();
+    await tick();
+    db.ops.game.openGame({ gameId: GAME_ID });
+    await tick();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.receive(snapshotMessage({ players: ["a", "b"] })); // the user is neither
+    await tick();
+
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+
+    expect(auto(db)).toBe(false);
+  });
+
+  it("switches itself off when the server refuses what it sent", async () => {
+    const { db, socket } = await playing();
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause();
+    expect(actionsOf(socket)).toHaveLength(1);
+
+    socket.receive({ type: "error", code: "rejected", message: "that is not allowed" });
+    await tick();
+    await pause(AUTOPLAY_PAUSE_MS * 4);
+
+    expect(view(db)).toMatchObject({ auto: false, error: "that is not allowed" });
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("does not send while the connection is down", async () => {
+    const { db, socket } = await playing();
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+    await pause(AUTOPLAY_PAUSE_MS - 100);
+
+    socket.serverClose(1006);
+    await tick();
+    await pause(150);
+
+    expect(actionsOf(socket)).toEqual([]);
+    expect(FakeWebSocket.instances).toHaveLength(1); // the retry is still a second away
+  });
+
+  it("ends with the page", async () => {
+    const { db, socket } = await playing();
+    db.ops.game.setAutoplay({ gameId: GAME_ID, on: true });
+
+    db.ops.game.closeGame({ gameId: GAME_ID });
+    await pause(AUTOPLAY_PAUSE_MS * 3);
+
+    expect(actionsOf(socket)).toEqual([]);
   });
 });
 

@@ -1,5 +1,5 @@
 import { feature } from "millpond";
-import { connectGame, joinGameRequest, sendActions } from "./effects";
+import { autoPlay, connectGame, joinGameRequest, sendActions } from "./effects";
 import {
   actionDropped,
   actionRefused,
@@ -12,6 +12,7 @@ import {
   joined,
   openGame,
   selectPoint,
+  setAutoplay,
   snapshotReceived,
   submitAction,
 } from "./ops";
@@ -27,6 +28,7 @@ export const game = feature({
     gameProblem,
     actionRefused,
     selectPoint,
+    setAutoplay,
     submitAction,
     actionSent,
     actionDropped,
@@ -34,12 +36,13 @@ export const game = feature({
     joined,
     joinFailed,
   },
-  effects: { connectGame, sendActions, joinGameRequest },
+  effects: { connectGame, sendActions, joinGameRequest, autoPlay },
 });
 
 // Components import definitions by value; they never need the assembled db.
-export { closeGame, joinGame, openGame, selectPoint, submitAction } from "./ops";
-export { isFull, seatOf } from "./selectors";
+export { closeGame, joinGame, openGame, selectPoint, setAutoplay, submitAction } from "./ops";
+export { isFull, landing, seatOf } from "./selectors";
+export type { Landing } from "./selectors";
 export type {
   Action,
   LongBackgammonState,

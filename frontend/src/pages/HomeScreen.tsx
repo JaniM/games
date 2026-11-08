@@ -87,6 +87,25 @@ export function HomeScreen({
   );
 }
 
+/**
+ * Who is in a game, by seat: "Ada (you) vs Grace". As on the game page, you are "You" if you
+ * have no name, and another player without one is "Player 2".
+ */
+export function playersText(game: Pick<MyGameRow, "seat" | "playerNames">): string {
+  return game.playerNames
+    .map((name, seat) => {
+      if (seat === game.seat) return name ? `${name} (you)` : "You";
+      return name ?? `Player ${seat + 1}`;
+    })
+    .join(" vs ");
+}
+
+/** Where a game stands: waiting for an opponent, in progress, or finished. */
+export function gameStateText(game: Pick<MyGameRow, "started" | "finished">): string {
+  if (game.finished) return "Finished";
+  return game.started ? "In progress" : "Waiting for an opponent";
+}
+
 interface MyGamesProps {
   games: readonly GameInfo[];
   mine: readonly MyGameRow[];
@@ -122,8 +141,9 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
           <li key={game.gameId}>
             <Link className="my-game" to={gamePath(game.kind, game.gameId)}>
               <span className="my-game-name">{info.name}</span>
-              <span className="my-game-state">
-                {game.started ? "In progress" : "Waiting for an opponent"}
+              <span className="my-game-players">{playersText(game)}</span>
+              <span className={game.finished ? "my-game-state my-game-state-done" : "my-game-state"}>
+                {gameStateText(game)}
               </span>
               <time className="muted" dateTime={new Date(game.updatedAt).toISOString()}>
                 {new Date(game.updatedAt).toLocaleString(undefined, {

@@ -1,5 +1,5 @@
 import type { LongBackgammonState, Seat, Snapshot, Step } from "../features/game";
-import { landing, toViewerIndex } from "./layout";
+import { landing, pointNumber } from "./layout";
 
 // The words on the page, derived from a snapshot. Kept apart from the components so that
 // every sentence can be tested.
@@ -29,12 +29,12 @@ export function diceText(dice: readonly [number, number]): string {
 }
 
 /**
- * A step in the viewer's numbering, "12→18" or "20→off". The step is in its mover's own
- * numbers, which are not the viewer's when the mover is the other player.
+ * A step in the numbering both players share, "24→18" or "3→off". The step is in its
+ * mover's own numbers, which are not the shared ones (see `pointNumber`).
  */
-export function stepText(step: Step, mover: Seat, viewer: Seat): string {
+export function stepText(step: Step, mover: Seat, white: Seat): string {
   const to = landing(step);
-  const place = (k: number) => toViewerIndex(k, mover, viewer);
+  const place = (k: number) => pointNumber(k, mover, white);
   return `${place(step.from)}→${to === "off" ? "off" : place(to)}`;
 }
 
@@ -70,10 +70,10 @@ export function lastTurnText(snapshot: Snapshot, mySeat: Seat | null): string {
   const last = snapshot.state?.lastTurn;
   if (!snapshot.state || !last) return "";
   const name = nameOf(snapshot, last.seat, mySeat);
-  const viewer = viewerSeat(mySeat, snapshot.state);
   const rolled = `${name} rolled ${diceText(last.dice)}`;
   if (last.played.length === 0) return `${rolled} and could not move.`;
-  const steps = last.played.map((step) => stepText(step, last.seat, viewer)).join(", ");
+  const { white } = snapshot.state;
+  const steps = last.played.map((step) => stepText(step, last.seat, white)).join(", ");
   return `${rolled} and played ${steps}.`;
 }
 

@@ -21,7 +21,7 @@ Every rule below is written in the **own index** of the player being talked abou
   `opponent_index = own_index + 12` if `own_index ≤ 12`, else `own_index − 12`.
   So a player's head (1) is the opponent's point 13, and a player's home (19–24) is the opponent's points 7–12.
 - Internally, a ring position `r` in `0..23` is a convenient shared coordinate, with White's index `i` at `r = i − 1` and Black's index `j` at `r = (j − 1 + 12) mod 24`.
-- **Physical point numbers (for cross-reference with Russian-language sources and diagrams):** White's index `i` is physical point `25 − i`. Black's index `j` is physical point `((12 − j) mod 24) + 1`. So White's head is point 24 and Black's is point 12. White's home is points 1–6 and Black's is 13–18. The heads are in diagonally opposite corners.
+- **Physical point numbers (for cross-reference with Russian-language sources and diagrams):** White's index `i` is physical point `25 − i`. Black's index `j` is physical point `((12 − j) mod 24) + 1`. So White's head is point 24 and Black's is point 12. White's home is points 1–6 and Black's is 13–18. The heads are in diagonally opposite corners. The site labels the board and its move lists with these numbers, so that both players (and anyone watching) name a point the same way. Each player's board is still turned to put their own head top right.
 
 "White" is the player who makes the first turn of the game, and "Black" is the other. Colours are assigned that way, so "White starts" always holds.
 
@@ -38,6 +38,7 @@ Every rule below is written in the **own index** of the player being talked abou
 3. One checker may be moved by both dice, one after the other. Each step is its own move, and the intermediate point must be a legal landing point.
 4. **Doubles** give four moves of the rolled number instead of two.
 5. A die that cannot be played is lost. A player who cannot play any die loses the turn. A player may never pass voluntarily.
+6. **Undo (site rule).** While the turn is in progress, the player may take back the steps they have played this turn, the last one first. The checker goes back where it was and its die is back to play. The roll cannot be taken back: the dice stay the same. A turn ends as soon as nothing is left to play, so the step that ends it is final and a finished turn is never reopened. (See [D7](#decisions).)
 
 ## Legal single move
 
@@ -94,6 +95,8 @@ Points where the sources are silent or disagree. The entry in the Choice column 
 | D4 | What counts as "consecutive" for a block? | **Opponent's path order, no wrap through the opponent's 24→1.** | No source defines it. This follows "the six points in front of a checker" (Russian Wikipedia) and the fact that one die moves at most 6. |
 | D5 | Is there a last-throw draw rule? | **Yes**, as described above. | The English Wikipedia Long Nardy page and the Russian page both describe it as the Federation/tournament rule. Many online apps skip it. How mars interacts with the last throw is not stated by any source. We judge mars after the last throw. |
 | D6 | Overshoot when bearing off. | **Standard backgammon overshoot.** | The Russian page says "if there are no checkers on the higher points, bear off from the lower ones". The English page is silent on the larger-die case. |
+| D7 | May a player take back a step? | **Yes, within the turn in progress; never the roll, and never the step that ends the turn.** | Not a rule of the sources: a site feature the user asked for on 2026-11-08, with this scope chosen from three (this one, an explicit "end turn" confirmation, and a takeback up to the opponent's roll). Undoing only returns to a position the player already had, so every rule above still holds. The head rule, the must-play rules and the prime rule are worked out again from the restored position. The opponent sees each step and each undo as it happens. |
+| D8 | Which die bears off the selected checker when two different dice could? | **The larger die, in the site's UI.** | Not a rule of the sources: a site decision the user made on 2026-11-08. The bear-off button shows no die, so it cannot ask. This removes the player's choice of die in those positions, which can matter for what the other die may play. The server still accepts either die; only this client makes the choice, so it is the one place to change if the choice should come back. |
 
 ## Worked examples
 
@@ -108,10 +111,11 @@ All use each player's **own index**. They assume the points mentioned are otherw
 7. **Bear-off overshoot.** All checkers are home, on points 19 and 22 only. With a 5, point 20 is empty and a checker is farther back (on 19), so the 5 cannot bear off from 22. The 5 must be played 19→24. With a 3, point 22 is exactly 3 pips away, so the checker on 22 bears off. With a 6, the checker on 19 bears off.
 8. **Bear-off overshoot with nothing farther.** All checkers are home, on points 21–24 only. A 6 bears off the checker on 21, the farthest one.
 9. **Last throw.** White bears off the 15th checker on its turn. Black has borne off 12 checkers and gets one more turn. If Black bears off its remaining 3, the game is a draw. If not, White wins 1 point (Black has borne off at least one).
+10. **Undo.** A player rolls 5-2 and plays the 5 from the head (1→6). The head is used up, so the 2 could only be played from 6. The player undoes the step: the checker is back on the head, the 5 is back to play, and the 2 may now be played from the head (1→3), or the 5 played again. After 1→6 and 6→8 the turn is over, so neither step can be undone.
 
 ## Out of scope
 
-Live versus asynchronous play, clocks and time limits, undo or takebacks, match play and colour swapping between games, ratings, spectators, UI orientation and animations, and the doubling cube (not part of long backgammon).
+Live versus asynchronous play, clocks and time limits, match play and colour swapping between games, ratings, spectators, UI orientation and animations, and the doubling cube (not part of long backgammon). Undo is covered only within a turn in progress ([D7](#decisions)); taking back a finished turn is out of scope.
 
 ## Sources
 

@@ -28,6 +28,7 @@ function viewOf(overrides: Partial<GameViewRow> = {}): GameViewRow {
     error: null,
     busy: false,
     selected: null,
+    auto: false,
     ...overrides,
   };
 }
@@ -45,6 +46,8 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         inviteUrl={URL}
         onJoin={noop}
         onRoll={noop}
+        onUndo={noop}
+        onAutoplay={noop}
         onSelect={noop}
         onMove={noop}
         {...extra}
@@ -124,6 +127,17 @@ describe("a game with both players", () => {
     expect(other).toContain("Waiting for Ada to roll.");
   });
 
+  it("puts the roll button on the board, under the dice, not in the turn controls", () => {
+    const html = render(ADA, viewOf());
+
+    const wrap = html.slice(html.indexOf('class="board-wrap"'), html.indexOf('aria-label="Turn"'));
+    expect(wrap).toContain("Roll dice");
+    // After the board, positioned by percentages of it, centred under the dice.
+    expect(wrap.indexOf("</svg>")).toBeLessThan(wrap.indexOf("Roll dice"));
+    expect(wrap).toMatch(/class="button under-dice"[^>]*style="left:65\.56%;top:\d+\.\d+%"/);
+    expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Roll dice");
+  });
+
   it("does not offer a second roll while the first is on its way", () => {
     expect(render(ADA, viewOf({ busy: true }))).not.toContain("Roll dice");
   });
@@ -143,27 +157,128 @@ describe("a game with both players", () => {
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
 
     expect(html).toContain('aria-label="Dice"');
-    expect(html).toContain("Move a checker from point 1");
+    // Ada is White, whose head is point 24.
+    expect(html).toContain("Move a checker from point 24");
     expect(html).not.toContain("Roll dice");
+  });
+
+  it("puts the dice on the board, not beside it", () => {
+    const state = startingState(moving([6, 3], [{ from: 1, die: 6 }]));
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+
+    const board = html.slice(html.indexOf('<svg class="board"'), html.indexOf("</svg>"));
+    expect(board).toContain('aria-label="Dice"');
+    expect(html.replace(board, "")).not.toContain('aria-label="Dice"');
+    expect(board).toContain('aria-label="6"');
+    expect(board).toContain('aria-label="3"');
+  });
+
+  it("dims the dice that were played, and keeps the last turn's dice on the board", () => {
+    const midway = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state: midway }) }));
+    expect(html).toContain('aria-label="6, played"');
+    expect(html).toContain('aria-label="3"');
+
+    const between = startingState({ turn: 1, lastTurn: { seat: 0, dice: [5, 4], played: [] } });
+    const after = render(GRACE, viewOf({ snapshot: snapshotOf({ state: between }) }));
+    expect(after).toContain('aria-label="5, played"');
+    expect(after).toContain('aria-label="4, played"');
+  });
+
+  it("shows no dice before anybody has rolled", () => {
+    expect(render(ADA, viewOf())).not.toContain('aria-label="Dice"');
   });
 
   it("shows where the selected checker can go, one place per die", () => {
     const state = startingState(moving([6, 3], [{ from: 1, die: 6 }, { from: 1, die: 3 }]));
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }), selected: 1 }));
 
-    expect(html).toContain("Move to point 7 with the 6");
-    expect(html).toContain("Move to point 4 with the 3");
+    // The head is 24 for White, so the 6 lands on 18 and the 3 on 21.
+    expect(html).toContain("Move to point 18 with the 6");
+    expect(html).toContain("Move to point 21 with the 3");
   });
 
-  it("offers a bear off with each die that can do it", () => {
+  it("keeps a point's pieces apart from its background, so only the background moves", () => {
+    // The 3 from point 1 lands on point 4, where another checker can also move.
+    const state = startingState({
+      points: [board({ 1: 14, 4: 1 }), board({ 1: 15 })],
+      ...moving([3, 2], [{ from: 1, die: 3 }, { from: 4, die: 2 }]),
+    });
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }), selected: 1 }));
+
+    // Point 4 is 21 in the shared numbering. It has a button to land on, and one for its pieces.
+    const landing = html.indexOf('aria-label="Move to point 21 with the 3"');
+    const pieces = html.indexOf('aria-label="Move a checker from point 21"');
+    expect(landing).toBeGreaterThan(-1);
+    expect(pieces).toBeGreaterThan(landing);
+    // Nothing of the pieces is inside the button that moves.
+    expect(html.slice(landing, pieces)).not.toContain('<circle class="checker ');
+  });
+
+  it("offers one plain bear-off button, whichever dice could do it", () => {
     const state = startingState({
       points: [board({ 20: 15 }), board({ 1: 15 })],
       ...moving([6, 5], [{ from: 20, die: 6 }, { from: 20, die: 5 }]),
     });
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }), selected: 20 }));
 
-    expect(html).toContain("Bear off with the 5");
-    expect(html).toContain("Bear off with the 6");
+    // Both the 5 and the 6 can bear off the checker on 20, and the button shows neither.
+    expect(html.split('aria-label="Bear off"').length - 1).toBe(1);
+    expect(html).not.toContain("Bear off with");
+    expect(html).not.toContain("off · 5");
+    expect(html).not.toContain("off · 6");
+  });
+
+  it("offers an undo to the mover once a step is played, and to nobody else", () => {
+    const played = [{ from: 1, die: 6 }];
+    const state = startingState(moving([6, 3], [{ from: 7, die: 3 }], played, [3]));
+    const view = viewOf({ snapshot: snapshotOf({ state }) });
+
+    expect(render(ADA, view)).toMatch(/<button[^>]*>Undo</);
+    expect(render(GRACE, view)).not.toContain("Undo");
+    expect(render(STRANGER, view)).not.toContain("Undo");
+  });
+
+  it("shows the undo where the roll button was, under the dice, and never both", () => {
+    const state = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+
+    const wrap = html.slice(html.indexOf('class="board-wrap"'), html.indexOf('aria-label="Turn"'));
+    expect(wrap.indexOf("</svg>")).toBeLessThan(wrap.indexOf("Undo"));
+    expect(wrap).toMatch(/class="button button-quiet under-dice"[^>]*style="left:65\.56%;top:\d+\.\d+%"/);
+    expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Undo");
+    // The roll button comes before the first step and is not there now.
+    expect(html).not.toContain("Roll dice");
+    // And both sit in the same spot.
+    const roll = render(ADA, viewOf());
+    const spot = (s: string) => /style="(left:[^"]*)"/.exec(s)?.[1];
+    expect(spot(roll)).toBeDefined();
+    expect(spot(html)).toBe(spot(roll));
+  });
+
+  it("offers no undo before the first step, before the roll, or while a step is on its way", () => {
+    const rolled = startingState(moving([6, 3], [{ from: 1, die: 6 }]));
+    const midway = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
+
+    expect(render(ADA, viewOf({ snapshot: snapshotOf({ state: rolled }) }))).not.toContain("Undo");
+    expect(render(ADA, viewOf())).not.toContain("Undo");
+    expect(render(ADA, viewOf({ snapshot: snapshotOf({ state: midway }), busy: true }))).not.toContain("Undo");
+  });
+
+  it("offers auto-play to a player, showing whether it is on, and to nobody else", () => {
+    expect(render(ADA, viewOf())).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Auto-play</);
+    expect(render(GRACE, viewOf({ auto: true }))).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Auto-play</);
+    // The opponent's turn is no reason to hide it: it waits for the player's own.
+    expect(render(GRACE, viewOf())).toContain("Auto-play");
+
+    expect(render(STRANGER, viewOf())).not.toContain("Auto-play");
+    expect(render(null, viewOf())).not.toContain("Auto-play");
+  });
+
+  it("offers no auto-play before the game starts or after it ends", () => {
+    expect(render(ADA, waiting)).not.toContain("Auto-play");
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    expect(render(ADA, viewOf({ snapshot: snapshotOf({ state: over }) }))).not.toContain("Auto-play");
   });
 
   it("shows nothing to click to someone who is not the mover", () => {
@@ -235,18 +350,53 @@ describe("a game that cannot be shown", () => {
 });
 
 describe("the view from each side", () => {
-  it("is White's for a spectator and the player's own for a player", () => {
-    // Seat 1 is White and has moved a checker to its own point 4. Seat 0 calls that point 16.
-    const state = startingState({
-      white: 1,
-      points: [board({ 1: 15 }), board({ 1: 14, 4: 1 })],
-    });
-    const view = viewOf({ snapshot: snapshotOf({ state }) });
-    const pointOf = (html: string, n: number) =>
-      new RegExp(`class="point-number"[^>]*>${n}<`).test(html);
+  /** The points that have checkers on them, by the number printed on them, with how many are drawn. */
+  const occupied = (html: string) => {
+    const found: Record<string, number> = {};
+    // A point's own group is class "point" or "point point-source" and so on; its parts are
+    // "point-bg" and "point-pieces", which are not points.
+    for (const chunk of html.split(/<g class="point(?=[" ])/).slice(1)) {
+      const label = /class="point-number"[^>]*>(\d+)</.exec(chunk)?.[1];
+      const drawn = chunk.split('<circle class="checker ').length - 1;
+      if (label && drawn > 0) found[label] = drawn;
+    }
+    return found;
+  };
 
-    expect(pointOf(render(STRANGER, view), 4)).toBe(true);
-    expect(render(STRANGER, view)).toContain(">White<");
-    expect(pointOf(render(ADA, view), 16)).toBe(true);
+  // Seat 1 is White and has moved a checker to its own point 4. Seat 0 (Black) calls that point 16.
+  const state = startingState({
+    white: 1,
+    points: [board({ 1: 15 }), board({ 1: 14, 4: 1 })],
+  });
+  const view = viewOf({ snapshot: snapshotOf({ state }) });
+
+  it("numbers the points the same for both players and for a spectator", () => {
+    // White's head is 24 and its fourth point 21; Black's head is 12. Every checker is drawn.
+    const expected = { 24: 14, 21: 1, 12: 15 };
+
+    expect(occupied(render(GRACE, view))).toEqual(expected);
+    expect(occupied(render(ADA, view))).toEqual(expected);
+    expect(occupied(render(STRANGER, view))).toEqual(expected);
+  });
+
+  it("still draws each player's own head in the top right", () => {
+    // The labels agree but the board is turned: your head is where you expect it.
+    const topRight = (html: string) => /<g class="point[^"]*"[^>]*>(?:(?!<g class="point)[\s\S])*?x="592" y="18"[^>]*>(\d+)</.exec(html)?.[1];
+
+    expect(topRight(render(GRACE, view))).toBe("24"); // White
+    expect(topRight(render(ADA, view))).toBe("12"); // Black
+    expect(topRight(render(STRANGER, view))).toBe("24"); // a spectator sees White's side
+  });
+
+  it("names the same point in the move buttons", () => {
+    const mover = startingState({
+      white: 1,
+      turn: 1,
+      points: [board({ 1: 15 }), board({ 1: 14, 4: 1 })],
+      ...moving([3, 2], [{ from: 4, die: 3 }]),
+    });
+    const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state: mover }) }));
+
+    expect(html).toContain("Move a checker from point 21");
   });
 });

@@ -69,6 +69,14 @@ pub trait Game: 'static {
     type State: Serialize + DeserializeOwned + Send + 'static;
     type Action: DeserializeOwned;
 
+    /// Whether the game has ended and nobody has anything more to do in it. The server
+    /// records it with every state it saves, so that games can be listed as finished without
+    /// loading them. A game that never ends can leave the default.
+    fn is_over(state: &Self::State) -> bool {
+        let _ = state;
+        false
+    }
+
     /// The state of a new game, once all the seats are taken. May use randomness, e.g. to
     /// choose who begins.
     fn start() -> Self::State;
@@ -105,6 +113,9 @@ pub trait Live: Send {
 
     /// The state as JSON, to store and to send to clients.
     fn to_json(&self) -> Result<Value, StateError>;
+
+    /// Whether the game has ended. See [`Game::is_over`].
+    fn is_over(&self) -> bool;
 }
 
 struct Running<G: Game>(G::State);
@@ -120,6 +131,10 @@ impl<G: Game> Live for Running<G> {
     fn to_json(&self) -> Result<Value, StateError> {
         serde_json::to_value(&self.0)
             .map_err(|err| StateError::new(format!("could not write a state as JSON: {err}")))
+    }
+
+    fn is_over(&self) -> bool {
+        G::is_over(&self.0)
     }
 }
 

@@ -52,8 +52,12 @@ export const myGames = table(
     joined: z.number().int(),
     /** False while the game waits for more players. */
     started: z.boolean(),
+    /** True once the game has ended. */
+    finished: z.boolean(),
     /** When the game last changed, in milliseconds since the epoch. */
     updatedAt: z.number(),
+    /** The names of the players who have joined, by seat; null for one who has no name. */
+    playerNames: z.array(z.string().nullable()),
   }),
   // Indexing `updatedAt` makes a range query on it (`updatedAtGte(0)` for all of them)
   // come back oldest first, so the page needs no sort of its own: it reverses the result

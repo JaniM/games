@@ -1,5 +1,6 @@
 import { table } from "millpond";
 import { z } from "zod";
+import { randomId } from "../../randomId";
 import { actionSchema, snapshotSchema } from "./schemas";
 
 /**
@@ -26,8 +27,10 @@ export const gameViews = table(
     busy: z.boolean(),
     /** The point (the mover's own index) whose destinations are showing, or null. */
     selected: z.number().int().nullable(),
+    /** Auto-play is on: the `autoPlay` effect plays this user's turns. */
+    auto: z.boolean(),
   }),
-  { key: "gameId" },
+  { key: "gameId", indexes: { byAuto: ["auto"] } },
 );
 
 /**
@@ -37,7 +40,7 @@ export const gameViews = table(
  */
 export const gameActions = table(
   z.object({ id: z.string(), gameId: z.string(), action: actionSchema }),
-  { key: "id", generate: () => crypto.randomUUID(), indexes: { byGame: ["gameId"] } },
+  { key: "id", generate: randomId, indexes: { byGame: ["gameId"] } },
 );
 
 /**

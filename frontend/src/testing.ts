@@ -25,6 +25,8 @@ export interface FakeGame {
   /** User ids by seat. */
   players: string[];
   updatedAt: number;
+  /** The game has ended. */
+  finished?: boolean;
 }
 
 /**
@@ -82,7 +84,11 @@ export function fakeServer() {
           seat: game.players.indexOf(user.userId),
           joined: game.players.length,
           started: game.players.length === 2,
+          finished: game.finished ?? false,
           updatedAt: game.updatedAt,
+          playerNames: game.players.map(
+            (id) => [...users.values()].find((u) => u.userId === id)?.name ?? null,
+          ),
         })),
       });
     }

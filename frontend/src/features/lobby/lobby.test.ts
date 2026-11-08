@@ -191,9 +191,54 @@ describe("your games", () => {
     expect(db.read(gamesList.get(GAMES_LIST_ID))).toMatchObject({ state: "loaded", error: null });
     const rows = [...db.read(myGames.all())].sort((a, b) => a.updatedAt - b.updatedAt);
     expect(rows).toEqual([
-      { gameId: gameIdOf(1), kind: "long-backgammon", seat: 0, joined: 1, started: false, updatedAt: 10 },
-      { gameId: gameIdOf(2), kind: "long-backgammon", seat: 0, joined: 2, started: true, updatedAt: 20 },
+      {
+        gameId: gameIdOf(1),
+        kind: "long-backgammon",
+        seat: 0,
+        joined: 1,
+        started: false,
+        finished: false,
+        updatedAt: 10,
+        playerNames: [null],
+      },
+      {
+        gameId: gameIdOf(2),
+        kind: "long-backgammon",
+        seat: 0,
+        joined: 2,
+        started: true,
+        finished: false,
+        updatedAt: 20,
+        playerNames: [null, null],
+      },
     ]);
+  });
+
+  it("lists a game that has ended as finished", async () => {
+    const { db, server } = setup();
+    await settle(); // registers as user-1
+    server.addGame({ ...mine(1, ["rival"]), updatedAt: 10 });
+    server.addGame({ ...mine(2, ["rival"]), updatedAt: 20, finished: true });
+
+    db.ops.lobby.loadGames();
+    await settle();
+
+    expect(db.read(myGames.get(gameIdOf(1)))).toMatchObject({ started: true, finished: false });
+    expect(db.read(myGames.get(gameIdOf(2)))).toMatchObject({ started: true, finished: true });
+  });
+
+  it("lists who is in each game by name, in seat order", async () => {
+    const { db, server } = setup();
+    await settle(); // registers as user-1
+    const me = server.users.get(issued(1).accessToken);
+    if (me) me.name = "Ada";
+    server.addUser(issued(2), "Grace");
+    server.addGame({ ...mine(1, [issued(2).userId, "nameless"]), updatedAt: 10 });
+
+    db.ops.lobby.loadGames();
+    await settle();
+
+    expect(db.read(myGames.get(gameIdOf(1)))?.playerNames).toEqual(["Ada", "Grace", null]);
   });
 
   it("lists games of every kind oldest first by the index, so the page needs no sort", async () => {

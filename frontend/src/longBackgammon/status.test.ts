@@ -107,18 +107,28 @@ describe("what the last turn was", () => {
     expect(lastTurnText(snap({ state }), 1)).toBe("You rolled 6-5 and could not move.");
   });
 
-  it("lists the moves, in the viewer's numbers", () => {
-    // Seat 1's own point 1 and 7 are 13 and 19 to seat 0.
+  it("lists the moves in the numbers both players share, whoever is reading", () => {
+    // Seat 0 is White. Black (seat 1) leaves its head, which is point 12, and its own
+    // points 7 and 12 are 6 and 1.
     const state = startingState({
       lastTurn: { seat: 1, dice: [6, 5], played: [{ from: 1, die: 6 }, { from: 7, die: 5 }] },
     });
-    expect(lastTurnText(snap({ state }), 0)).toBe("Grace rolled 6-5 and played 13→19, 19→24.");
-    expect(lastTurnText(snap({ state }), 1)).toBe("You rolled 6-5 and played 1→7, 7→12.");
+    expect(lastTurnText(snap({ state }), 0)).toBe("Grace rolled 6-5 and played 12→6, 6→1.");
+    expect(lastTurnText(snap({ state }), 1)).toBe("You rolled 6-5 and played 12→6, 6→1.");
+    expect(lastTurnText(snap({ state }), null)).toBe("Grace rolled 6-5 and played 12→6, 6→1.");
+  });
+
+  it("counts from the head the same way for White", () => {
+    const state = startingState({
+      lastTurn: { seat: 0, dice: [6, 5], played: [{ from: 1, die: 6 }, { from: 7, die: 5 }] },
+    });
+    expect(lastTurnText(snap({ state }), 0)).toBe("You rolled 6-5 and played 24→18, 18→13.");
+    expect(lastTurnText(snap({ state }), 1)).toBe("Ada rolled 6-5 and played 24→18, 18→13.");
   });
 
   it("writes a step that bears off as 'off'", () => {
-    expect(stepText({ from: 22, die: 4 }, 0, 0)).toBe("22→off");
-    expect(stepText({ from: 22, die: 4 }, 1, 0)).toBe("10→off");
+    expect(stepText({ from: 22, die: 4 }, 0, 0)).toBe("3→off");
+    expect(stepText({ from: 22, die: 4 }, 1, 0)).toBe("15→off");
   });
 });
 

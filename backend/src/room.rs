@@ -115,12 +115,15 @@ impl Rooms {
     /// Creates a game of the given kind with `creator` in seat 0, and loads it.
     pub async fn create(&self, engine: &Arc<dyn Engine>, creator: Uuid) -> Result<Uuid, RoomError> {
         // A game for one player has no one to wait for.
-        let state = match engine.players() {
-            1 => to_json(Some(engine.start().as_ref()))?,
-            _ => None,
+        let (state, finished) = match engine.players() {
+            1 => {
+                let live = engine.start();
+                (to_json(Some(live.as_ref()))?, live.is_over())
+            }
+            _ => (None, false),
         };
         let id = self
-            .insert(engine.as_ref(), creator, state)
+            .insert(engine.as_ref(), creator, state, finished)
             .await
             .map_err(|err| {
                 tracing::error!(%err, "could not create a game");
@@ -136,14 +139,17 @@ impl Rooms {
         engine: &dyn Engine,
         creator: Uuid,
         state: Option<Value>,
+        finished: bool,
     ) -> Result<Uuid, sqlx::Error> {
         let mut tx = self.shared.pool.begin().await?;
         let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO games (kind, state_version, state) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO games (kind, state_version, state, finished)
+             VALUES ($1, $2, $3, $4) RETURNING id",
         )
         .bind(engine.kind())
         .bind(engine.state_version() as i32)
         .bind(state)
+        .bind(finished)
         .fetch_one(&mut *tx)
         .await?;
         sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, 0, $2)")
@@ -468,8 +474,10 @@ impl Room {
         // The last seat starts the game.
         let live = (seat + 1 == self.engine.players()).then(|| self.engine.start());
         let state = to_json(live.as_deref())?;
+        let finished = live.as_deref().is_some_and(|live| live.is_over());
 
-        self.save(Some((seat, user)), state.as_ref()).await?;
+        self.save(Some((seat, user)), state.as_ref(), finished)
+            .await?;
         self.players.push(user);
         self.live = live;
         self.revision += 1;
@@ -488,7 +496,7 @@ impl Room {
             .map_err(|rejection| RoomError::Rejected(rejection.reason().to_owned()))?;
         let state = to_json(Some(next.as_ref()))?;
 
-        self.save(None, state.as_ref()).await?;
+        self.save(None, state.as_ref(), next.is_over()).await?;
         self.live = Some(next);
         self.revision += 1;
         self.refresh_names().await;
@@ -526,12 +534,14 @@ impl Room {
         self.players.iter().position(|player| *player == user)
     }
 
-    /// Writes a change to the database as the next revision: the state, and the player
-    /// who joined with it if there is one. The room is stale if this fails.
+    /// Writes a change to the database as the next revision: the state, whether the game
+    /// has ended with it, and the player who joined with it if there is one. The room is
+    /// stale if this fails.
     async fn save(
         &mut self,
         new_player: Option<(usize, Uuid)>,
         state: Option<&Value>,
+        finished: bool,
     ) -> Result<(), RoomError> {
         let change = Change {
             game_id: self.id,
@@ -539,6 +549,7 @@ impl Room {
             state_version: self.engine.state_version() as i32,
             new_player,
             state,
+            finished,
         };
         // Not a method: the future may only borrow what it needs, so that a game's
         // state doesn't have to be `Sync`.
@@ -601,6 +612,8 @@ struct Change<'a> {
     state_version: i32,
     new_player: Option<(usize, Uuid)>,
     state: Option<&'a Value>,
+    /// The game has ended with this state.
+    finished: bool,
 }
 
 /// Stores a change in one transaction, as revision `from_revision + 1`. Fails if the game
@@ -618,13 +631,15 @@ async fn write(pool: &PgPool, change: Change<'_>) -> Result<(), String> {
     }
     let updated = sqlx::query(
         "UPDATE games
-         SET state = $2, state_version = $3, revision = revision + 1, updated_at = now()
+         SET state = $2, state_version = $3, finished = $5,
+             revision = revision + 1, updated_at = now()
          WHERE id = $1 AND revision = $4",
     )
     .bind(change.game_id)
     .bind(change.state)
     .bind(change.state_version)
     .bind(change.from_revision)
+    .bind(change.finished)
     .execute(&mut *tx)
     .await
     .map_err(|err| err.to_string())?
@@ -822,6 +837,51 @@ mod tests {
                 state: None,
             }
         );
+    }
+
+    /// Whether the database says a game has finished.
+    async fn finished(pool: &PgPool, id: Uuid) -> bool {
+        sqlx::query_scalar("SELECT finished FROM games WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn a_game_is_saved_as_finished_when_its_rules_say_it_is_over(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let player = user(&pool).await;
+        // Solo is over after its third action.
+        let id = rooms
+            .create(rooms.games().get("solo").unwrap(), player)
+            .await
+            .unwrap();
+        let mut connection = rooms.connect(id, player).await.unwrap();
+        assert!(!finished(&pool, id).await);
+
+        for _ in 0..2 {
+            connection.act(json!({})).await.unwrap();
+            next(&mut connection).await;
+        }
+        assert!(!finished(&pool, id).await);
+        connection.act(json!({})).await.unwrap();
+        next(&mut connection).await;
+
+        assert!(finished(&pool, id).await);
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_never_ends_is_never_saved_as_finished(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let mut ada = rooms.connect(id, first).await.unwrap();
+
+        ada.act(add(5)).await.unwrap();
+        next(&mut ada).await;
+
+        assert!(!finished(&pool, id).await);
     }
 
     #[sqlx::test]

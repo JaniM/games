@@ -11,6 +11,8 @@ import {
   type HomeScreenProps,
   type MyGameRow,
   type NewGameRow,
+  gameStateText,
+  playersText,
 } from "./HomeScreen";
 
 // What the page shows is a function of its props, so these render it to a string.
@@ -48,7 +50,9 @@ const game = (n: number, overrides: Partial<MyGameRow> = {}): MyGameRow => ({
   seat: 0,
   joined: 2,
   started: true,
+  finished: false,
   updatedAt: 1_700_000_000_000 + n * 60_000,
+  playerNames: ["Ada", "Grace"],
   ...overrides,
 });
 
@@ -68,6 +72,62 @@ describe("the games to start", () => {
     expect(html).toContain("Long backgammon");
     expect(html).toContain("2 players");
     expect(html).not.toContain('href="/games/long-backgammon"');
+  });
+});
+
+describe("where a game stands", () => {
+  it("is waiting, in progress or finished", () => {
+    expect(gameStateText({ started: false, finished: false })).toBe("Waiting for an opponent");
+    expect(gameStateText({ started: true, finished: false })).toBe("In progress");
+    expect(gameStateText({ started: true, finished: true })).toBe("Finished");
+  });
+
+  it("is never in progress once the game is finished", () => {
+    const html = render({ mine: [game(1, { finished: true })] });
+
+    expect(html).toContain("Finished");
+    expect(html).not.toContain("In progress");
+    expect(html).toContain("my-game-state my-game-state-done");
+  });
+
+  it("shows each game's own state in the list", () => {
+    const html = render({
+      mine: [game(3, { finished: true }), game(2), game(1, { started: false, joined: 1 })],
+    });
+
+    expect(html).toContain("Finished");
+    expect(html).toContain("In progress");
+    expect(html).toContain("Waiting for an opponent");
+  });
+});
+
+describe("the players of a game", () => {
+  it("are named in seat order, with the user marked", () => {
+    expect(playersText({ seat: 0, playerNames: ["Ada", "Grace"] })).toBe("Ada (you) vs Grace");
+    expect(playersText({ seat: 1, playerNames: ["Ada", "Grace"] })).toBe("Ada vs Grace (you)");
+  });
+
+  it("are only the ones who have joined", () => {
+    expect(playersText({ seat: 0, playerNames: ["Ada"] })).toBe("Ada (you)");
+  });
+
+  it("get a stand-in name when they have none", () => {
+    expect(playersText({ seat: 0, playerNames: [null, null] })).toBe("You vs Player 2");
+    expect(playersText({ seat: 1, playerNames: [null, null] })).toBe("Player 1 vs You");
+  });
+
+  it("show in the list of the user's games, each game with its own", () => {
+    const html = render({
+      mine: [
+        game(2),
+        game(1, { seat: 0, started: false, joined: 1, playerNames: ["Ada"] }),
+        game(3, { seat: 1 }),
+      ],
+    });
+
+    expect(html).toContain("Ada (you) vs Grace");
+    expect(html).toContain(">Ada (you)<");
+    expect(html).toContain("Ada vs Grace (you)");
   });
 });
 

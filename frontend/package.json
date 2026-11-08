@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.27.0",
   "scripts": {
     "dev": "vite --configLoader runner",
+    "dev:lan": "vite --configLoader runner --host",
     "build": "tsc --noEmit && vite build --configLoader runner",
     "preview": "vite preview --configLoader runner",
     "typecheck": "tsc --noEmit",

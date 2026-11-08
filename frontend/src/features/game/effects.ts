@@ -9,6 +9,7 @@ import {
   backoffMs,
   socketUrl,
 } from "./api";
+import { AUTOPLAY_PAUSE_MS, autoplayAction } from "./autoplay";
 import {
   actionDropped,
   actionRefused,
@@ -18,6 +19,7 @@ import {
   joinFailed,
   joined,
   snapshotReceived,
+  submitAction,
 } from "./ops";
 import {
   STATE_VERSION,
@@ -194,6 +196,45 @@ export const sendActions = effect({
           }
         },
         { label: `send ${row.action.type}` },
+      ),
+    ),
+});
+
+/**
+ * Plays the user's turns in every game where auto-play is on. Each time the game
+ * is waiting for the user, a task pauses (so that the last thing can be followed on the
+ * board) and then sends one action: the roll, or one of the legal steps (see `autoplayAction`).
+ * The answer is a new snapshot, which starts the next pause.
+ *
+ * A task is dropped and made again when the switch, the wait for an answer, the connection or
+ * the snapshot changes, so it never acts on a game that has moved on or gone quiet. It
+ * nests in the ready session for the user's id, as `connectGame` does for the token.
+ */
+export const autoPlay = effect({
+  inputs: [sessionState, gameViews],
+  watch: (q, task) =>
+    q.each(sessionState.byState.stateEq("ready"), (session) =>
+      q.each(
+        gameViews.byAuto.autoEq(true),
+        (view) => {
+          const { snapshot } = view;
+          if (view.busy || view.connection !== "open" || !snapshot) return;
+          if (!autoplayAction(snapshot, session.userId)) return;
+          task(
+            async (ctx) => {
+              await sleep(AUTOPLAY_PAUSE_MS, ctx.signal);
+              if (ctx.signal.aborted) return;
+              // The row may have changed in the pause, without this task having been restarted yet.
+              const now = ctx.db.read(gameViews.get(view.gameId));
+              const action = now?.auto && !now.busy && now.snapshot
+                ? autoplayAction(now.snapshot, session.userId)
+                : null;
+              if (action) ctx.run(submitAction, { gameId: view.gameId, action });
+            },
+            { label: `auto-play ${view.gameId}` },
+          );
+        },
+        { rerunOn: ["auto", "busy", "connection", "snapshot"] },
       ),
     ),
 });

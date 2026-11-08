@@ -98,6 +98,8 @@ export const errorMessageSchema = z.object({
 export const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("roll") }),
   z.object({ type: z.literal("move"), from: z.number().int(), die: z.number().int() }),
+  /** Takes back the last step of the turn in progress, and gives its die back. */
+  z.object({ type: z.literal("undo") }),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 

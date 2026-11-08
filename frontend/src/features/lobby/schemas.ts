@@ -9,7 +9,9 @@ export const gamesReplySchema = z.object({
       seat: z.number().int(),
       joined: z.number().int(),
       started: z.boolean(),
+      finished: z.boolean(),
       updatedAt: z.number(),
+      playerNames: z.array(z.string().nullable()),
     }),
   ),
 });

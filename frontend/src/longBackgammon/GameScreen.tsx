@@ -10,8 +10,8 @@ import {
   seatOf,
 } from "../features/game";
 import { Board } from "./Board";
-import { Dice } from "./Dice";
-import { type Colour, colourOf, diceFaces } from "./layout";
+import { underDiceSpot } from "./geometry";
+import { type Colour, colourOf } from "./layout";
 import {
   barNameOf,
   lastThrowText,
@@ -34,6 +34,10 @@ export interface GameScreenProps {
   inviteUrl: string;
   onJoin: () => void;
   onRoll: () => void;
+  /** Takes back the last step of the turn in progress. */
+  onUndo: () => void;
+  /** Turns auto-play (this player's turns, played for them) on or off. */
+  onAutoplay: (on: boolean) => void;
   onSelect: (point: number | null) => void;
   onMove: (step: Step) => void;
 }
@@ -63,6 +67,8 @@ export function GameScreen({
   inviteUrl,
   onJoin,
   onRoll,
+  onUndo,
+  onAutoplay,
   onSelect,
   onMove,
 }: GameScreenProps) {
@@ -97,6 +103,8 @@ export function GameScreen({
   const over = state?.phase.type === "over";
   const myTurn = state !== null && mySeat !== null && state.turn === mySeat && !over;
   const canAct = myTurn && connected && !view.busy;
+  // Only a step of the turn in progress can be taken back: the one that ends the turn is final.
+  const canUndo = canAct && state?.phase.type === "move" && state.phase.played.length > 0;
   const canJoin = userId !== null && mySeat === null && !isFull(snapshot);
   const waiting = !isFull(snapshot);
 
@@ -139,14 +147,33 @@ export function GameScreen({
         toMove={state !== null && !over && state.turn === opponent}
         empty={opponent >= snapshot.players.length}
       />
-      <Board
-        state={state}
-        viewer={viewer}
-        selected={view.selected}
-        interactive={canAct}
-        onSelect={onSelect}
-        onMove={onMove}
-      />
+      <div className="board-wrap">
+        <Board
+          state={state}
+          revision={snapshot.revision}
+          viewer={viewer}
+          selected={view.selected}
+          interactive={canAct}
+          onSelect={onSelect}
+          onMove={onMove}
+        />
+        {/* One button at a time: the roll comes before there are steps to take back. */}
+        {canAct && state?.phase.type === "roll" && (
+          <button className="button under-dice" type="button" style={underDiceSpot()} onClick={onRoll}>
+            Roll dice
+          </button>
+        )}
+        {canUndo && (
+          <button
+            className="button button-quiet under-dice"
+            type="button"
+            style={underDiceSpot()}
+            onClick={onUndo}
+          >
+            Undo
+          </button>
+        )}
+      </div>
       <PlayerBar
         name={barNameOf(snapshot, viewer, mySeat)}
         colour={state ? colourOf(viewer, state, viewer) : null}
@@ -156,10 +183,15 @@ export function GameScreen({
       />
 
       <section className="controls" aria-label="Turn">
-        {state && <Dice faces={diceFaces(state.phase)} />}
-        {canAct && state?.phase.type === "roll" && (
-          <button className="button" type="button" onClick={onRoll}>
-            Roll dice
+        {mySeat !== null && state && !over && (
+          <button
+            className="button button-quiet"
+            type="button"
+            aria-pressed={view.auto}
+            title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
+            onClick={() => onAutoplay(!view.auto)}
+          >
+            Auto-play
           </button>
         )}
         <p className="status" role="status" aria-live="polite">

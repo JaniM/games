@@ -304,6 +304,13 @@ body {
   border-color: var(--accent);
 }
 
+/* A quiet button that is a switch, and is on. */
+.button-quiet[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
 .button:disabled {
   opacity: 0.55;
   cursor: default;
@@ -380,6 +387,11 @@ body {
 .my-game-state {
   font-size: 0.9375rem;
   color: var(--accent);
+}
+
+/* A game that is over is not asking for anything, so it is not in the accent colour. */
+.my-game-state-done {
+  color: var(--muted);
 }
 
 .my-game:focus-visible {
@@ -502,16 +514,6 @@ body {
   font-weight: 600;
 }
 
-.dice {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.die {
-  width: 2.75rem;
-  height: 2.75rem;
-}
-
 .die-face {
   fill: #fffdf9;
   stroke: #3a2f22;
@@ -520,6 +522,10 @@ body {
 
 .die-pip {
   fill: #1d1b18;
+}
+
+.die {
+  transition: opacity 0.25s;
 }
 
 .die-used {
@@ -548,6 +554,9 @@ body {
 }
 
 .board {
+  /* How long a checker takes to cross the board, and the dice to settle. */
+  --move-ms: 450ms;
+  --roll-ms: 900ms;
   display: block;
   width: 100%;
   height: auto;
@@ -615,8 +624,9 @@ body {
   stroke-opacity: 0.25;
 }
 
-.point-source,
-.point-target,
+.point-bg-active,
+.point-pieces-active,
+.ghost,
 .bear-off {
   cursor: pointer;
 }
@@ -664,8 +674,146 @@ body {
   pointer-events: none;
 }
 
-.point:focus-visible,
+.point-bg:focus-visible,
+.point-pieces:focus-visible,
 .bear-off:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* --- Over the board --- */
+
+/*
+ * The board scales with the page, and so does what is laid over it. The size query lets
+ * the button grow with the board, with a floor so that it stays easy to tap on a phone.
+ */
+.board-wrap {
+  position: relative;
+  container-type: inline-size;
+}
+
+/* Under the dice, in the middle strip of the board (`underDiceSpot` gives left and top). */
+.under-dice {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: clamp(0.8rem, 2.2cqw, 1.05rem);
+}
+
+/* A quiet button is see-through, which would not read over the points of the board. */
+.under-dice.button-quiet {
+  background: var(--card);
+}
+
+/* --- Motion on the board --- */
+
+/*
+ * The dice are thrown in from the right, spinning, and settle where they lie. Each die
+ * starts a little after the one before it. The group is new for every throw, so the
+ * animation runs once per throw and never when a board opens mid-game.
+ */
+/* Spin and scale about the middle of the die / checker, which is also the group's origin. */
+.die-roll,
+.flyer-body {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.dice-rolling .die-roll {
+  animation: tumble var(--roll-ms) cubic-bezier(0.15, 0.75, 0.25, 1) both;
+  animation-delay: calc(var(--i) * 70ms);
+}
+
+@keyframes tumble {
+  from {
+    transform: translate(var(--from-x), var(--from-y)) rotate(var(--spin)) scale(0.6, 0.6);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(0px, 0px) rotate(0deg) scale(1, 1);
+    opacity: 1;
+  }
+}
+
+/*
+ * A moved checker is drawn at its new place at once, but hidden until it arrives, while a
+ * copy of it flies there from the old place on top of the board. Both are over at the same
+ * moment, so they swap without a gap. The copy ends hidden and stays so: it is dropped
+ * with the next position.
+ */
+.checker-arriving {
+  animation: hold var(--move-ms);
+}
+
+@keyframes hold {
+  from,
+  to {
+    visibility: hidden;
+  }
+}
+
+/*
+ * The flight is an arc made of three layers (see `Flight`). The outer one goes along the
+ * straight line, the middle one pushes the checker off it towards the middle of the board
+ * and back, and the inner one swells it at the top. The push is quick at first and slows
+ * at the top, then falls the same way in reverse, which makes the path a parabola.
+ */
+.flyer {
+  animation: travel var(--move-ms) ease-in-out both;
+}
+
+.flyer-lift {
+  animation: hop var(--move-ms) linear both;
+}
+
+.flyer-body {
+  animation: swell var(--move-ms) ease-in-out both;
+}
+
+@keyframes travel {
+  from {
+    transform: translate(var(--dx), var(--dy));
+    visibility: visible;
+  }
+
+  to {
+    transform: translate(0px, 0px);
+    visibility: hidden;
+  }
+}
+
+@keyframes hop {
+  from {
+    transform: translate(0px, 0px);
+    animation-timing-function: cubic-bezier(0.5, 1, 0.89, 1);
+  }
+
+  50% {
+    transform: translate(var(--hop-x), var(--hop-y));
+    animation-timing-function: cubic-bezier(0.11, 0, 0.5, 0);
+  }
+
+  to {
+    transform: translate(0px, 0px);
+  }
+}
+
+@keyframes swell {
+  from {
+    transform: scale(var(--sx0), var(--sy0));
+  }
+
+  50% {
+    transform: scale(1.25, 1.25);
+  }
+
+  to {
+    transform: scale(var(--sx1), var(--sy1));
+  }
+}
+
+/*
+ * There is deliberately no `prefers-reduced-motion` override here: these animations are how
+ * a player sees what the opponent just did, and the site's owner wants them always on.
+ */

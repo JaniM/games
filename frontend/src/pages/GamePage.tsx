@@ -7,6 +7,7 @@ import {
   joinRequests,
   openGame,
   selectPoint,
+  setAutoplay,
   submitAction,
 } from "../features/game";
 import { gamePath } from "../features/router";
@@ -25,6 +26,7 @@ export function GamePage({ gameId }: { gameId: string }) {
   const requestJoin = useOp(joinGame);
   const select = useOp(selectPoint);
   const submit = useOp(submitAction);
+  const autoplay = useOp(setAutoplay);
 
   // Open the game while this page shows it, and close it (and its socket) on the way out.
   // `useOp` gives the same function until the db changes, so this runs once per game id.
@@ -41,6 +43,8 @@ export function GamePage({ gameId }: { gameId: string }) {
       inviteUrl={`${location.origin}${gamePath(KIND, gameId)}`}
       onJoin={() => requestJoin({ gameId })}
       onRoll={() => submit({ gameId, action: { type: "roll" } })}
+      onUndo={() => submit({ gameId, action: { type: "undo" } })}
+      onAutoplay={(on) => autoplay({ gameId, on })}
       onSelect={(point) => select({ gameId, point })}
       onMove={(step) => submit({ gameId, action: { type: "move", from: step.from, die: step.die } })}
     />

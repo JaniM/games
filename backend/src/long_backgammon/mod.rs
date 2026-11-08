@@ -49,7 +49,9 @@
 //! # Actions
 //!
 //! `{ "type": "roll" }` rolls the dice for the player to move, and
-//! `{ "type": "move", "from": 3, "die": 5 }` plays a step. There is no action for passing.
+//! `{ "type": "move", "from": 3, "die": 5 }` plays a step. `{ "type": "undo" }` takes back
+//! the last step of the turn in progress and gives its die back (D7). There is no action for
+//! passing.
 
 mod rules;
 
@@ -66,7 +68,12 @@ pub struct LongBackgammon;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
     Roll,
-    Move { from: u8, die: u8 },
+    Move {
+        from: u8,
+        die: u8,
+    },
+    /// Takes back the last step of the turn in progress.
+    Undo,
 }
 
 /// Where a turn stands.
@@ -170,6 +177,11 @@ impl State {
             }
             (Phase::Move { .. }, Action::Roll) => Err(Rejection::new("you have already rolled")),
             (Phase::Roll, Action::Move { .. }) => Err(Rejection::new("roll the dice first")),
+            (Phase::Roll, Action::Undo) => Err(Rejection::new("you have not played anything yet")),
+            (Phase::Move { .. }, Action::Undo) => position
+                .unplayed()
+                .map(Self::reached)
+                .ok_or_else(|| Rejection::new("you have not played anything yet")),
             (
                 Phase::Move {
                     dice,
@@ -309,6 +321,51 @@ impl Position {
         }
     }
 
+    /// The position with the last step of the turn in progress taken back (D7): its checker is
+    /// where it was and its die is back among the dice to play. `None` if no step has been
+    /// played, or the step does not fit the position (a stored game that was edited), in
+    /// which case there is nothing sound to go back to.
+    ///
+    /// A turn ends as soon as it has nothing left to play, so the step that ends it is never
+    /// here to take back: by then the phase is no longer a move.
+    fn unplayed(&self) -> Option<Self> {
+        let Phase::Move { dice, played, .. } = &self.phase else {
+            return None;
+        };
+        let (last, earlier) = played.split_last()?;
+        let me = self.turn;
+        let mut position = self.clone();
+
+        if !(1..=24).contains(&last.from) {
+            return None;
+        }
+        position.points[me][usize::from(last.from) - 1] += 1;
+        let to = u16::from(last.from) + u16::from(last.die);
+        if to <= 24 {
+            let landed = &mut position.points[me][usize::from(to) - 1];
+            *landed = landed.checked_sub(1)?;
+        } else {
+            position.off[me] = position.off[me].checked_sub(1)?;
+        }
+
+        // The dice that are left are the roll without the ones played before this step.
+        let mut remaining = if dice[0] == dice[1] {
+            vec![dice[0]; 4]
+        } else {
+            dice.to_vec()
+        };
+        for step in earlier {
+            let at = remaining.iter().position(|&left| left == step.die)?;
+            remaining.remove(at);
+        }
+        position.phase = Phase::Move {
+            dice: *dice,
+            remaining,
+            played: earlier.to_vec(),
+        };
+        Some(position)
+    }
+
     /// Finishes the turn in progress, and decides what comes next: the other player's roll,
     /// the last throw, or the end of the game.
     fn end_turn(&mut self) {
@@ -356,6 +413,10 @@ impl Game for LongBackgammon {
     const STATE_VERSION: u32 = 1;
     type State = State;
     type Action = Action;
+
+    fn is_over(state: &State) -> bool {
+        matches!(state.position.phase, Phase::Over { .. })
+    }
 
     /// Picks White at random: the rules let an implementation do that instead of having
     /// the players roll a die each.
@@ -432,6 +493,53 @@ mod tests {
 
     fn fresh(white: usize) -> State {
         state(Position::new(white))
+    }
+
+    // --- Being over ---
+
+    #[test]
+    fn the_game_reports_when_it_is_over_so_that_the_server_can_list_it_as_finished() {
+        let mut position = Position::new(0);
+        assert!(!LongBackgammon::is_over(&state(position.clone())));
+        position.phase = Phase::Move {
+            dice: [5, 2],
+            remaining: vec![5, 2],
+            played: Vec::new(),
+        };
+        assert!(!LongBackgammon::is_over(&state(position.clone())));
+
+        position.phase = Phase::Over {
+            winner: Some(0),
+            points: 1,
+        };
+        assert!(LongBackgammon::is_over(&state(position)));
+    }
+
+    #[test]
+    fn a_game_is_over_when_black_bears_off_the_last_checker() {
+        // Black is seat 1. With a 1 and a 2 and one checker, the larger die is the one to play.
+        let mut near = position(&[(1, 15)], &[(24, 1)], [0, 14]);
+        near.turn = 1;
+        near.turns = [9, 9];
+        let game = rolled(&state(near), 1, [1, 2]);
+        assert!(!LongBackgammon::is_over(&game));
+
+        let game = play(&game, 1, 24, 2).unwrap();
+
+        assert!(LongBackgammon::is_over(&game));
+        assert!(matches!(game.position.phase, Phase::Over { .. }));
+    }
+
+    #[test]
+    fn a_game_is_not_over_when_white_bears_off_the_last_checker_because_black_throws_once_more() {
+        let mut near = position(&[(24, 1)], &[(1, 15)], [14, 0]);
+        near.turns = [9, 9];
+        let game = rolled(&state(near), 0, [1, 2]);
+
+        let game = play(&game, 0, 24, 2).unwrap();
+
+        assert!(game.position.last_throw);
+        assert!(!LongBackgammon::is_over(&game));
     }
 
     // --- Starting ---
@@ -639,6 +747,171 @@ mod tests {
             said.starts_with("you must play as many dice as you can"),
             "{said}"
         );
+    }
+
+    // --- Undo (D7) ---
+
+    fn undo(state: &State, seat: usize) -> Result<State, Rejection> {
+        state.act(seat, Action::Undo, || None)
+    }
+
+    #[test]
+    fn undo_puts_the_checker_back_and_gives_the_die_back() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let played = play(&game, 0, 1, 5).unwrap();
+        assert_eq!(played.position.points[0], points(&[(1, 14), (6, 1)]));
+
+        let back = undo(&played, 0).unwrap();
+
+        assert_eq!(back, game);
+    }
+
+    #[test]
+    fn undo_keeps_the_dice_in_the_order_they_were_rolled() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        // The second die first: `remaining` is [5] now, and must come back as [5, 2].
+        let game = play(&game, 0, 1, 2).unwrap();
+
+        let back = undo(&game, 0).unwrap();
+
+        assert_eq!(
+            back.position.phase,
+            Phase::Move {
+                dice: [5, 2],
+                remaining: vec![5, 2],
+                played: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn undo_takes_back_one_step_at_a_time_and_the_last_one_first() {
+        let game = rolled(&fresh(0), 0, [5, 5]);
+        let one = play(&game, 0, 1, 5).unwrap();
+        let two = play(&one, 0, 6, 5).unwrap();
+        let three = play(&two, 0, 11, 5).unwrap();
+
+        let back_to_two = undo(&three, 0).unwrap();
+        let back_to_one = undo(&back_to_two, 0).unwrap();
+        let back_to_none = undo(&back_to_one, 0).unwrap();
+
+        assert_eq!(back_to_two, two);
+        assert_eq!(back_to_one, one);
+        assert_eq!(back_to_none, game);
+        assert_eq!(
+            reason(undo(&back_to_none, 0)),
+            "you have not played anything yet"
+        );
+    }
+
+    #[test]
+    fn a_step_can_be_played_again_after_undo_and_a_different_one_instead() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let game = play(&game, 0, 1, 5).unwrap();
+        // The head is used up, so only the checker on 6 may play the 2.
+        assert_eq!(game.legal, vec![step(6, 2)]);
+
+        let game = undo(&game, 0).unwrap();
+
+        // Undo gives the head back too, so the 2 may be played from there.
+        assert!(game.legal.contains(&step(1, 2)));
+        let game = play(&game, 0, 1, 2).unwrap();
+        assert_eq!(game.position.points[0], points(&[(1, 14), (3, 1)]));
+    }
+
+    #[test]
+    fn undo_brings_a_borne_off_checker_back() {
+        let game = state(position(&[(20, 1), (22, 14)], &[(1, 15)], [0, 0]));
+        let game = rolled(&game, 0, [5, 6]);
+        let borne = play(&game, 0, 20, 5).unwrap();
+        assert_eq!(borne.position.off, [1, 0]);
+        assert_eq!(borne.position.points[0], points(&[(22, 14)]));
+
+        let back = undo(&borne, 0).unwrap();
+
+        assert_eq!(back, game);
+    }
+
+    #[test]
+    fn undo_leaves_the_turn_counters_and_the_last_turn_alone() {
+        let before = rolled(&fresh(0), 0, [5, 2]);
+        let before = play(&before, 0, 1, 5).unwrap();
+        let before = play(&before, 0, 6, 2).unwrap();
+        let game = rolled(&before, 1, [5, 2]);
+        let game = play(&game, 1, 1, 5).unwrap();
+
+        let back = undo(&game, 1).unwrap();
+
+        assert_eq!(back.position.turns, before.position.turns);
+        assert_eq!(back.position.last_turn, before.position.last_turn);
+        assert_eq!(back.position.turn, 1);
+    }
+
+    #[test]
+    fn nothing_can_be_undone_before_a_step_is_played() {
+        let nothing = "you have not played anything yet";
+
+        assert_eq!(reason(undo(&fresh(0), 0)), nothing);
+        assert_eq!(reason(undo(&rolled(&fresh(0), 0, [5, 2]), 0)), nothing);
+    }
+
+    #[test]
+    fn only_the_player_to_move_may_undo() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let game = play(&game, 0, 1, 5).unwrap();
+
+        assert_eq!(reason(undo(&game, 1)), "not your turn");
+        assert_eq!(reason(undo(&game, 7)), "not your turn");
+    }
+
+    #[test]
+    fn the_step_that_ends_the_turn_cannot_be_undone() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let game = play(&game, 0, 1, 5).unwrap();
+        let game = play(&game, 0, 6, 2).unwrap();
+        assert_eq!(game.position.turn, 1);
+
+        // The turn is over: the old mover is not to move, and the new one has played nothing.
+        assert_eq!(reason(undo(&game, 0)), "not your turn");
+        assert_eq!(reason(undo(&game, 1)), "you have not played anything yet");
+    }
+
+    #[test]
+    fn nothing_can_be_undone_once_the_game_is_over() {
+        let mut over = Position::new(0);
+        over.phase = Phase::Over {
+            winner: Some(0),
+            points: 1,
+        };
+
+        assert_eq!(reason(undo(&state(over), 0)), "the game is over");
+    }
+
+    #[test]
+    fn a_stored_step_that_does_not_fit_the_position_is_refused_not_a_panic() {
+        // A checker on 10 can still play the 2, so the turn is not over when it is read.
+        let midway = |played: Step| {
+            let mut position = position(&[(1, 14), (10, 1)], &[(1, 15)], [0, 0]);
+            position.phase = Phase::Move {
+                dice: [3, 2],
+                remaining: vec![2],
+                played: vec![played],
+            };
+            state(position)
+        };
+        let nothing = "you have not played anything yet";
+
+        // Nothing stands on point 4, where the step claims to have landed.
+        assert_eq!(reason(undo(&midway(step(1, 3)), 0)), nothing);
+        // There is no point 0.
+        assert_eq!(reason(undo(&midway(step(0, 3)), 0)), nothing);
+    }
+
+    #[test]
+    fn undo_is_an_action_on_the_wire() {
+        let action: Action = serde_json::from_value(json!({ "type": "undo" })).unwrap();
+
+        assert_eq!(action, Action::Undo);
     }
 
     // --- Head rule across turns ---

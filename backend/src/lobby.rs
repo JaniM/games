@@ -80,9 +80,18 @@ pub struct Listed {
     joined: i64,
     /// False while the game waits for more players.
     started: bool,
+    /// True once the game has ended (see `Game::is_over`).
+    finished: bool,
     /// When the game last changed, in milliseconds since the epoch.
     updated_at: i64,
+    /// The display names of the players who have joined, by seat: null for one who hasn't
+    /// picked a name. As in a game's snapshot, so `player_names[seat]` is the user's own name
+    /// in their seat.
+    player_names: Vec<Option<String>>,
 }
+
+/// One row of the list query, in the order of its columns.
+type ListedRow = (Uuid, String, i16, i64, bool, bool, i64, Vec<Option<String>>);
 
 /// `GET /api/games`: the games the user is in, most recently changed first, at most 100.
 /// Read from the database, so it also lists games that aren't in memory.
@@ -90,13 +99,19 @@ pub async fn list_games(
     AuthUser(user): AuthUser,
     State(pool): State<PgPool>,
 ) -> Result<Json<Games>, ApiError> {
-    let rows: Vec<(Uuid, String, i16, i64, bool, i64)> = sqlx::query_as(
+    let rows: Vec<ListedRow> = sqlx::query_as(
         "SELECT g.id,
                 g.kind,
                 p.seat,
                 (SELECT count(*) FROM game_players WHERE game_id = g.id),
                 g.state IS NOT NULL,
-                (extract(epoch FROM g.updated_at) * 1000)::bigint
+                g.finished,
+                (extract(epoch FROM g.updated_at) * 1000)::bigint,
+                ARRAY(SELECT u.name
+                      FROM game_players gp
+                      JOIN users u ON u.id = gp.user_id
+                      WHERE gp.game_id = g.id
+                      ORDER BY gp.seat)
          FROM game_players p
          JOIN games g ON g.id = p.game_id
          WHERE p.user_id = $1
@@ -111,13 +126,15 @@ pub async fn list_games(
     let games = rows
         .into_iter()
         .map(
-            |(game_id, kind, seat, joined, started, updated_at)| Listed {
+            |(game_id, kind, seat, joined, started, finished, updated_at, player_names)| Listed {
                 game_id,
                 kind,
                 seat,
                 joined,
                 started,
+                finished,
                 updated_at,
+                player_names,
             },
         )
         .collect();
@@ -401,6 +418,93 @@ mod tests {
                 .iter()
                 .all(|g| g["updatedAt"].as_i64().unwrap() > 1_700_000_000_000)
         );
+    }
+
+    /// Gives a user a display name, the way a player does.
+    async fn name(app: &TestApp, token: &str, name: &str) {
+        let reply = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(token)),
+                Some(json!({ "name": name })),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+
+    #[sqlx::test]
+    async fn listing_shows_the_names_of_the_players_by_seat(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let (_, grace) = app.register_user().await;
+        name(&app, &ada, "Ada").await;
+        let waiting = app.create_game(&ada, "tally").await;
+        let started = app.create_game(&grace, "tally").await;
+        app.join_game(&ada, &started).await;
+
+        let games = list(&app, &ada).await;
+
+        let names = |id: &str| {
+            let game = games
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["gameId"] == id)
+                .unwrap();
+            game["playerNames"].clone()
+        };
+        // Grace has no name yet, and sits in seat 0 of the game she created.
+        assert_eq!(names(&started), json!([null, "Ada"]));
+        // Only the players who have joined are listed.
+        assert_eq!(names(&waiting), json!(["Ada"]));
+    }
+
+    #[sqlx::test]
+    async fn listing_shows_a_name_changed_since_the_game_began(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let game = app.create_game(&ada, "tally").await;
+        name(&app, &ada, "Ada").await;
+        name(&app, &ada, "Ada Lovelace").await;
+
+        let games = list(&app, &ada).await;
+
+        assert_eq!(games[0]["gameId"], game.as_str());
+        assert_eq!(games[0]["playerNames"], json!(["Ada Lovelace"]));
+    }
+
+    #[sqlx::test]
+    async fn listing_says_whether_a_game_has_finished(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, ada) = app.register_user().await;
+        let waiting = app.create_game(&ada, "tally").await;
+        let playing = app.create_game(&ada, "solo").await;
+        let done = app.create_game(&ada, "solo").await;
+        // What the room writes when a game's rules say it is over (see the room's tests).
+        sqlx::query("UPDATE games SET finished = true WHERE id = $1")
+            .bind(done.parse::<Uuid>().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let games = list(&app, &ada).await;
+
+        let state = |id: &str| {
+            let game = games
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["gameId"] == id)
+                .unwrap();
+            (
+                game["started"].as_bool().unwrap(),
+                game["finished"].as_bool().unwrap(),
+            )
+        };
+        assert_eq!(state(&waiting), (false, false));
+        assert_eq!(state(&playing), (true, false));
+        assert_eq!(state(&done), (true, true));
     }
 
     #[sqlx::test]
