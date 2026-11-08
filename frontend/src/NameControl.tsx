@@ -33,6 +33,7 @@ export function NameControl() {
           aria-label="Your name"
           value={draft}
           maxLength={MAX_NAME_LENGTH}
+          // biome-ignore lint/a11y/noAutofocus: the form appears because the user asked to edit their name, so focus belongs in it
           autoFocus
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {

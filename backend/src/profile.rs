@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, error::ApiError};
+use crate::{auth::AuthUser, error::ApiError, room::Rooms};
 
 /// Matches the `CHECK` on `users.name`. Counted in characters, not bytes.
 const MAX_NAME_CHARS: usize = 32;
@@ -39,10 +39,12 @@ pub struct NewName {
 
 /// `PATCH /api/me` with `{ "name": "..." }`: sets the display name. Surrounding
 /// whitespace is dropped. Answers 422 if what is left isn't 1 to 32 characters
-/// without control characters. Returns the updated user.
+/// without control characters. Returns the updated user. Games the user is playing show the
+/// new name to the other players and watchers at once.
 pub async fn set_name(
     AuthUser(user_id): AuthUser,
     State(pool): State<PgPool>,
+    State(rooms): State<Rooms>,
     Json(body): Json<NewName>,
 ) -> Result<Json<Me>, ApiError> {
     let name = clean_name(&body.name).ok_or(ApiError::Invalid(
@@ -54,6 +56,8 @@ pub async fn set_name(
         .execute(&pool)
         .await
         .map_err(ApiError::database("could not set a user's name"))?;
+    // Only now, so that the rooms read the new name.
+    rooms.name_changed(user_id);
     Ok(Json(Me {
         user_id,
         name: Some(name.to_owned()),

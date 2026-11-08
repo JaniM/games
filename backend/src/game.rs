@@ -9,14 +9,12 @@
 //!
 //! To add a game, implement [`Game`] and register it in [`registry`].
 
-// Nothing registers a game yet, so outside the tests none of this is used. Once the first game
-// is in `registry`, the compiler flags this attribute as unfulfilled: delete it then.
-#![cfg_attr(not(test), expect(dead_code, reason = "no game is registered yet"))]
-
 use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
+
+use crate::long_backgammon::LongBackgammon;
 
 /// An action the rules don't allow. The reason goes back to the player who tried it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +69,8 @@ pub trait Game: 'static {
     type State: Serialize + DeserializeOwned + Send + 'static;
     type Action: DeserializeOwned;
 
-    /// The state of a new game, once all the seats are taken.
+    /// The state of a new game, once all the seats are taken. May use randomness, e.g. to
+    /// choose who begins.
     fn start() -> Self::State;
 
     /// The state after `seat` plays `action`, or why it can't. This must not need
@@ -203,9 +202,9 @@ impl Games {
     }
 }
 
-/// The games this server offers. Register new ones here, e.g. `.with::<LongBackgammon>()`.
+/// The games this server offers. Register new ones here.
 pub fn registry() -> Games {
-    Games::default()
+    Games::default().with::<LongBackgammon>()
 }
 
 #[cfg(test)]

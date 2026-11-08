@@ -16,11 +16,18 @@
 //!
 //! ```json
 //! { "type": "snapshot", "gameId": "…", "kind": "…", "revision": 3, "stateVersion": 1,
-//!   "players": ["<user id of seat 0>", "…"], "state": { … } }
+//!   "players": ["<user id of seat 0>", "…"], "playerNames": ["Ada", null], "state": { … } }
 //! ```
 //!
-//! `state` is whatever the game defines, and is null until every seat is taken. The
-//! client's own seat is its index in `players`.
+//! `state` is whatever the game defines, and is null until every seat is taken.
+//! `playerNames` is parallel to `players` and null for a player who has no name. A player
+//! who changes their name is published at once, as a snapshot with the same `revision` as
+//! before (the game did not change), so replace what you have unless `revision` is lower.
+//!
+//! **Anyone with a token who knows the game's id may connect and watch.** The client's own
+//! seat is its index in `players`; a client that isn't in `players` is a spectator and
+//! gets the same snapshots. A spectator who then joins the game over HTTP is a player on
+//! the connection they already have: the next snapshot lists them in `players`.
 //!
 //! To play, the client sends an action, whose shape the game defines:
 //!
@@ -35,8 +42,9 @@
 //! { "type": "error", "code": "rejected", "message": "not your turn" }
 //! ```
 //!
-//! The codes are `rejected` (against the rules), `not-started`, `bad-message` and
-//! `internal`. The connection stays open after an error.
+//! The codes are `rejected` (against the rules), `not-started`, `not-a-player` (the
+//! sender has no seat in the game), `bad-message` and `internal`. The connection stays
+//! open after an error.
 //!
 //! The server closes the socket, with a code from [`close`], if the client can't
 //! be admitted or the game goes away. After 1012 the client can reconnect for a fresh start.
@@ -74,8 +82,6 @@ pub mod close {
     pub const BAD_REQUEST: u16 = 4400;
     /// The token isn't known.
     pub const UNAUTHORIZED: u16 = 4401;
-    /// The user has no seat in the game. They can join it over HTTP and connect again.
-    pub const NOT_A_PLAYER: u16 = 4403;
     /// There is no such game.
     pub const NOT_FOUND: u16 = 4404;
     /// The server failed.
@@ -126,7 +132,7 @@ async fn serve(mut socket: WebSocket, pool: PgPool, rooms: Rooms, game_id: Uuid)
     }
 }
 
-/// Reads the hello, checks the token and the seat, and connects to the room. On failure
+/// Reads the hello, checks the token, and connects to the room. On failure
 /// returns the close code to give the client.
 async fn sign_in(
     socket: &mut WebSocket,
@@ -157,7 +163,6 @@ async fn sign_in(
     })?;
     rooms.connect(game_id, user).await.map_err(|err| match err {
         RoomError::NotFound => close::NOT_FOUND,
-        RoomError::NotAPlayer => close::NOT_A_PLAYER,
         _ => close::INTERNAL,
     })
 }
@@ -229,6 +234,14 @@ async fn on_text(
             )
             .await
         }
+        Err(RoomError::NotAPlayer) => {
+            report(
+                socket,
+                "not-a-player",
+                "you are watching this game, not playing it",
+            )
+            .await
+        }
         Err(RoomError::Gone) => Err(Failure::RoomGone),
         Err(_) => report(socket, "internal", "something went wrong on the server").await,
     }
@@ -274,13 +287,27 @@ async fn hang_up(mut socket: WebSocket, code: u16) {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::Method;
     use serde_json::json;
 
     use super::*;
     use crate::{
         game::Games,
-        test_util::{Client, Tally, TestApp},
+        test_util::{Client, Tally, TestApp, bearer},
     };
+
+    /// Changes the name of the token's user.
+    async fn rename(app: &TestApp, token: &str, name: &str) {
+        let reply = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(token)),
+                Some(json!({ "name": name })),
+            )
+            .await;
+        assert_eq!(reply.status, axum::http::StatusCode::OK);
+    }
 
     fn app(pool: PgPool) -> TestApp {
         TestApp::new(pool, Games::default().with::<Tally>())
@@ -338,15 +365,180 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn a_user_without_a_seat_is_closed_as_not_a_player(pool: PgPool) {
+    async fn a_user_without_a_seat_watches_the_game(pool: PgPool) {
+        let app = app(pool);
+        let (game_id, [(_, first), _]) = started_game(&app).await;
+        let (watcher_id, watcher_token) = app.register_user().await;
+        let server = app.serve().await;
+        let mut ada = Client::sign_in(&server, &game_id, &first).await;
+        let mut watcher = Client::sign_in(&server, &game_id, &watcher_token).await;
+
+        let seen = watcher.next().await;
+        assert_eq!(seen["type"], "snapshot");
+        assert_eq!(seen["state"], json!({ "total": 0, "turn": 0 }));
+        assert!(!seen["players"].to_string().contains(&watcher_id));
+        ada.next().await;
+        ada.act(add(4)).await;
+
+        // The watcher sees the game move on, like a player does.
+        assert_eq!(
+            watcher.next().await["state"],
+            json!({ "total": 4, "turn": 1 })
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_watcher_cannot_play_but_stays_connected(pool: PgPool) {
         let app = app(pool);
         let (game_id, _) = started_game(&app).await;
-        let (_, outsider_token) = app.register_user().await;
+        let (_, watcher_token) = app.register_user().await;
         let server = app.serve().await;
+        let mut watcher = Client::sign_in(&server, &game_id, &watcher_token).await;
+        watcher.next().await;
 
-        let mut client = Client::sign_in(&server, &game_id, &outsider_token).await;
+        watcher.act(add(1)).await;
 
-        assert_eq!(client.closed().await, close::NOT_A_PLAYER);
+        let error = watcher.next().await;
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "not-a-player");
+        // Nothing changed, and the socket still works.
+        watcher.expect_silence().await;
+    }
+
+    #[sqlx::test]
+    async fn a_watcher_who_joins_plays_on_the_connection_they_have(pool: PgPool) {
+        let app = app(pool);
+        let (_, creator_token) = app.register_user().await;
+        let (joiner_id, joiner_token) = app.register_user().await;
+        let game_id = app.create_game(&creator_token, "tally").await;
+        let server = app.serve().await;
+        let mut creator = Client::sign_in(&server, &game_id, &creator_token).await;
+        let mut joiner = Client::sign_in(&server, &game_id, &joiner_token).await;
+        creator.next().await;
+        let waiting = joiner.next().await;
+        assert_eq!(waiting["state"], Value::Null);
+        // Watching a game that hasn't started: there is nothing to play yet.
+        joiner.act(add(1)).await;
+        assert_eq!(joiner.next().await["code"], "not-a-player");
+
+        let reply = app.join_game(&joiner_token, &game_id).await;
+
+        assert_eq!(reply.json["seat"], 1);
+        let started = joiner.next().await;
+        assert_eq!(started["players"][1], joiner_id.as_str());
+        assert_eq!(started["state"], json!({ "total": 0, "turn": 0 }));
+        creator.next().await;
+        creator.act(add(2)).await;
+        assert_eq!(
+            joiner.next().await["state"],
+            json!({ "total": 2, "turn": 1 })
+        );
+        joiner.act(add(3)).await;
+        assert_eq!(
+            joiner.next().await["state"],
+            json!({ "total": 5, "turn": 0 })
+        );
+    }
+
+    #[sqlx::test]
+    async fn snapshots_carry_the_players_names(pool: PgPool) {
+        let app = app(pool);
+        let (_, creator_token) = app.register_user().await;
+        let (_, joiner_token) = app.register_user().await;
+        let named = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(&creator_token)),
+                Some(json!({ "name": "Ada" })),
+            )
+            .await;
+        assert_eq!(named.status, axum::http::StatusCode::OK);
+        let game_id = app.create_game(&creator_token, "tally").await;
+        let server = app.serve().await;
+        let mut creator = Client::sign_in(&server, &game_id, &creator_token).await;
+
+        assert_eq!(creator.next().await["playerNames"], json!(["Ada"]));
+
+        // The joiner has no name yet. When they pick one, the creator hears at once, without
+        // waiting for a move, and the game itself is as it was.
+        app.join_game(&joiner_token, &game_id).await;
+        let joined = creator.next().await;
+        assert_eq!(joined["playerNames"], json!(["Ada", null]));
+        app.send(
+            Method::PATCH,
+            "/api/me",
+            Some(&bearer(&joiner_token)),
+            Some(json!({ "name": "Grace" })),
+        )
+        .await;
+        let renamed = creator.next().await;
+        assert_eq!(renamed["playerNames"], json!(["Ada", "Grace"]));
+        assert_eq!(renamed["revision"], joined["revision"]);
+        assert_eq!(renamed["state"], joined["state"]);
+    }
+
+    #[sqlx::test]
+    async fn a_new_name_reaches_everyone_connected_to_the_game_and_play_goes_on(pool: PgPool) {
+        let app = app(pool);
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let (_, watcher_token) = app.register_user().await;
+        let (_, other_player) = app.register_user().await;
+        let game_id = app.create_game(&first, "tally").await;
+        app.join_game(&second, &game_id).await;
+        // A game of other people's, which must not hear about this.
+        let (_, elsewhere) = app.register_user().await;
+        let other_game = app.create_game(&other_player, "tally").await;
+        app.join_game(&elsewhere, &other_game).await;
+        let server = app.serve().await;
+        let mut ada = Client::sign_in(&server, &game_id, &first).await;
+        let mut grace = Client::sign_in(&server, &game_id, &second).await;
+        let mut watcher = Client::sign_in(&server, &game_id, &watcher_token).await;
+        let mut bystander = Client::sign_in(&server, &other_game, &other_player).await;
+        for client in [&mut ada, &mut grace, &mut watcher, &mut bystander] {
+            client.next().await;
+        }
+
+        let reply = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(&first)),
+                Some(json!({ "name": "Ada" })),
+            )
+            .await;
+        assert_eq!(reply.status, axum::http::StatusCode::OK);
+
+        for client in [&mut ada, &mut grace, &mut watcher] {
+            let snapshot = client.next().await;
+            assert_eq!(snapshot["playerNames"], json!(["Ada", null]));
+            assert_eq!(snapshot["revision"], 1);
+        }
+        bystander.expect_silence().await;
+        // The name was not a move: the next action is revision 2 and carries the name along.
+        ada.act(add(1)).await;
+        let moved = grace.next().await;
+        assert_eq!(moved["revision"], 2);
+        assert_eq!(moved["playerNames"], json!(["Ada", null]));
+    }
+
+    #[sqlx::test]
+    async fn saving_the_name_a_player_already_has_publishes_nothing(pool: PgPool) {
+        let app = app(pool);
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let game_id = app.create_game(&first, "tally").await;
+        app.join_game(&second, &game_id).await;
+        let server = app.serve().await;
+        let mut grace = Client::sign_in(&server, &game_id, &second).await;
+        grace.next().await;
+
+        rename(&app, &first, "Ada").await;
+        assert_eq!(grace.next().await["playerNames"], json!(["Ada", null]));
+        rename(&app, &first, "Ada").await;
+
+        grace.expect_silence().await;
     }
 
     #[sqlx::test]

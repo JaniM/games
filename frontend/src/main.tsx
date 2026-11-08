@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { db } from "./db";
+import { bindBrowserLocation } from "./features/router";
 import { loadCredentials } from "./features/session";
 import "./styles.css";
 
@@ -10,6 +11,8 @@ import "./styles.css";
 db.ops.backend.checkBackend();
 // Reuses the access token saved by an earlier visit, or registers a new user.
 db.ops.session.startSession({ stored: loadCredentials() });
+// Reports the page we opened on, and every back or forward after it.
+bindBrowserLocation(db.ops.router.pathChanged);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root is missing from index.html");

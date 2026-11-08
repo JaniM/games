@@ -8,7 +8,14 @@ export default defineConfig({
   cacheDir: process.env.GAMES_SANDBOX ? `${process.env.HOME}/vite-cache` : undefined,
   server: {
     // The axum backend (compose.yaml publishes it on 3000).
-    proxy: { "/api": "http://127.0.0.1:3000" },
+    // `ws` lets the game sockets (/api/games/<id>/ws) through.
+    proxy: { "/api": { target: "http://127.0.0.1:3000", ws: true } },
   },
-  test: { environment: "node" },
+  test: {
+    environment: "node",
+    // Vitest's module cache also lives in node_modules (`.vitest-cache`), and it deletes
+    // its entries whenever the lockfile changes, which the jail can't do. Same reasoning
+    // as `cacheDir` above: only the jail moves it.
+    fsModuleCachePath: process.env.GAMES_SANDBOX ? `${process.env.HOME}/vitest-cache` : undefined,
+  },
 });

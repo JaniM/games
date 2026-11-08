@@ -12,5 +12,5 @@ export const session = feature({
 // Components import definitions by value; they never need the assembled db.
 export { apiFetch } from "./api";
 export { loadCredentials } from "./credentials";
-export { startSession } from "./ops";
+export { startSession, tokenRejected } from "./ops";
 export { SESSION_ID, sessionState } from "./tables";

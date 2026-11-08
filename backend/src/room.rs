@@ -44,11 +44,17 @@ pub struct Snapshot {
     pub kind: &'static str,
     /// Counts the changes since the game was created. Rises by one for each
     /// player who joins and each action played, so clients can tell which of two snapshots is newer.
+    /// (A player renaming themselves is not a change to the game; see `player_names`.)
     pub revision: i64,
     /// The layout version of `state`. The server only sends the current one.
     pub state_version: u32,
     /// The players' user ids, by seat.
     pub players: Vec<Uuid>,
+    /// The players' display names, by seat: null for a player who hasn't picked one. A name
+    /// that a player changes is published at once, as a snapshot with the same `revision`
+    /// as before (the game itself didn't change). So of two snapshots with the same
+    /// revision, the later one is the newer.
+    pub player_names: Vec<Option<String>>,
     /// Null until every seat is taken.
     pub state: Option<Value>,
 }
@@ -57,7 +63,7 @@ pub struct Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomError {
     NotFound,
-    /// The user has no seat in the game.
+    /// The user has no seat in the game, so they can watch but not play.
     NotAPlayer,
     /// Every seat is taken.
     Full,
@@ -149,6 +155,17 @@ impl Rooms {
         Ok(id)
     }
 
+    /// Tells every room in memory that `user` changed their display name, so that the games
+    /// they play show it at once. Call it after the new name is saved: rooms read it from the
+    /// database. Rooms that aren't in memory read it when they load. Doesn't wait for the rooms.
+    pub fn name_changed(&self, user: Uuid) {
+        // Every room hears it and the ones without `user` ignore it. It is rare enough that
+        // finding the user's games first would cost more than it saves.
+        for commands in self.shared.open().values() {
+            _ = commands.send(Command::NameChanged { user });
+        }
+    }
+
     /// Seats `user` in the game and returns the seat. A user who already has a seat gets
     /// the same one again. Taking the last seat starts the game.
     pub async fn join(&self, game_id: Uuid, user: Uuid) -> Result<usize, RoomError> {
@@ -158,15 +175,19 @@ impl Rooms {
         Ok(seat)
     }
 
-    /// Connects `user`, who must have a seat, to the game's room. The room stays in
-    /// memory until the connection is dropped.
+    /// Connects `user` to the game's room. The room stays in memory until the connection
+    /// is dropped.
+    ///
+    /// Anyone who knows the game can connect: a user without a seat watches. The seat is
+    /// looked up when the connection acts, so a watcher who [`join`](Rooms::join)s the
+    /// game can play on the connection they already have.
     pub async fn connect(&self, game_id: Uuid, user: Uuid) -> Result<Connection, RoomError> {
-        let (connected, commands) = self
-            .request(game_id, |reply| Command::Connect { user, reply })
+        let (snapshots, commands) = self
+            .request(game_id, |reply| Command::Connect { reply })
             .await?;
         Ok(Connection {
-            seat: connected.seat,
-            snapshots: connected.snapshots,
+            user,
+            snapshots,
             commands,
         })
     }
@@ -258,18 +279,19 @@ async fn run(shared: Arc<Shared>, id: Uuid, mut inbox: mpsc::UnboundedReceiver<C
 
 enum Command {
     Connect {
-        user: Uuid,
-        reply: oneshot::Sender<Result<Connected, RoomError>>,
+        reply: oneshot::Sender<Result<watch::Receiver<Arc<Snapshot>>, RoomError>>,
     },
     Join {
         user: Uuid,
         reply: oneshot::Sender<Result<usize, RoomError>>,
     },
     Act {
-        seat: usize,
+        user: Uuid,
         action: Value,
         reply: oneshot::Sender<Result<(), RoomError>>,
     },
+    /// A user changed their display name. Nobody waits for an answer.
+    NameChanged { user: Uuid },
 }
 
 impl Command {
@@ -279,18 +301,14 @@ impl Command {
             Self::Connect { reply, .. } => _ = reply.send(Err(err)),
             Self::Join { reply, .. } => _ = reply.send(Err(err)),
             Self::Act { reply, .. } => _ = reply.send(Err(err)),
+            Self::NameChanged { .. } => {}
         }
     }
 }
 
-struct Connected {
-    seat: usize,
-    snapshots: watch::Receiver<Arc<Snapshot>>,
-}
-
-/// A player's link to a room. Keeps the room in memory until dropped.
+/// A user's link to a room: a player's, or a watcher's. Keeps the room in memory until dropped.
 pub struct Connection {
-    seat: usize,
+    user: Uuid,
     snapshots: watch::Receiver<Arc<Snapshot>>,
     commands: mpsc::UnboundedSender<Command>,
 }
@@ -309,12 +327,13 @@ impl Connection {
         Some(self.latest())
     }
 
-    /// Plays an action as this connection's player. On success the new state has been
-    /// saved and published, to this connection too.
+    /// Plays an action as this connection's user, who must have a seat in the game by now
+    /// ([`RoomError::NotAPlayer`] otherwise). On success the new state has been saved and
+    /// published, to this connection too.
     pub async fn act(&self, action: Value) -> Result<(), RoomError> {
         let (reply, answer) = oneshot::channel();
         let command = Command::Act {
-            seat: self.seat,
+            user: self.user,
             action,
             reply,
         };
@@ -330,6 +349,8 @@ struct Room {
     id: Uuid,
     /// By seat.
     players: Vec<Uuid>,
+    /// The players' display names, by seat. See [`Snapshot::player_names`].
+    names: Vec<Option<String>>,
     /// The game, in its own type. It becomes JSON only to be stored and sent, and is never
     /// read back from JSON while the room is up. Null until every seat is taken.
     live: Option<Box<dyn Live>>,
@@ -368,6 +389,9 @@ impl Room {
             .transpose()
             .map_err(|err| internal(err, "could not read a stored game state"))?;
         let state = to_json(live.as_deref())?;
+        let names = read_names(&shared.pool, &players)
+            .await
+            .map_err(|err| internal(err, "could not load the names of a game's players"))?;
 
         let snapshot = Snapshot {
             game_id: id,
@@ -375,6 +399,7 @@ impl Room {
             revision,
             state_version: engine.state_version(),
             players: players.clone(),
+            player_names: names.clone(),
             state,
         };
         Ok(Self {
@@ -382,6 +407,7 @@ impl Room {
             engine: engine.clone(),
             id,
             players,
+            names,
             live,
             revision,
             // Nobody is connected yet. The receiver the channel starts with is dropped at once.
@@ -416,22 +442,19 @@ impl Room {
 
     async fn handle(&mut self, command: Command) {
         match command {
-            Command::Connect { user, reply } => _ = reply.send(self.connect(user)),
+            Command::Connect { reply } => _ = reply.send(self.connect()),
             Command::Join { user, reply } => _ = reply.send(self.join(user).await),
             Command::Act {
-                seat,
+                user,
                 action,
                 reply,
-            } => _ = reply.send(self.act(seat, action).await),
+            } => _ = reply.send(self.act(user, action).await),
+            Command::NameChanged { user } => self.name_changed(user).await,
         }
     }
 
-    fn connect(&self, user: Uuid) -> Result<Connected, RoomError> {
-        let seat = self.seat_of(user).ok_or(RoomError::NotAPlayer)?;
-        Ok(Connected {
-            seat,
-            snapshots: self.snapshots.subscribe(),
-        })
+    fn connect(&self) -> Result<watch::Receiver<Arc<Snapshot>>, RoomError> {
+        Ok(self.snapshots.subscribe())
     }
 
     async fn join(&mut self, user: Uuid) -> Result<usize, RoomError> {
@@ -450,11 +473,13 @@ impl Room {
         self.players.push(user);
         self.live = live;
         self.revision += 1;
+        self.refresh_names().await;
         self.publish(state);
         Ok(seat)
     }
 
-    async fn act(&mut self, seat: usize, action: Value) -> Result<(), RoomError> {
+    async fn act(&mut self, user: Uuid, action: Value) -> Result<(), RoomError> {
+        let seat = self.seat_of(user).ok_or(RoomError::NotAPlayer)?;
         let Some(live) = &self.live else {
             return Err(RoomError::NotStarted);
         };
@@ -466,8 +491,35 @@ impl Room {
         self.save(None, state.as_ref()).await?;
         self.live = Some(next);
         self.revision += 1;
+        self.refresh_names().await;
         self.publish(state);
         Ok(())
+    }
+
+    /// Publishes the game again if `user`, a player here, has a different name than the room
+    /// shows. The revision stays: nothing about the game changed, only how it is labelled.
+    async fn name_changed(&mut self, user: Uuid) {
+        if self.seat_of(user).is_none() {
+            return; // Watchers' names aren't shown.
+        }
+        let before = self.names.clone();
+        self.refresh_names().await;
+        if self.names != before {
+            // The state is what the last snapshot has. Read it first: `publish` replaces the snapshot.
+            let state = self.snapshots.borrow().state.clone();
+            self.publish(state);
+        }
+    }
+
+    /// Reads the players' names again, to publish with a change. A name that can't be read
+    /// is not worth failing a change that is already saved, so the old names stay.
+    async fn refresh_names(&mut self) {
+        match read_names(&self.pool, &self.players).await {
+            Ok(names) => self.names = names,
+            Err(err) => {
+                tracing::warn!(%err, game = %self.id, "could not refresh the players' names")
+            }
+        }
     }
 
     fn seat_of(&self, user: Uuid) -> Option<usize> {
@@ -505,9 +557,27 @@ impl Room {
             revision: self.revision,
             state_version: self.engine.state_version(),
             players: self.players.clone(),
+            player_names: self.names.clone(),
             state,
         }));
     }
+}
+
+/// The display names of `players`, in their order. Null for one who hasn't picked a name.
+async fn read_names(pool: &PgPool, players: &[Uuid]) -> Result<Vec<Option<String>>, sqlx::Error> {
+    let rows: Vec<(Uuid, Option<String>)> =
+        sqlx::query_as("SELECT id, name FROM users WHERE id = ANY($1)")
+            .bind(players)
+            .fetch_all(pool)
+            .await?;
+    Ok(players
+        .iter()
+        .map(|player| {
+            rows.iter()
+                .find(|(id, _)| id == player)
+                .and_then(|(_, name)| name.clone())
+        })
+        .collect())
 }
 
 /// The game's state as JSON, to store and to send. Null for a game that hasn't started.
@@ -688,16 +758,15 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn only_players_of_a_known_game_can_connect(pool: PgPool) {
+    async fn anyone_can_connect_to_a_known_game_but_only_players_can_act(pool: PgPool) {
         let rooms = rooms(&pool, tally());
         let (first, second, outsider) = (user(&pool).await, user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
         let missing = Uuid::from_u128(1);
 
-        assert_eq!(
-            rooms.connect(id, outsider).await.err(),
-            Some(RoomError::NotAPlayer)
-        );
+        let mut watcher = rooms.connect(id, outsider).await.unwrap();
+        assert_eq!(watcher.latest().players, [first, second]);
+        assert_eq!(watcher.act(add(1)).await, Err(RoomError::NotAPlayer));
         assert_eq!(
             rooms.connect(missing, first).await.err(),
             Some(RoomError::NotFound)
@@ -706,6 +775,31 @@ mod tests {
             !rooms.is_open(missing)
         })
         .await;
+    }
+
+    #[sqlx::test]
+    async fn a_watcher_who_takes_the_free_seat_can_act_on_the_connection_they_have(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = waiting_game(&rooms, first).await;
+        let mut first_connection = rooms.connect(id, first).await.unwrap();
+        let mut watcher = rooms.connect(id, second).await.unwrap();
+        assert_eq!(watcher.act(add(1)).await, Err(RoomError::NotAPlayer));
+
+        assert_eq!(rooms.join(id, second).await, Ok(1));
+
+        assert_eq!(next(&mut watcher).await.players, [first, second]);
+        first_connection.act(add(2)).await.unwrap();
+        // Snapshots keep only the newest, so look at this one before the next move.
+        assert_eq!(
+            next(&mut watcher).await.state,
+            Some(json!({ "total": 2, "turn": 1 }))
+        );
+        watcher.act(add(3)).await.unwrap();
+        assert_eq!(
+            next(&mut first_connection).await.state,
+            Some(json!({ "total": 5, "turn": 0 }))
+        );
     }
 
     #[sqlx::test]
@@ -724,6 +818,7 @@ mod tests {
                 revision: 0,
                 state_version: 1,
                 players: vec![creator],
+                player_names: vec![None],
                 state: None,
             }
         );

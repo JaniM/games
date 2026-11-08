@@ -16,6 +16,7 @@ mod auth;
 mod error;
 mod game;
 mod lobby;
+mod long_backgammon;
 mod profile;
 mod room;
 mod socket;

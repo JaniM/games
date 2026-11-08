@@ -1,8 +1,9 @@
 //! Creating, joining and listing games over HTTP. Playing happens on the game's
 //! WebSocket (see `socket`).
 //!
-//! A game's id is its invite: whoever has it can join while a seat is free. Ids are
-//! random, so they can't be found by guessing.
+//! A game's id is its invite: whoever has it can join while a seat is free, and can watch
+//! the game on its WebSocket whether or not they have a seat. Ids are random, so they
+//! can't be found by guessing.
 
 use axum::{
     Json,
@@ -197,6 +198,27 @@ mod tests {
         let game_id = reply.json["gameId"].as_str().unwrap();
         // The game waits for a second player, so it has no state yet.
         assert_eq!(stored(&pool, game_id).await, (0, 1, None, vec![user_id]));
+    }
+
+    #[sqlx::test]
+    async fn the_server_offers_long_backgammon_under_the_id_of_the_front_end_catalog(pool: PgPool) {
+        let app = TestApp::new(pool.clone(), game::registry());
+        let (_, creator) = app.register_user().await;
+        let (_, joiner) = app.register_user().await;
+
+        let game_id = app.create_game(&creator, "long-backgammon").await;
+        let (_, _, waiting, _) = stored(&pool, &game_id).await;
+        assert_eq!(waiting, None);
+        app.join_game(&joiner, &game_id).await;
+
+        // The second player's arrival starts the game: White to roll, all on their heads.
+        let (revision, _, state, players) = stored(&pool, &game_id).await;
+        let state = state.expect("the game has started");
+        assert_eq!((revision, players.len()), (1, 2));
+        assert_eq!(state["phase"], json!({ "type": "roll" }));
+        assert_eq!(state["turn"], state["white"]);
+        assert_eq!(state["points"][0][0], 15);
+        assert_eq!(state["points"][1][0], 15);
     }
 
     #[sqlx::test]

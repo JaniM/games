@@ -1,6 +1,6 @@
 /** A game the site offers. The front page lists these. */
 export interface GameInfo {
-  /** URL slug: the game lives at `/games/<id>`. */
+  /** URL slug: its games live at `/games/<id>/<game id>`. */
   id: string;
   name: string;
   /** One or two sentences for the front page card. */
@@ -21,7 +21,3 @@ export const GAMES: readonly GameInfo[] = [
     players: "2 players",
   },
 ];
-
-export function gameHref(game: GameInfo): string {
-  return `/games/${game.id}`;
-}

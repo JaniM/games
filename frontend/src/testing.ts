@@ -16,16 +16,37 @@ export const issued = (n: number): Credentials => ({ userId: `user-${n}`, access
 
 const NAME_ERROR = "name must be 1 to 32 characters, without control characters";
 
+/** A game id the way the server makes them: a random (version 4) uuid. Here the nth, so tests can name it. */
+export const gameIdOf = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+export interface FakeGame {
+  id: string;
+  kind: string;
+  /** User ids by seat. */
+  players: string[];
+  updatedAt: number;
+}
+
 /**
  * A stand-in for the backend, with the same contract: `POST /api/register` issues
  * credentials, `GET /api/me` and `PATCH /api/me` act on the user a bearer token
- * belongs to, and any other path answers 200 to a known token. Unknown tokens get 401.
+ * belongs to, `POST /api/games`, `GET /api/games` and `POST /api/games/{id}/join`
+ * keep a list of games (two seats each), and any other path answers 200 to a known
+ * token. Unknown tokens get 401.
  *
  * `users` maps access tokens to users. Clearing it makes the server forget everyone.
+ * `games` maps game ids to games.
  */
 export function fakeServer() {
   const users = new Map<string, { userId: string; name: string | null }>();
+  const games = new Map<string, FakeGame>();
   let registrations = 0;
+  let clock = 1_700_000_000_000;
+  /** The next time on the server's clock: every change is a second after the last. */
+  const tick = () => {
+    clock += 1000;
+    return clock;
+  };
 
   const fetchImpl: typeof fetch = async (input, init) => {
     const path = String(input);
@@ -39,6 +60,42 @@ export function fakeServer() {
     const token = new Headers(init?.headers).get("Authorization")?.replace(/^Bearer /, "");
     const user = token ? users.get(token) : undefined;
     if (!user) return new Response(null, { status: 401 });
+    const join = /^\/api\/games\/([^/]+)\/join$/.exec(path);
+    if (path === "/api/games" && init?.method === "POST") {
+      const { kind } = JSON.parse(String(init.body)) as { kind: string };
+      if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
+      const game = {
+        id: gameIdOf(games.size + 1),
+        kind,
+        players: [user.userId],
+        updatedAt: tick(),
+      };
+      games.set(game.id, game);
+      return json({ gameId: game.id, seat: 0 }, 201);
+    }
+    if (path === "/api/games") {
+      const mine = [...games.values()].filter((game) => game.players.includes(user.userId));
+      return json({
+        games: mine.map((game) => ({
+          gameId: game.id,
+          kind: game.kind,
+          seat: game.players.indexOf(user.userId),
+          joined: game.players.length,
+          started: game.players.length === 2,
+          updatedAt: game.updatedAt,
+        })),
+      });
+    }
+    if (join) {
+      const game = games.get(join[1] ?? "");
+      if (!game) return new Response(null, { status: 404 });
+      if (!game.players.includes(user.userId)) {
+        if (game.players.length >= 2) return new Response("the game is full", { status: 409 });
+        game.players.push(user.userId);
+        game.updatedAt = tick();
+      }
+      return json({ gameId: game.id, seat: game.players.indexOf(user.userId) });
+    }
     if (path !== "/api/me") return json({});
 
     if (init?.method === "PATCH") {
@@ -51,12 +108,98 @@ export function fakeServer() {
 
   return {
     users,
+    games,
     fetchImpl,
     /** Makes the server know `credentials`, as if they were registered on an earlier visit. */
     addUser(credentials: Credentials, name: string | null = null) {
       users.set(credentials.accessToken, { userId: credentials.userId, name });
     },
+    /** Puts a game on the server, as if somebody had created it. */
+    addGame(game: Omit<FakeGame, "updatedAt"> & { updatedAt?: number }) {
+      games.set(game.id, { updatedAt: tick(), ...game });
+    },
   };
+}
+
+/**
+ * What the client registers on a socket. The real `WebSocket` hands it an `Event`; the fake
+ * sends only the fields the client reads (`data`, `code`).
+ */
+type Listener = (event: Event) => void;
+
+/**
+ * A `WebSocket` stand-in that the test drives by hand: it records what the client sends
+ * (parsed from JSON), and the test says when it opens, what the server sends and how it
+ * closes. Install it with `vi.stubGlobal("WebSocket", FakeWebSocket)`.
+ */
+export class FakeWebSocket {
+  /** Every socket made since `reset`, oldest first. */
+  static instances: FakeWebSocket[] = [];
+
+  static reset() {
+    FakeWebSocket.instances = [];
+  }
+
+  static get last(): FakeWebSocket {
+    const socket = FakeWebSocket.instances.at(-1);
+    if (!socket) throw new Error("no socket was opened");
+    return socket;
+  }
+
+  readonly url: string;
+  readyState = 0;
+  /** What the client sent, parsed. */
+  sent: Record<string, unknown>[] = [];
+  private listeners = new Map<string, Set<Listener>>();
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: Listener) {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  send(data: string) {
+    if (this.readyState !== 1) throw new Error("the socket is not open");
+    this.sent.push(JSON.parse(data));
+  }
+
+  /** The client closes it. */
+  close(code = 1000) {
+    this.serverClose(code);
+  }
+
+  // What the test does, as the server and the network:
+
+  /** The connection is made. */
+  open() {
+    this.readyState = 1;
+    this.dispatch("open", {});
+  }
+
+  /** The server sends a message. */
+  receive(message: unknown) {
+    this.dispatch("message", { data: JSON.stringify(message) });
+  }
+
+  /** The connection ends, with a close code. Does nothing if it has ended already. */
+  serverClose(code: number) {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.dispatch("close", { code });
+  }
+
+  private dispatch(type: string, event: object) {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event as Event);
+  }
 }
 
 /** A `localStorage` stand-in. `failWrites` mimics a full or blocked store. */
