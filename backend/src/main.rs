@@ -1,9 +1,20 @@
 use std::{env, error::Error, time::Duration};
 
-use axum::{Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::EnvFilter;
+
+mod auth;
+mod error;
+mod profile;
+#[cfg(test)]
+mod test_util;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -24,6 +35,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|err| format!("could not connect to the database: {err}"))?;
     tracing::info!("connected to database");
 
+    // The migrations in `backend/migrations` are embedded in the binary at compile time.
+    sqlx::migrate!()
+        .run(&pool)
+        .await
+        .map_err(|err| format!("could not run database migrations: {err}"))?;
+
     let listener = TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
 
@@ -36,6 +53,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn app(pool: PgPool) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/register", post(auth::register))
+        .route("/api/me", get(profile::me).patch(profile::set_name))
         .with_state(pool)
 }
 

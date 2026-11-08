@@ -1,8 +1,13 @@
 import { GAMES, gameHref } from "./games";
+import { NameControl } from "./NameControl";
 
 export function App() {
   return (
     <main className="page">
+      <div className="top-right">
+        <NameControl />
+      </div>
+
       <header className="page-header">
         <h1>Games</h1>
         <p>Simple board games, played live or at your own pace.</p>

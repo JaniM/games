@@ -1,5 +1,7 @@
 import { createDb } from "millpond";
 import { backend } from "./features/backend";
+import { profile } from "./features/profile";
+import { session } from "./features/session";
 
 /**
  * The app's one db. Every table, op and effect must be registered here through
@@ -9,5 +11,5 @@ import { backend } from "./features/backend";
  * fresh microtask, so they show up in the browser console.
  */
 export const db = createDb({
-  features: { backend },
+  features: { backend, profile, session },
 });

@@ -10,6 +10,8 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
     && rm -r src
 
 COPY src ./src
+# `sqlx::migrate!()` embeds these at compile time.
+COPY migrations ./migrations
 # The stub build is newer than the copied sources, so force a rebuild of the crate.
 RUN touch src/main.rs && cargo build --release --locked
 
