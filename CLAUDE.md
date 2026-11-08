@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A board game website with a Rust backend and a React frontend.
 
+Game rules live in `docs/games/<game>.md`. Follow them exactly and ask before deviating. Start with `docs/games/long-backgammon.md`.
+
 ## Sandbox
 
 If `GAMES_SANDBOX=1` is set, you are in the jail from `sandbox/README.md`. `.git`, `.jj`, `node_modules` and `target` are read-only, so don't commit (the user does, with jj) and ask the user to run `pnpm install` when npm dependencies change. `jj` isn't available; use `git` to read history. Cargo builds into `$CARGO_TARGET_DIR` in the jail's home.
