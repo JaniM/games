@@ -41,7 +41,26 @@ body {
   min-height: 100vh;
 }
 
+/*
+ * The app is at least as tall as the screen, as a column, so that the footer can sit at the
+ * bottom of a short page (`.site-footer`). `dvh` is the part of the screen that is showing: on
+ * a phone `vh` also counts the space under the browser's toolbar.
+ */
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+@supports (min-height: 100dvh) {
+  #root {
+    min-height: 100dvh;
+  }
+}
+
 .page {
+  /* A column does not stretch an item whose side margins are auto, so it must ask for the width. */
+  width: 100%;
   max-width: 56rem;
   margin: 0 auto;
   padding: 4rem 1.5rem;
@@ -1105,13 +1124,15 @@ form.name-control {
 /* --- The privacy link on the front page --- */
 
 /*
- * In the bottom right corner of the viewport, not of the page: it stays there while the page
- * scrolls. Its right edge lines up with the name in the top right corner (`.top-right`).
+ * The last thing on the page, in the bottom right corner. A page shorter than the screen
+ * leaves it at the bottom of the screen (the auto margin takes up the rest of `#root`); a
+ * longer page leaves it at the very end, after everything, and not over the content. Its
+ * right edge lines up with the name in the top right corner (`.top-right`).
  */
 .site-footer {
-  position: fixed;
-  right: 1.5rem;
-  bottom: 0.5rem;
+  margin-top: auto;
+  align-self: flex-end;
+  padding: 0 1.5rem 0.5rem;
   font-size: 0.9375rem;
 }
 
