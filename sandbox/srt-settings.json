@@ -1,0 +1,36 @@
+{
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "platform.claude.com",
+      "index.crates.io",
+      "static.crates.io"
+    ],
+    "deniedDomains": [],
+    "allowLocalBinding": true
+  },
+  "filesystem": {
+    "denyRead": [
+      "/Users",
+      "/Volumes",
+      "/private/tmp",
+      "/private/var/folders",
+      "**/.env",
+      "**/.env.*"
+    ],
+    "allowRead": [".", "~"],
+    "allowWrite": [".", "~"],
+    "denyWrite": [
+      ".git",
+      ".jj",
+      ".claude",
+      "CLAUDE.md",
+      "flake.nix",
+      "flake.lock",
+      "sandbox",
+      "**/node_modules",
+      "**/target"
+    ]
+  },
+  "allowPty": true
+}

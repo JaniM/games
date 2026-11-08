@@ -1,0 +1,11 @@
+target/
+.env
+.env.*
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# nix build output
+/result
