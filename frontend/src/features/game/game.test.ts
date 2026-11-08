@@ -185,6 +185,20 @@ describe("snapshots", () => {
     expect(view(db)).toMatchObject({ problem: null, snapshot: { revision: 3 } });
   });
 
+  it("says so when the link is to a kind of game this page can't show, as links do not name it", async () => {
+    const { db } = setup();
+    db.ops.game.openGame({ gameId: GAME_ID });
+    await settle();
+    const socket = FakeWebSocket.last;
+    socket.open();
+
+    socket.receive(snapshotMessage({ kind: "chess", state: null }));
+    await settle();
+
+    expect(view(db)?.problem).toMatch(/different kind of game/);
+    expect(view(db)?.snapshot).toBeNull();
+  });
+
   it("ignore a snapshot of another game, and messages of a kind it does not know", async () => {
     const { db } = setup();
     const socket = await connected(db, { revision: 1 });

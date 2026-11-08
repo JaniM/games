@@ -62,11 +62,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 use crate::{
     auth::authenticate,
     error::ApiError,
+    game_id::GameId,
     room::{Connection, RoomError, Rooms, Snapshot},
 };
 
@@ -108,7 +108,7 @@ enum ServerMessage<'a> {
 /// known after the hello, so the upgrade itself always succeeds.
 pub async fn connect(
     upgrade: WebSocketUpgrade,
-    Path(game_id): Path<Uuid>,
+    Path(game_id): Path<GameId>,
     State(pool): State<PgPool>,
     State(rooms): State<Rooms>,
 ) -> Response {
@@ -120,8 +120,8 @@ pub async fn connect(
 /// The peer is gone or the socket is unusable.
 struct Disconnected;
 
-async fn serve(mut socket: WebSocket, pool: PgPool, rooms: Rooms, game_id: Uuid) {
-    let mut connection = match sign_in(&mut socket, &pool, &rooms, game_id).await {
+async fn serve(mut socket: WebSocket, pool: PgPool, rooms: Rooms, game_id: GameId) {
+    let mut connection = match sign_in(&mut socket, &pool, &rooms, &game_id).await {
         Ok(connection) => connection,
         Err(code) => return hang_up(socket, code).await,
     };
@@ -138,7 +138,7 @@ async fn sign_in(
     socket: &mut WebSocket,
     pool: &PgPool,
     rooms: &Rooms,
-    game_id: Uuid,
+    game_id: &GameId,
 ) -> Result<Connection, u16> {
     let hello = timeout(HELLO_TIMEOUT, async {
         loop {
@@ -341,7 +341,7 @@ mod tests {
     async fn the_token_is_checked_before_the_game_is_looked_up(pool: PgPool) {
         let app = app(pool);
         let server = app.serve().await;
-        let nowhere = Uuid::from_u128(1).to_string();
+        let nowhere = "nosuchgame22".to_owned();
 
         let mut client = Client::sign_in(&server, &nowhere, "unknown").await;
 
@@ -547,7 +547,7 @@ mod tests {
         let (_, token) = app.register_user().await;
         let server = app.serve().await;
 
-        let mut client = Client::sign_in(&server, &Uuid::from_u128(1).to_string(), &token).await;
+        let mut client = Client::sign_in(&server, "nosuchgame22", &token).await;
 
         assert_eq!(client.closed().await, close::NOT_FOUND);
     }
@@ -706,5 +706,50 @@ mod tests {
             grace.next().await["state"],
             json!({ "total": 8, "turn": 0 })
         );
+    }
+
+    #[sqlx::test]
+    async fn a_person_and_the_bot_take_turns_at_long_backgammon_over_the_socket(pool: PgPool) {
+        // The real games, not a stand-in: this is what the site does when someone picks the bot.
+        let app = TestApp::new(pool, crate::game::registry());
+        let server = app.serve().await;
+        let (_, token) = app.register_user().await;
+        let created = app.create_bot_game(&token, "long-backgammon").await;
+        let game_id = created.json["gameId"].as_str().unwrap().to_owned();
+        let mut client = Client::sign_in(&server, &game_id, &token).await;
+
+        // Play three turns by always taking the first step the server offers. Whenever it is
+        // the person's turn and there is something to do, do it; otherwise the bot is playing,
+        // and the next snapshot is its doing.
+        let mut snapshot = client.next().await;
+        for _ in 0..400 {
+            let state = &snapshot["state"];
+            if state["turns"][0].as_u64() >= Some(3) {
+                break;
+            }
+            assert_ne!(state["phase"]["type"], "over", "the game ended too soon");
+            if state["turn"] == 0 {
+                match state["phase"]["type"].as_str().unwrap() {
+                    "roll" => client.act(json!({ "type": "roll" })).await,
+                    _ => {
+                        let step = &state["legal"][0];
+                        client
+                            .act(
+                                json!({ "type": "move", "from": step["from"], "die": step["die"] }),
+                            )
+                            .await;
+                    }
+                }
+            }
+            snapshot = client.next().await;
+        }
+
+        let state = &snapshot["state"];
+        assert_eq!(state["turns"][0], 3, "the person played three turns");
+        // The bot answered every one of them, and began if it was White.
+        let bot_turns = state["turns"][1].as_u64().unwrap();
+        assert!(bot_turns >= 2, "the bot played only {bot_turns} turns");
+        assert_eq!(snapshot["players"][1], crate::bot::BOT_USER.to_string());
+        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
     }
 }

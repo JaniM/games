@@ -22,6 +22,7 @@ import {
   submitAction,
 } from "./ops";
 import {
+  KIND,
   STATE_VERSION,
   errorMessageSchema,
   incomingSnapshotSchema,
@@ -32,6 +33,7 @@ import { registerSocket, socketOf, unregisterSocket } from "./sockets";
 import { gameActions, gameViews, joinRequests } from "./tables";
 
 const NEWER_VERSION = "This game needs a newer version of the site. Reload the page to get it.";
+const OTHER_GAME = "This link is for a different kind of game than this page can show.";
 
 /** What the server's `error` message means to a player, when its own text isn't meant for them. */
 const ERROR_TEXT: Record<string, string> = {
@@ -153,6 +155,12 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
     return false;
   }
   if (incoming.data.gameId !== gameId) return false;
+  // A game's link doesn't say what game it is, so the server does. State of another game
+  // would not fit the board; a game still waiting for a player has no state to show it.
+  if (incoming.data.kind !== KIND) {
+    ctx.run(gameProblem, { gameId, problem: OTHER_GAME });
+    return false;
+  }
   const { revision, stateVersion, players, playerNames, state } = incoming.data;
   const parsed = state === null ? { success: true as const, data: null } : stateSchema.safeParse(state);
   if (stateVersion !== STATE_VERSION || !parsed.success) {

@@ -16,8 +16,11 @@ export const issued = (n: number): Credentials => ({ userId: `user-${n}`, access
 
 const NAME_ERROR = "name must be 1 to 32 characters, without control characters";
 
-/** A game id the way the server makes them: a random (version 4) uuid. Here the nth, so tests can name it. */
-export const gameIdOf = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+/** A game id the way the server makes them: 12 characters of lower case letters and digits. Here the nth, so tests can name it. */
+export const gameIdOf = (n: number) => `game${String(n).padStart(8, "0")}`;
+
+/** The computer opponent's user id on the fake server. It shows up as the player named "Bot". */
+export const BOT_USER_ID = "bot";
 
 export interface FakeGame {
   id: string;
@@ -64,12 +67,12 @@ export function fakeServer() {
     if (!user) return new Response(null, { status: 401 });
     const join = /^\/api\/games\/([^/]+)\/join$/.exec(path);
     if (path === "/api/games" && init?.method === "POST") {
-      const { kind } = JSON.parse(String(init.body)) as { kind: string };
+      const { kind, bot = false } = JSON.parse(String(init.body)) as { kind: string; bot?: boolean };
       if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
       const game = {
         id: gameIdOf(games.size + 1),
         kind,
-        players: [user.userId],
+        players: bot ? [user.userId, BOT_USER_ID] : [user.userId],
         updatedAt: tick(),
       };
       games.set(game.id, game);
@@ -86,8 +89,10 @@ export function fakeServer() {
           started: game.players.length === 2,
           finished: game.finished ?? false,
           updatedAt: game.updatedAt,
-          playerNames: game.players.map(
-            (id) => [...users.values()].find((u) => u.userId === id)?.name ?? null,
+          playerNames: game.players.map((id) =>
+            id === BOT_USER_ID
+              ? "Bot"
+              : ([...users.values()].find((u) => u.userId === id)?.name ?? null),
           ),
         })),
       });

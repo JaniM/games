@@ -56,9 +56,9 @@ describe("creating a game", () => {
     const id = gameIdOf(1);
     expect(calls(fetchMock)).toContain("POST /api/games");
     const post = fetchMock.mock.calls.find(([input]) => String(input) === "/api/games");
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ kind: "long-backgammon" });
-    expect(pushState).toHaveBeenCalledWith(null, "", `/games/long-backgammon/${id}`);
-    expect(path(db)).toBe(`/games/long-backgammon/${id}`);
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ kind: "long-backgammon", bot: false });
+    expect(pushState).toHaveBeenCalledWith(null, "", `/games/${id}`);
+    expect(path(db)).toBe(`/games/${id}`);
     expect(db.read(newGame.get(NEW_GAME_ID))).toBeUndefined();
   });
 
@@ -81,7 +81,7 @@ describe("creating a game", () => {
     await settle();
 
     expect([...server.games.values()].map((g) => g.players)).toEqual([[issued(2).userId]]);
-    expect(path(db)).toBe(`/games/long-backgammon/${gameIdOf(1)}`);
+    expect(path(db)).toBe(`/games/${gameIdOf(1)}`);
   });
 
   it("keeps the reason when it fails, stays where it is, and can be tried again", async () => {
@@ -101,7 +101,7 @@ describe("creating a game", () => {
     db.ops.lobby.createGame();
     await settle();
     expect(db.read(newGame.get(NEW_GAME_ID))).toBeUndefined();
-    expect(path(db)).toBe(`/games/long-backgammon/${gameIdOf(1)}`);
+    expect(path(db)).toBe(`/games/${gameIdOf(1)}`);
   });
 });
 
@@ -117,6 +117,7 @@ describe("the dialog for creating a game", () => {
       id: NEW_GAME_ID,
       state: "choosing",
       kind: "long-backgammon",
+      bot: false,
       error: null,
     });
     await settle();
@@ -162,11 +163,60 @@ describe("the dialog for creating a game", () => {
     const { db } = setup(failingToCreate());
     startCreating(db);
     await settle();
+    db.ops.lobby.chooseOpponent({ bot: true });
     db.ops.lobby.closeNewGame();
 
     db.ops.lobby.openNewGame({ kind: "long-backgammon" });
 
-    expect(row(db)).toMatchObject({ state: "choosing", error: null });
+    expect(row(db)).toMatchObject({ state: "choosing", error: null, bot: false });
+  });
+});
+
+describe("choosing the opponent", () => {
+  const row = (db: TestDb) => db.read(newGame.get(NEW_GAME_ID));
+
+  it("is a friend until the bot is picked, and can be changed back", () => {
+    const { db } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    expect(row(db)?.bot).toBe(false);
+
+    db.ops.lobby.chooseOpponent({ bot: true });
+    expect(row(db)?.bot).toBe(true);
+
+    db.ops.lobby.chooseOpponent({ bot: false });
+    expect(row(db)?.bot).toBe(false);
+  });
+
+  it("asks the server for a game against the bot, which has begun when the page opens", async () => {
+    const { db, server, fetchMock } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    db.ops.lobby.chooseOpponent({ bot: true });
+
+    db.ops.lobby.createGame();
+    await settle();
+
+    const post = fetchMock.mock.calls.find(([input]) => String(input) === "/api/games");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ kind: "long-backgammon", bot: true });
+    const [created] = [...server.games.values()];
+    expect(created?.players).toHaveLength(2);
+    expect(path(db)).toBe(`/games/${gameIdOf(1)}`);
+  });
+
+  it("does nothing with no dialog open", () => {
+    const { db } = setup();
+
+    db.ops.lobby.chooseOpponent({ bot: true });
+
+    expect(row(db)).toBeUndefined();
+  });
+
+  it("can't change while the game is being made: the request has gone out as it was", async () => {
+    const { db } = setup();
+    startCreating(db);
+
+    db.ops.lobby.chooseOpponent({ bot: true });
+
+    expect(row(db)).toMatchObject({ state: "creating", bot: false });
   });
 });
 

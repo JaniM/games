@@ -19,6 +19,8 @@ export interface HomeScreenProps {
   /** The dialog for creating a game; undefined while it is closed. */
   request: NewGameRow | undefined;
   onNewGame: (kind: string) => void;
+  /** Picks the opponent in the dialog: the computer (true), or a friend. */
+  onOpponent: (bot: boolean) => void;
   onCreate: () => void;
   onClose: () => void;
   onReload: () => void;
@@ -35,6 +37,7 @@ export function HomeScreen({
   list,
   request,
   onNewGame,
+  onOpponent,
   onCreate,
   onClose,
   onReload,
@@ -80,7 +83,13 @@ export function HomeScreen({
           locked={request.state === "creating"}
           onClose={onClose}
         >
-          <NewGameForm request={request} info={requestInfo} onCreate={onCreate} onClose={onClose} />
+          <NewGameForm
+            request={request}
+            info={requestInfo}
+            onOpponent={onOpponent}
+            onCreate={onCreate}
+            onClose={onClose}
+          />
         </Modal>
       )}
     </main>
@@ -139,18 +148,21 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
       <ul className="my-games">
         {shown.map(({ game, info }) => (
           <li key={game.gameId}>
-            <Link className="my-game" to={gamePath(game.kind, game.gameId)}>
+            <Link className="my-game" to={gamePath(game.gameId)}>
               <span className="my-game-name">{info.name}</span>
               <span className="my-game-players">{playersText(game)}</span>
-              <span className={game.finished ? "my-game-state my-game-state-done" : "my-game-state"}>
-                {gameStateText(game)}
+              {/* Where the game stands and when it last changed share a row. */}
+              <span className="my-game-meta">
+                <span className={game.finished ? "my-game-state my-game-state-done" : "my-game-state"}>
+                  {gameStateText(game)}
+                </span>
+                <time className="muted" dateTime={new Date(game.updatedAt).toISOString()}>
+                  {new Date(game.updatedAt).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </time>
               </span>
-              <time className="muted" dateTime={new Date(game.updatedAt).toISOString()}>
-                {new Date(game.updatedAt).toLocaleString(undefined, {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                })}
-              </time>
             </Link>
           </li>
         ))}
@@ -163,20 +175,48 @@ interface NewGameFormProps {
   request: NewGameRow;
   /** The catalog entry for the kind, if the site has one. */
   info: GameInfo | undefined;
+  onOpponent: (bot: boolean) => void;
   onCreate: () => void;
   onClose: () => void;
 }
 
-/** What goes in the dialog: what the game is, and the buttons. */
-function NewGameForm({ request, info, onCreate, onClose }: NewGameFormProps) {
+/**
+ * What goes in the dialog: what the game is, who to play (if the game has a computer opponent
+ * to choose), and the buttons.
+ */
+function NewGameForm({ request, info, onOpponent, onCreate, onClose }: NewGameFormProps) {
   const creating = request.state === "creating";
+  // Only a game the catalog knows can say it has a bot. Without one, a friend is the only choice.
+  const bot = info?.bot === true && request.bot;
   return (
     <>
       {info && <p>{info.description}</p>}
-      <p className="muted">
-        {info ? `${info.players}. ` : ""}You get a link to send to your opponent. Anyone who has
-        it can watch.
-      </p>
+      {info?.bot ? (
+        <fieldset className="choice" disabled={creating}>
+          <legend className="choice-legend">{info.players}. Play against</legend>
+          <label className="choice-option">
+            <input type="radio" name="opponent" checked={!bot} onChange={() => onOpponent(false)} />
+            <span>
+              <span className="choice-name">A friend</span>
+              <span className="choice-text">
+                You get a link to send. Anyone who has it can watch.
+              </span>
+            </span>
+          </label>
+          <label className="choice-option">
+            <input type="radio" name="opponent" checked={bot} onChange={() => onOpponent(true)} />
+            <span>
+              <span className="choice-name">The bot</span>
+              <span className="choice-text">The game starts right away.</span>
+            </span>
+          </label>
+        </fieldset>
+      ) : (
+        <p className="muted">
+          {info ? `${info.players}. ` : ""}You get a link to send to your opponent. Anyone who has
+          it can watch.
+        </p>
+      )}
       {request.state === "failed" && (
         <p className="error" role="alert">
           Could not create the game: {request.error}
@@ -194,7 +234,7 @@ function NewGameForm({ request, info, onCreate, onClose }: NewGameFormProps) {
           aria-busy={creating}
           onClick={onCreate}
         >
-          {creating ? "Creating…" : "Create game"}
+          {creating ? "Creating…" : bot ? "Start game" : "Create game"}
         </button>
       </div>
     </>

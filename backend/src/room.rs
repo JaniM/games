@@ -23,13 +23,28 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    time::Instant,
+};
 use uuid::Uuid;
 
-use crate::game::{Engine, Games, Live};
+use crate::{
+    bot::BOT_USER,
+    game::{Engine, Games, Live},
+    game_id::GameId,
+};
 
 /// How long a room with nobody connected stays in memory.
 pub const IDLE_GRACE: Duration = Duration::from_secs(30);
+
+/// How long the bot waits before each action it plays. The front end takes 900 ms to roll
+/// the dice (`ROLL_MS`) and 450 ms to move a checker, so the player sees one thing finish
+/// before the next starts.
+pub const BOT_PAUSE: Duration = Duration::from_millis(900);
+
+/// How many random ids a new game tries before giving up. One is nearly always enough.
+const ID_ATTEMPTS: usize = 3;
 
 /// Asking a room that is shutting down gets `Gone`, and the next attempt starts a
 /// fresh one. Two attempts only fail if a room shuts down twice in a row.
@@ -40,7 +55,7 @@ const ATTEMPTS: usize = 3;
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    pub game_id: Uuid,
+    pub game_id: GameId,
     pub kind: &'static str,
     /// Counts the changes since the game was created. Rises by one for each
     /// player who joins and each action played, so clients can tell which of two snapshots is newer.
@@ -67,6 +82,8 @@ pub enum RoomError {
     NotAPlayer,
     /// Every seat is taken.
     Full,
+    /// A game against the bot was asked for, and the game has no bot.
+    NoBot,
     /// An action came before the last seat was taken.
     NotStarted,
     /// The game's rules refused the action. The reason is for the player.
@@ -87,22 +104,30 @@ struct Shared {
     pool: PgPool,
     games: Games,
     idle_grace: Duration,
+    /// How long the bot waits before each action it plays.
+    bot_pause: Duration,
     /// How to reach each room. An entry whose channel is closed is a room that has shut
     /// down, and counts as absent. Rooms remove their own entry on the way out.
-    open: Mutex<HashMap<Uuid, mpsc::UnboundedSender<Command>>>,
+    open: Mutex<HashMap<GameId, mpsc::UnboundedSender<Command>>>,
 }
 
 impl Rooms {
     pub fn new(pool: PgPool, games: Games) -> Self {
-        Self::with_idle_grace(pool, games, IDLE_GRACE)
+        Self::with_timing(pool, games, IDLE_GRACE, BOT_PAUSE)
     }
 
-    pub fn with_idle_grace(pool: PgPool, games: Games, idle_grace: Duration) -> Self {
+    pub fn with_timing(
+        pool: PgPool,
+        games: Games,
+        idle_grace: Duration,
+        bot_pause: Duration,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 pool,
                 games,
                 idle_grace,
+                bot_pause,
                 open: Mutex::default(),
             }),
         }
@@ -113,7 +138,11 @@ impl Rooms {
     }
 
     /// Creates a game of the given kind with `creator` in seat 0, and loads it.
-    pub async fn create(&self, engine: &Arc<dyn Engine>, creator: Uuid) -> Result<Uuid, RoomError> {
+    pub async fn create(
+        &self,
+        engine: &Arc<dyn Engine>,
+        creator: Uuid,
+    ) -> Result<GameId, RoomError> {
         // A game for one player has no one to wait for.
         let (state, finished) = match engine.players() {
             1 => {
@@ -122,42 +151,85 @@ impl Rooms {
             }
             _ => (None, false),
         };
-        let id = self
-            .insert(engine.as_ref(), creator, state, finished)
+        self.create_with(engine, &[creator], state, finished).await
+    }
+
+    /// Creates a game against the bot, which takes seat 1. The game starts at once, because
+    /// there is no one else to wait for. [`RoomError::NoBot`] if the game has no bot.
+    pub async fn create_against_bot(
+        &self,
+        engine: &Arc<dyn Engine>,
+        creator: Uuid,
+    ) -> Result<GameId, RoomError> {
+        if !engine.has_bot() {
+            return Err(RoomError::NoBot);
+        }
+        let live = engine.start();
+        let state = to_json(Some(live.as_ref()))?;
+        self.create_with(engine, &[creator, BOT_USER], state, live.is_over())
             .await
-            .map_err(|err| {
-                tracing::error!(%err, "could not create a game");
-                RoomError::Internal
-            })?;
+    }
+
+    async fn create_with(
+        &self,
+        engine: &Arc<dyn Engine>,
+        players: &[Uuid],
+        state: Option<Value>,
+        finished: bool,
+    ) -> Result<GameId, RoomError> {
+        let id = self
+            .insert(engine.as_ref(), players, state, finished)
+            .await
+            .map_err(|err| internal(err, "could not create a game"))?;
         // Loading it now is what makes it a room, ready for the socket that follows.
-        self.shared.room(id);
+        self.shared.room(&id);
         Ok(id)
     }
 
+    /// Stores a new game with its players, who take seats in the order given.
     async fn insert(
         &self,
         engine: &dyn Engine,
-        creator: Uuid,
+        players: &[Uuid],
         state: Option<Value>,
         finished: bool,
-    ) -> Result<Uuid, sqlx::Error> {
-        let mut tx = self.shared.pool.begin().await?;
-        let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO games (kind, state_version, state, finished)
-             VALUES ($1, $2, $3, $4) RETURNING id",
-        )
-        .bind(engine.kind())
-        .bind(engine.state_version() as i32)
-        .bind(state)
-        .bind(finished)
-        .fetch_one(&mut *tx)
-        .await?;
-        sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, 0, $2)")
-            .bind(id)
-            .bind(creator)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
+    ) -> Result<GameId, String> {
+        let db = |err: sqlx::Error| err.to_string();
+        let mut tx = self.shared.pool.begin().await.map_err(db)?;
+        // A random id is taken by another game once in a very long while. Then try another.
+        let mut id = None;
+        for _ in 0..ID_ATTEMPTS {
+            let candidate = GameId::random().map_err(|err| err.to_string())?;
+            let inserted: Option<GameId> = sqlx::query_scalar(
+                "INSERT INTO games (id, kind, state_version, state, finished)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (id) DO NOTHING
+                 RETURNING id",
+            )
+            .bind(&candidate)
+            .bind(engine.kind())
+            .bind(engine.state_version() as i32)
+            .bind(&state)
+            .bind(finished)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+            if inserted.is_some() {
+                id = Some(candidate);
+                break;
+            }
+        }
+        let id = id.ok_or("every id tried was taken")?;
+        for (seat, player) in players.iter().enumerate() {
+            sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, $2, $3)")
+                .bind(&id)
+                .bind(seat as i16)
+                .bind(player)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
         Ok(id)
     }
 
@@ -174,7 +246,7 @@ impl Rooms {
 
     /// Seats `user` in the game and returns the seat. A user who already has a seat gets
     /// the same one again. Taking the last seat starts the game.
-    pub async fn join(&self, game_id: Uuid, user: Uuid) -> Result<usize, RoomError> {
+    pub async fn join(&self, game_id: &GameId, user: Uuid) -> Result<usize, RoomError> {
         let (seat, _) = self
             .request(game_id, |reply| Command::Join { user, reply })
             .await?;
@@ -187,7 +259,7 @@ impl Rooms {
     /// Anyone who knows the game can connect: a user without a seat watches. The seat is
     /// looked up when the connection acts, so a watcher who [`join`](Rooms::join)s the
     /// game can play on the connection they already have.
-    pub async fn connect(&self, game_id: Uuid, user: Uuid) -> Result<Connection, RoomError> {
+    pub async fn connect(&self, game_id: &GameId, user: Uuid) -> Result<Connection, RoomError> {
         let (snapshots, commands) = self
             .request(game_id, |reply| Command::Connect { reply })
             .await?;
@@ -200,9 +272,9 @@ impl Rooms {
 
     /// Whether the game is in memory.
     #[cfg(test)]
-    pub fn is_open(&self, game_id: Uuid) -> bool {
+    pub fn is_open(&self, game_id: &GameId) -> bool {
         let open = self.shared.open();
-        open.get(&game_id)
+        open.get(game_id)
             .is_some_and(|commands| !commands.is_closed())
     }
 
@@ -210,7 +282,7 @@ impl Rooms {
     /// answer with the way to reach the room again.
     async fn request<T>(
         &self,
-        game_id: Uuid,
+        game_id: &GameId,
         command: impl Fn(oneshot::Sender<Result<T, RoomError>>) -> Command,
     ) -> Result<(T, mpsc::UnboundedSender<Command>), RoomError> {
         for _ in 0..ATTEMPTS {
@@ -233,42 +305,43 @@ impl Rooms {
 }
 
 impl Shared {
-    fn open(&self) -> MutexGuard<'_, HashMap<Uuid, mpsc::UnboundedSender<Command>>> {
+    fn open(&self) -> MutexGuard<'_, HashMap<GameId, mpsc::UnboundedSender<Command>>> {
         // Nothing under this lock can panic halfway, so a poisoned lock holds valid data.
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The way to reach the game's room, starting the room (which loads the game) if it
     /// isn't there. Returns before the game is loaded; requests wait in line.
-    fn room(self: &Arc<Self>, id: Uuid) -> mpsc::UnboundedSender<Command> {
+    fn room(self: &Arc<Self>, id: &GameId) -> mpsc::UnboundedSender<Command> {
         let mut open = self.open();
-        if let Some(commands) = open.get(&id)
+        if let Some(commands) = open.get(id)
             && !commands.is_closed()
         {
             return commands.clone();
         }
         let (commands, inbox) = mpsc::unbounded_channel();
-        open.insert(id, commands.clone());
-        tokio::spawn(run(self.clone(), id, inbox));
+        open.insert(id.clone(), commands.clone());
+        tokio::spawn(run(self.clone(), id.clone(), inbox));
         commands
     }
 
     /// Drops the entry of a room that has shut down. A newer room under the same id stays.
-    fn forget(&self, id: Uuid) {
+    fn forget(&self, id: &GameId) {
         let mut open = self.open();
-        if open.get(&id).is_some_and(|commands| commands.is_closed()) {
-            open.remove(&id);
+        if open.get(id).is_some_and(|commands| commands.is_closed()) {
+            open.remove(id);
         }
     }
 }
 
 /// The life of a room: load the game, serve requests, and on the way out turn away
 /// whoever is still in line.
-async fn run(shared: Arc<Shared>, id: Uuid, mut inbox: mpsc::UnboundedReceiver<Command>) {
-    let outcome = match Room::load(&shared, id).await {
+async fn run(shared: Arc<Shared>, id: GameId, mut inbox: mpsc::UnboundedReceiver<Command>) {
+    let outcome = match Room::load(&shared, &id).await {
         Ok(mut room) => {
             tracing::debug!(game = %id, "game loaded");
-            room.serve(&mut inbox, shared.idle_grace).await;
+            room.serve(&mut inbox, shared.idle_grace, shared.bot_pause)
+                .await;
             tracing::debug!(game = %id, "game unloaded");
             RoomError::Gone
         }
@@ -277,7 +350,7 @@ async fn run(shared: Arc<Shared>, id: Uuid, mut inbox: mpsc::UnboundedReceiver<C
     // Closing first makes new requests start a fresh room instead of joining the queue
     // behind us. Whatever got in before that is answered here.
     inbox.close();
-    shared.forget(id);
+    shared.forget(&id);
     while let Ok(command) = inbox.try_recv() {
         command.fail(outcome.clone());
     }
@@ -352,7 +425,7 @@ impl Connection {
 struct Room {
     pool: PgPool,
     engine: Arc<dyn Engine>,
-    id: Uuid,
+    id: GameId,
     /// By seat.
     players: Vec<Uuid>,
     /// The players' display names, by seat. See [`Snapshot::player_names`].
@@ -367,7 +440,7 @@ struct Room {
 }
 
 impl Room {
-    async fn load(shared: &Shared, id: Uuid) -> Result<Self, RoomError> {
+    async fn load(shared: &Shared, id: &GameId) -> Result<Self, RoomError> {
         let row: Option<(String, i32, Option<Value>, i64)> =
             sqlx::query_as("SELECT kind, state_version, state, revision FROM games WHERE id = $1")
                 .bind(id)
@@ -400,7 +473,7 @@ impl Room {
             .map_err(|err| internal(err, "could not load the names of a game's players"))?;
 
         let snapshot = Snapshot {
-            game_id: id,
+            game_id: id.clone(),
             kind: engine.kind(),
             revision,
             state_version: engine.state_version(),
@@ -411,7 +484,7 @@ impl Room {
         Ok(Self {
             pool: shared.pool.clone(),
             engine: engine.clone(),
-            id,
+            id: id.clone(),
             players,
             names,
             live,
@@ -424,25 +497,69 @@ impl Room {
 
     /// Handles requests until the room has been idle for `idle_grace` with nobody
     /// connected, or can no longer trust its state.
-    async fn serve(&mut self, inbox: &mut mpsc::UnboundedReceiver<Command>, idle_grace: Duration) {
+    ///
+    /// When the bot has a move, it plays it `bot_pause` after the room last had something to
+    /// show, but only while someone is connected: the bot plays for an audience. With nobody
+    /// there it waits, the room goes idle like any other and leaves memory, and the bot
+    /// carries on from the stored game when somebody next connects.
+    async fn serve(
+        &mut self,
+        inbox: &mut mpsc::UnboundedReceiver<Command>,
+        idle_grace: Duration,
+        bot_pause: Duration,
+    ) {
+        /// What ended the wait.
+        enum Wake {
+            Command(Option<Command>),
+            /// The last connection left. Look again to start the grace period.
+            Unwatched,
+            BotDue,
+            Idle,
+        }
+
+        // When the bot plays next. Kept across loops, so that a request that doesn't change the
+        // game (a name, another connection) doesn't push the bot's move back.
+        let mut bot_due: Option<Instant> = None;
         loop {
-            let command = if self.snapshots.receiver_count() > 0 {
-                tokio::select! {
-                    command = inbox.recv() => command,
-                    // The last connection left. Look again to start the grace period.
-                    _ = self.snapshots.closed() => continue,
-                }
+            let watched = self.snapshots.receiver_count() > 0;
+            if watched && self.bot_next().is_some() {
+                bot_due.get_or_insert_with(|| Instant::now() + bot_pause);
             } else {
-                match tokio::time::timeout(idle_grace, inbox.recv()).await {
-                    Ok(command) => command,
-                    Err(_) => return,
-                }
+                bot_due = None;
+            }
+
+            // A condition keeps its branch from being polled, but not from being built.
+            let wake = tokio::select! {
+                command = inbox.recv() => Wake::Command(command),
+                _ = self.snapshots.closed(), if watched => Wake::Unwatched,
+                _ = tokio::time::sleep_until(bot_due.unwrap_or_else(Instant::now)), if bot_due.is_some() => Wake::BotDue,
+                _ = tokio::time::sleep(idle_grace), if !watched => Wake::Idle,
             };
-            let Some(command) = command else { return };
-            self.handle(command).await;
+            match wake {
+                Wake::Command(Some(command)) => self.handle(command).await,
+                Wake::Command(None) | Wake::Idle => return,
+                Wake::Unwatched => {}
+                Wake::BotDue => {
+                    bot_due = None; // The next move gets a pause of its own.
+                    self.play_bot().await;
+                }
+            }
             if self.stale {
                 return;
             }
+        }
+    }
+
+    /// The game after the bot plays, if it is in the game and has a move.
+    fn bot_next(&self) -> Option<Box<dyn Live>> {
+        let seat = self.seat_of(BOT_USER)?;
+        self.live.as_ref()?.bot_move(seat)
+    }
+
+    /// Plays the bot's move. A failure is logged and, if it was the save, stops the room.
+    async fn play_bot(&mut self) {
+        if let Some(next) = self.bot_next() {
+            _ = self.commit(next).await;
         }
     }
 
@@ -494,6 +611,11 @@ impl Room {
         let next = live
             .apply(seat, action)
             .map_err(|rejection| RoomError::Rejected(rejection.reason().to_owned()))?;
+        self.commit(next).await
+    }
+
+    /// Makes `next`, the game after an action, the game: saves it, and then tells everyone.
+    async fn commit(&mut self, next: Box<dyn Live>) -> Result<(), RoomError> {
         let state = to_json(Some(next.as_ref()))?;
 
         self.save(None, state.as_ref(), next.is_over()).await?;
@@ -544,7 +666,7 @@ impl Room {
         finished: bool,
     ) -> Result<(), RoomError> {
         let change = Change {
-            game_id: self.id,
+            game_id: &self.id,
             from_revision: self.revision,
             state_version: self.engine.state_version() as i32,
             new_player,
@@ -563,7 +685,7 @@ impl Room {
     /// Tells everyone connected about the game as it now is. `state` is the game's JSON.
     fn publish(&self, state: Option<Value>) {
         self.snapshots.send_replace(Arc::new(Snapshot {
-            game_id: self.id,
+            game_id: self.id.clone(),
             kind: self.engine.kind(),
             revision: self.revision,
             state_version: self.engine.state_version(),
@@ -606,7 +728,7 @@ fn internal(err: impl std::fmt::Display, context: &str) -> RoomError {
 
 /// One change to a stored game.
 struct Change<'a> {
-    game_id: Uuid,
+    game_id: &'a GameId,
     /// The revision the change builds on.
     from_revision: i64,
     state_version: i32,
@@ -658,7 +780,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::test_util::{Solo, Tally, TallyV2, TestApp, eventually};
+    use crate::test_util::{Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually};
 
     /// Short enough to wait out in a test.
     const GRACE: Duration = Duration::from_millis(50);
@@ -668,7 +790,7 @@ mod tests {
     }
 
     fn rooms(pool: &PgPool, games: Games) -> Rooms {
-        Rooms::with_idle_grace(pool.clone(), games, GRACE)
+        Rooms::with_timing(pool.clone(), games, GRACE, TEST_BOT_PAUSE)
     }
 
     async fn user(pool: &PgPool) -> Uuid {
@@ -677,13 +799,13 @@ mod tests {
     }
 
     /// A tally game with `first` in seat 0 and `second` in seat 1.
-    async fn started_game(rooms: &Rooms, first: Uuid, second: Uuid) -> Uuid {
+    async fn started_game(rooms: &Rooms, first: Uuid, second: Uuid) -> GameId {
         let id = waiting_game(rooms, first).await;
-        rooms.join(id, second).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
         id
     }
 
-    async fn waiting_game(rooms: &Rooms, creator: Uuid) -> Uuid {
+    async fn waiting_game(rooms: &Rooms, creator: Uuid) -> GameId {
         let engine = rooms.games().get("tally").unwrap().clone();
         rooms.create(&engine, creator).await.unwrap()
     }
@@ -706,7 +828,7 @@ mod tests {
     }
 
     /// The database's revision, state version and state of a game.
-    async fn stored(pool: &PgPool, id: Uuid) -> (i64, i32, Option<Value>) {
+    async fn stored(pool: &PgPool, id: &GameId) -> (i64, i32, Option<Value>) {
         sqlx::query_as("SELECT revision, state_version, state FROM games WHERE id = $1")
             .bind(id)
             .fetch_one(pool)
@@ -721,7 +843,7 @@ mod tests {
 
         let id = waiting_game(&rooms, creator).await;
 
-        assert!(rooms.is_open(id));
+        assert!(rooms.is_open(&id));
     }
 
     #[sqlx::test]
@@ -731,7 +853,7 @@ mod tests {
 
         let id = waiting_game(&rooms, creator).await;
 
-        eventually("the idle game is unloaded", || !rooms.is_open(id)).await;
+        eventually("the idle game is unloaded", || !rooms.is_open(&id)).await;
     }
 
     #[sqlx::test]
@@ -740,13 +862,13 @@ mod tests {
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
 
-        let connection = rooms.connect(id, first).await.unwrap();
+        let connection = rooms.connect(&id, first).await.unwrap();
         tokio::time::sleep(GRACE * 6).await;
-        assert!(rooms.is_open(id), "unloaded while connected");
+        assert!(rooms.is_open(&id), "unloaded while connected");
 
         drop(connection);
         eventually("the game is unloaded once the player leaves", || {
-            !rooms.is_open(id)
+            !rooms.is_open(&id)
         })
         .await;
     }
@@ -756,16 +878,16 @@ mod tests {
         let (first, second) = (user(&pool).await, user(&pool).await);
         let before = rooms(&pool, tally());
         let id = started_game(&before, first, second).await;
-        let connection = before.connect(id, first).await.unwrap();
+        let connection = before.connect(&id, first).await.unwrap();
         connection.act(add(5)).await.unwrap();
         drop(connection);
 
         // A new set of rooms is as empty as after a restart.
         let after = rooms(&pool, tally());
-        assert!(!after.is_open(id));
-        let mut connection = after.connect(id, second).await.unwrap();
+        assert!(!after.is_open(&id));
+        let mut connection = after.connect(&id, second).await.unwrap();
 
-        assert!(after.is_open(id));
+        assert!(after.is_open(&id));
         let snapshot = connection.latest();
         assert_eq!(snapshot.revision, 2);
         assert_eq!(snapshot.players, [first, second]);
@@ -777,17 +899,17 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second, outsider) = (user(&pool).await, user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let missing = Uuid::from_u128(1);
+        let missing: GameId = "nosuchgame22".parse().unwrap();
 
-        let mut watcher = rooms.connect(id, outsider).await.unwrap();
+        let mut watcher = rooms.connect(&id, outsider).await.unwrap();
         assert_eq!(watcher.latest().players, [first, second]);
         assert_eq!(watcher.act(add(1)).await, Err(RoomError::NotAPlayer));
         assert_eq!(
-            rooms.connect(missing, first).await.err(),
+            rooms.connect(&missing, first).await.err(),
             Some(RoomError::NotFound)
         );
         eventually("a room for a missing game is not kept", || {
-            !rooms.is_open(missing)
+            !rooms.is_open(&missing)
         })
         .await;
     }
@@ -797,11 +919,11 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = waiting_game(&rooms, first).await;
-        let mut first_connection = rooms.connect(id, first).await.unwrap();
-        let mut watcher = rooms.connect(id, second).await.unwrap();
+        let mut first_connection = rooms.connect(&id, first).await.unwrap();
+        let mut watcher = rooms.connect(&id, second).await.unwrap();
         assert_eq!(watcher.act(add(1)).await, Err(RoomError::NotAPlayer));
 
-        assert_eq!(rooms.join(id, second).await, Ok(1));
+        assert_eq!(rooms.join(&id, second).await, Ok(1));
 
         assert_eq!(next(&mut watcher).await.players, [first, second]);
         first_connection.act(add(2)).await.unwrap();
@@ -823,12 +945,12 @@ mod tests {
         let creator = user(&pool).await;
         let id = waiting_game(&rooms, creator).await;
 
-        let mut connection = rooms.connect(id, creator).await.unwrap();
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
 
         assert_eq!(
             *connection.latest(),
             Snapshot {
-                game_id: id,
+                game_id: id.clone(),
                 kind: "tally",
                 revision: 0,
                 state_version: 1,
@@ -840,7 +962,7 @@ mod tests {
     }
 
     /// Whether the database says a game has finished.
-    async fn finished(pool: &PgPool, id: Uuid) -> bool {
+    async fn finished(pool: &PgPool, id: &GameId) -> bool {
         sqlx::query_scalar("SELECT finished FROM games WHERE id = $1")
             .bind(id)
             .fetch_one(pool)
@@ -857,18 +979,18 @@ mod tests {
             .create(rooms.games().get("solo").unwrap(), player)
             .await
             .unwrap();
-        let mut connection = rooms.connect(id, player).await.unwrap();
-        assert!(!finished(&pool, id).await);
+        let mut connection = rooms.connect(&id, player).await.unwrap();
+        assert!(!finished(&pool, &id).await);
 
         for _ in 0..2 {
             connection.act(json!({})).await.unwrap();
             next(&mut connection).await;
         }
-        assert!(!finished(&pool, id).await);
+        assert!(!finished(&pool, &id).await);
         connection.act(json!({})).await.unwrap();
         next(&mut connection).await;
 
-        assert!(finished(&pool, id).await);
+        assert!(finished(&pool, &id).await);
     }
 
     #[sqlx::test]
@@ -876,12 +998,12 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let mut ada = rooms.connect(id, first).await.unwrap();
+        let mut ada = rooms.connect(&id, first).await.unwrap();
 
         ada.act(add(5)).await.unwrap();
         next(&mut ada).await;
 
-        assert!(!finished(&pool, id).await);
+        assert!(!finished(&pool, &id).await);
     }
 
     #[sqlx::test]
@@ -889,8 +1011,8 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let mut ada = rooms.connect(id, first).await.unwrap();
-        let mut grace = rooms.connect(id, second).await.unwrap();
+        let mut ada = rooms.connect(&id, first).await.unwrap();
+        let mut grace = rooms.connect(&id, second).await.unwrap();
 
         ada.act(add(5)).await.unwrap();
 
@@ -900,7 +1022,7 @@ mod tests {
             assert_eq!(snapshot.revision, 2);
             assert_eq!(snapshot.state, expected);
         }
-        assert_eq!(stored(&pool, id).await, (2, 1, expected));
+        assert_eq!(stored(&pool, &id).await, (2, 1, expected));
     }
 
     #[sqlx::test]
@@ -908,15 +1030,15 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let ada = rooms.connect(id, first).await.unwrap();
-        let grace = rooms.connect(id, second).await.unwrap();
+        let ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
 
         ada.act(add(1)).await.unwrap();
         grace.act(add(2)).await.unwrap();
         ada.act(add(3)).await.unwrap();
 
         assert_eq!(
-            stored(&pool, id).await,
+            stored(&pool, &id).await,
             (4, 1, Some(json!({ "total": 6, "turn": 1 })))
         );
     }
@@ -926,8 +1048,8 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let mut ada = rooms.connect(id, first).await.unwrap();
-        let grace = rooms.connect(id, second).await.unwrap();
+        let mut ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
 
         // It is Ada's turn.
         let refused = grace.act(add(1)).await;
@@ -938,7 +1060,7 @@ mod tests {
         );
         assert_quiet(&mut ada).await;
         assert_eq!(
-            stored(&pool, id).await,
+            stored(&pool, &id).await,
             (1, 1, Some(json!({ "total": 0, "turn": 0 })))
         );
     }
@@ -948,7 +1070,7 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let creator = user(&pool).await;
         let id = waiting_game(&rooms, creator).await;
-        let connection = rooms.connect(id, creator).await.unwrap();
+        let connection = rooms.connect(&id, creator).await.unwrap();
 
         assert_eq!(connection.act(add(1)).await, Err(RoomError::NotStarted));
     }
@@ -958,9 +1080,9 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = waiting_game(&rooms, first).await;
-        let mut connection = rooms.connect(id, first).await.unwrap();
+        let mut connection = rooms.connect(&id, first).await.unwrap();
 
-        rooms.join(id, second).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
 
         let snapshot = next(&mut connection).await;
         assert_eq!(snapshot.revision, 1);
@@ -974,7 +1096,7 @@ mod tests {
         let (first, second, third) = (user(&pool).await, user(&pool).await, user(&pool).await);
         let id = waiting_game(&rooms, first).await;
 
-        let (a, b) = tokio::join!(rooms.join(id, second), rooms.join(id, third));
+        let (a, b) = tokio::join!(rooms.join(&id, second), rooms.join(&id, third));
 
         let mut results = [a, b];
         results.sort_by_key(|result| result.is_err());
@@ -986,13 +1108,13 @@ mod tests {
         let (first, second) = (user(&pool).await, user(&pool).await);
         let old = rooms(&pool, Games::default().with::<Tally>());
         let id = started_game(&old, first, second).await;
-        let connection = old.connect(id, first).await.unwrap();
+        let connection = old.connect(&id, first).await.unwrap();
         connection.act(add(1)).await.unwrap();
         drop(connection);
-        eventually("the old server lets go of the game", || !old.is_open(id)).await;
+        eventually("the old server lets go of the game", || !old.is_open(&id)).await;
 
         let new = rooms(&pool, Games::default().with::<TallyV2>());
-        let mut connection = new.connect(id, second).await.unwrap();
+        let mut connection = new.connect(&id, second).await.unwrap();
 
         // Clients get the current layout...
         let snapshot = connection.latest();
@@ -1000,12 +1122,12 @@ mod tests {
         assert_eq!(snapshot.state, Some(json!({ "sum": 1, "turn": 1 })));
         // ...while the row stays as it was until the game changes.
         assert_eq!(
-            stored(&pool, id).await,
+            stored(&pool, &id).await,
             (2, 1, Some(json!({ "total": 1, "turn": 1 })))
         );
         connection.act(add(2)).await.unwrap();
         assert_eq!(
-            stored(&pool, id).await,
+            stored(&pool, &id).await,
             (3, 2, Some(json!({ "sum": 3, "turn": 0 })))
         );
     }
@@ -1015,10 +1137,10 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        let mut ada = rooms.connect(id, first).await.unwrap();
+        let mut ada = rooms.connect(&id, first).await.unwrap();
         // Somebody else changes the game behind the room's back.
         sqlx::query("UPDATE games SET revision = revision + 1 WHERE id = $1")
-            .bind(id)
+            .bind(&id)
             .execute(&pool)
             .await
             .unwrap();
@@ -1028,8 +1150,8 @@ mod tests {
         assert_eq!(result, Err(RoomError::Internal));
         // Connections find out, and the lost action never reached anyone.
         assert!(ada.changed().await.is_none());
-        eventually("the room shuts down", || !rooms.is_open(id)).await;
-        let mut again = rooms.connect(id, first).await.unwrap();
+        eventually("the room shuts down", || !rooms.is_open(&id)).await;
+        let mut again = rooms.connect(&id, first).await.unwrap();
         let snapshot = again.latest();
         assert_eq!(snapshot.revision, 2);
         assert_eq!(snapshot.state, Some(json!({ "total": 0, "turn": 0 })));
@@ -1044,7 +1166,7 @@ mod tests {
         let after = rooms(&pool, Games::default());
 
         assert_eq!(
-            after.connect(id, creator).await.err(),
+            after.connect(&id, creator).await.err(),
             Some(RoomError::Internal)
         );
     }
@@ -1055,7 +1177,7 @@ mod tests {
         let before = rooms(&pool, tally());
         let id = started_game(&before, first, second).await;
         sqlx::query("UPDATE games SET state = '{\"total\": \"lots\"}' WHERE id = $1")
-            .bind(id)
+            .bind(&id)
             .execute(&pool)
             .await
             .unwrap();
@@ -1063,7 +1185,7 @@ mod tests {
         let after = rooms(&pool, tally());
 
         assert_eq!(
-            after.connect(id, first).await.err(),
+            after.connect(&id, first).await.err(),
             Some(RoomError::Internal)
         );
     }
@@ -1073,19 +1195,166 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (first, second) = (user(&pool).await, user(&pool).await);
         let id = started_game(&rooms, first, second).await;
-        eventually("the room is unloaded", || !rooms.is_open(id)).await;
+        eventually("the room is unloaded", || !rooms.is_open(&id)).await;
 
         // A room on its way out: it turns the request away and closes.
         let (commands, mut inbox) = mpsc::unbounded_channel();
-        rooms.shared.open().insert(id, commands);
+        rooms.shared.open().insert(id.clone(), commands);
         tokio::spawn(async move {
             let request = inbox.recv().await.unwrap();
             inbox.close();
             request.fail(RoomError::Gone);
         });
 
-        let connection = rooms.connect(id, first).await;
+        let connection = rooms.connect(&id, first).await;
 
         assert!(connection.is_ok(), "{:?}", connection.err());
+    }
+
+    // --- The bot ---
+
+    /// A tally game for `creator` against the bot, which is in seat 1 and adds 1 on its turn.
+    async fn bot_game(rooms: &Rooms, creator: Uuid) -> GameId {
+        let engine = rooms.games().get("tally").unwrap().clone();
+        rooms.create_against_bot(&engine, creator).await.unwrap()
+    }
+
+    #[sqlx::test]
+    async fn a_game_against_the_bot_has_it_seated_and_has_begun(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+
+        let id = bot_game(&rooms, creator).await;
+
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+        let snapshot = connection.latest();
+        assert_eq!(snapshot.players, [creator, BOT_USER]);
+        assert_eq!(snapshot.player_names, [None, Some("Bot".to_owned())]);
+        assert_eq!(snapshot.state, Some(json!({ "total": 0, "turn": 0 })));
+    }
+
+    #[sqlx::test]
+    async fn a_game_without_a_bot_cannot_be_played_against_one(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let solo = rooms.games().get("solo").unwrap().clone();
+
+        let result = rooms.create_against_bot(&solo, creator).await;
+
+        assert_eq!(result, Err(RoomError::NoBot));
+    }
+
+    #[sqlx::test]
+    async fn the_bot_answers_the_players_move(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let id = bot_game(&rooms, creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+
+        connection.act(add(5)).await.unwrap();
+
+        // The player's move is published first, and then the bot's, as a change of its own.
+        let after_player = next(&mut connection).await;
+        assert_eq!(after_player.state, Some(json!({ "total": 5, "turn": 1 })));
+        let after_bot = next(&mut connection).await;
+        assert_eq!(after_bot.state, Some(json!({ "total": 6, "turn": 0 })));
+        assert_eq!(after_bot.revision, after_player.revision + 1);
+        // It was saved like any other change, and it is the player's turn again.
+        assert_eq!(
+            stored(&pool, &id).await,
+            (2, 1, Some(json!({ "total": 6, "turn": 0 })))
+        );
+        assert_quiet(&mut connection).await;
+    }
+
+    #[sqlx::test]
+    async fn the_bot_does_not_move_on_the_players_turn(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let id = bot_game(&rooms, creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+
+        // It is the player's turn from the start: the bot has to wait for it.
+        assert_quiet(&mut connection).await;
+
+        assert_eq!(stored(&pool, &id).await.0, 0);
+    }
+
+    #[sqlx::test]
+    async fn the_bot_does_not_play_to_an_empty_room(pool: PgPool) {
+        // The bot would play after 400 ms, and the room is gone after 50.
+        let rooms = Rooms::with_timing(pool.clone(), tally(), GRACE, Duration::from_millis(400));
+        let creator = user(&pool).await;
+        let id = bot_game(&rooms, creator).await;
+        let connection = rooms.connect(&id, creator).await.unwrap();
+        connection.act(add(5)).await.unwrap();
+
+        // The player leaves before the bot's turn comes.
+        drop(connection);
+        eventually("the room is unloaded", || !rooms.is_open(&id)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert_eq!(
+            stored(&pool, &id).await,
+            (1, 1, Some(json!({ "total": 5, "turn": 1 })))
+        );
+    }
+
+    #[sqlx::test]
+    async fn the_bot_carries_on_from_the_stored_game_when_somebody_comes_back(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let id = bot_game(&rooms, creator).await;
+        eventually("the new room is unloaded", || !rooms.is_open(&id)).await;
+        // The game as a server that stopped on the bot's turn would have left it.
+        sqlx::query("UPDATE games SET state = '{\"total\": 7, \"turn\": 1}' WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+
+        assert_eq!(
+            connection.latest().state,
+            Some(json!({ "total": 7, "turn": 1 }))
+        );
+        let after_bot = next(&mut connection).await;
+        assert_eq!(after_bot.state, Some(json!({ "total": 8, "turn": 0 })));
+    }
+
+    #[sqlx::test]
+    async fn the_bot_plays_for_a_spectator_too(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (creator, spectator) = (user(&pool).await, user(&pool).await);
+        let id = bot_game(&rooms, creator).await;
+        eventually("the new room is unloaded", || !rooms.is_open(&id)).await;
+        sqlx::query("UPDATE games SET state = '{\"total\": 0, \"turn\": 1}' WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Somebody watching is an audience, even though they cannot play.
+        let mut connection = rooms.connect(&id, spectator).await.unwrap();
+
+        let after_bot = next(&mut connection).await;
+        assert_eq!(after_bot.state, Some(json!({ "total": 1, "turn": 0 })));
+    }
+
+    #[sqlx::test]
+    async fn only_the_bots_own_turn_is_played_for_it(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (creator, other) = (user(&pool).await, user(&pool).await);
+        let id = bot_game(&rooms, creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+
+        // A seat the bot does not have can't be used by anyone else.
+        assert_eq!(
+            rooms.join(&id, other).await,
+            Err(RoomError::Full),
+            "nobody takes the bot's seat"
+        );
+        assert_quiet(&mut connection).await;
     }
 }

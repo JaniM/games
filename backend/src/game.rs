@@ -65,6 +65,10 @@ pub trait Game: 'static {
     /// version you moved away from.
     const STATE_VERSION: u32;
 
+    /// Whether the game has a computer opponent, which a player can ask for when they create
+    /// a game. A game that says so must have two players and implement [`Game::bot_action`].
+    const BOT: bool = false;
+
     /// What a room keeps in memory for a game that is being played.
     type State: Serialize + DeserializeOwned + Send + 'static;
     type Action: DeserializeOwned;
@@ -89,6 +93,19 @@ pub trait Game: 'static {
         seat: usize,
         action: Self::Action,
     ) -> Result<Self::State, Rejection>;
+
+    /// The action the computer opponent plays for `seat` in this state, or `None` if it has
+    /// nothing to play: it isn't `seat`'s turn, or the game is over. Called again after every
+    /// action, so the bot needs no memory of its own, and a game that was stored half way
+    /// through the bot's turn carries on from there.
+    ///
+    /// The action goes through [`Game::apply`] like a player's, so the bot can't break the
+    /// rules; but an action the rules refuse is a bug in the bot, and leaves it with no move.
+    /// Only games with [`Game::BOT`] need this.
+    fn bot_action(state: &Self::State, seat: usize) -> Option<Self::Action> {
+        let _ = (state, seat);
+        None
+    }
 
     /// Turns a state of layout `from_version` into one of layout `from_version + 1`.
     /// Called for each version a stored game is behind, oldest first, so every version
@@ -116,6 +133,10 @@ pub trait Live: Send {
 
     /// Whether the game has ended. See [`Game::is_over`].
     fn is_over(&self) -> bool;
+
+    /// The game after the computer opponent plays for `seat`, or `None` if it has nothing to
+    /// play (see [`Game::bot_action`]).
+    fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>>;
 }
 
 struct Running<G: Game>(G::State);
@@ -136,6 +157,22 @@ impl<G: Game> Live for Running<G> {
     fn is_over(&self) -> bool {
         G::is_over(&self.0)
     }
+
+    fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>> {
+        let action = G::bot_action(&self.0, seat)?;
+        match G::apply(&self.0, seat, action) {
+            Ok(next) => Some(Box::new(Running::<G>(next))),
+            Err(rejection) => {
+                tracing::error!(
+                    game = G::KIND,
+                    seat,
+                    reason = rejection.reason(),
+                    "the bot played against the rules"
+                );
+                None
+            }
+        }
+    }
 }
 
 /// A [`Game`] with its types erased, so that the room system can hold games of different
@@ -144,6 +181,9 @@ pub trait Engine: Send + Sync {
     fn kind(&self) -> &'static str;
     fn players(&self) -> usize;
     fn state_version(&self) -> u32;
+
+    /// Whether the game has a computer opponent. See [`Game::BOT`].
+    fn has_bot(&self) -> bool;
 
     /// A new game.
     fn start(&self) -> Box<dyn Live>;
@@ -166,6 +206,10 @@ impl<G: Game> Engine for Typed<G> {
 
     fn state_version(&self) -> u32 {
         G::STATE_VERSION
+    }
+
+    fn has_bot(&self) -> bool {
+        G::BOT
     }
 
     fn start(&self) -> Box<dyn Live> {
@@ -202,6 +246,11 @@ impl Games {
             "{} has a state version outside 1..={}",
             G::KIND,
             i32::MAX
+        );
+        assert!(
+            !G::BOT || G::PLAYERS == 2,
+            "{} has a bot, which fills the seat of the one opponent, so it needs two players",
+            G::KIND
         );
         let taken = self.0.insert(G::KIND, Arc::new(Typed::<G>(PhantomData)));
         assert!(

@@ -9,7 +9,7 @@ import { GAMES_LIST_ID, NEW_GAME_ID, gamesList, myGames, newGame } from "./table
  */
 export const openNewGame = op((tx, args: { kind: string }) => {
   if (tx.read(newGame.get(NEW_GAME_ID))?.state === "creating") return;
-  tx.upsert(newGame, { id: NEW_GAME_ID, state: "choosing", kind: args.kind, error: null });
+  tx.upsert(newGame, { id: NEW_GAME_ID, state: "choosing", kind: args.kind, bot: false, error: null });
 });
 
 /**
@@ -20,6 +20,16 @@ export const createGame = op((tx) => {
   const request = tx.read(newGame.get(NEW_GAME_ID));
   if (!request || request.state === "creating") return;
   tx.update(newGame, NEW_GAME_ID, { state: "creating", error: null });
+});
+
+/**
+ * Picks who to play against: the computer, or a friend who follows a link. Ignored with no
+ * dialog, and while a game is being created, since the request has gone out as it was.
+ */
+export const chooseOpponent = op((tx, args: { bot: boolean }) => {
+  const request = tx.read(newGame.get(NEW_GAME_ID));
+  if (!request || request.state === "creating") return;
+  tx.update(newGame, NEW_GAME_ID, { bot: args.bot });
 });
 
 /** Closes the dialog. Ignored while a game is being created: that can't be taken back. */

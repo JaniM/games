@@ -6,6 +6,8 @@ export interface GameInfo {
   /** One or two sentences for the front page card. */
   description: string;
   players: string;
+  /** Can be played against the computer, which the new game dialog then offers. */
+  bot: boolean;
 }
 
 /**
@@ -19,5 +21,6 @@ export const GAMES: readonly GameInfo[] = [
     description:
       "Race all fifteen of your checkers around the board and bear them off first. No hitting, only blocking.",
     players: "2 players",
+    bot: true,
   },
 ];

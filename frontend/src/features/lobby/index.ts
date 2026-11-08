@@ -1,6 +1,7 @@
 import { feature } from "millpond";
 import { createGameRequest, loadGamesList } from "./effects";
 import {
+  chooseOpponent,
   closeNewGame,
   createGame,
   gameCreateFailed,
@@ -16,6 +17,7 @@ export const lobby = feature({
   tables: { newGame, gamesList, myGames },
   ops: {
     openNewGame,
+    chooseOpponent,
     createGame,
     closeNewGame,
     gameCreated,
@@ -28,5 +30,5 @@ export const lobby = feature({
 });
 
 // Components import definitions by value; they never need the assembled db.
-export { closeNewGame, createGame, loadGames, openNewGame } from "./ops";
+export { chooseOpponent, closeNewGame, createGame, loadGames, openNewGame } from "./ops";
 export { GAMES_LIST_ID, NEW_GAME_ID, gamesList, myGames, newGame } from "./tables";

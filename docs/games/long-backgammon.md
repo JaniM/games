@@ -115,7 +115,7 @@ All use each player's **own index**. They assume the points mentioned are otherw
 
 ## Out of scope
 
-Live versus asynchronous play, clocks and time limits, match play and colour swapping between games, ratings, spectators, UI orientation and animations, and the doubling cube (not part of long backgammon). Undo is covered only within a turn in progress ([D7](#decisions)); taking back a finished turn is out of scope.
+Live versus asynchronous play, clocks and time limits, match play and colour swapping between games, ratings, spectators, UI orientation and animations, how the computer opponent chooses its moves (it plays only steps the rules above allow, so it needs no rules of its own), and the doubling cube (not part of long backgammon). Undo is covered only within a turn in progress ([D7](#decisions)); taking back a finished turn is out of scope.
 
 ## Sources
 

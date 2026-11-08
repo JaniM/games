@@ -35,6 +35,7 @@ function render(overrides: Partial<HomeScreenProps> = {}) {
         list={{ id: "mine", state: "loaded", error: null }}
         request={undefined}
         onNewGame={noop}
+        onOpponent={noop}
         onCreate={noop}
         onClose={noop}
         onReload={noop}
@@ -60,6 +61,7 @@ const request = (overrides: Partial<NewGameRow> = {}): NewGameRow => ({
   id: "current",
   state: "choosing",
   kind: "long-backgammon",
+  bot: false,
   error: null,
   ...overrides,
 });
@@ -88,6 +90,17 @@ describe("where a game stands", () => {
     expect(html).toContain("Finished");
     expect(html).not.toContain("In progress");
     expect(html).toContain("my-game-state my-game-state-done");
+  });
+
+  it("is on the same row as the date of the last change", () => {
+    const html = render({ mine: [game(1)] });
+
+    const meta = html.slice(html.indexOf('class="my-game-meta"'));
+    const row = meta.slice(0, meta.indexOf("</span></a>"));
+    expect(row).toContain("In progress");
+    expect(row).toContain("<time");
+    // The players are on a row of their own above it.
+    expect(html.indexOf("my-game-players")).toBeLessThan(html.indexOf("my-game-meta"));
   });
 
   it("shows each game's own state in the list", () => {
@@ -142,8 +155,8 @@ describe("the user's games", () => {
   it("are links to their pages, in the order they are given", () => {
     const html = render({ mine: [game(2), game(1, { started: false })] });
 
-    const first = html.indexOf(`href="/games/long-backgammon/${gameIdOf(2)}"`);
-    const second = html.indexOf(`href="/games/long-backgammon/${gameIdOf(1)}"`);
+    const first = html.indexOf(`href="/games/${gameIdOf(2)}"`);
+    const second = html.indexOf(`href="/games/${gameIdOf(1)}"`);
     expect(first).toBeGreaterThan(-1);
     expect(second).toBeGreaterThan(first);
     expect(html).toContain("In progress");
@@ -208,13 +221,44 @@ describe("the dialog for creating a game", () => {
     expect(html).not.toContain("Creating…");
   });
 
+  it("offers the bot as the opponent for a game that has one, with a friend picked to begin with", () => {
+    const html = render({ request: request() });
+
+    expect(html).toContain("A friend");
+    expect(html).toContain("The bot");
+    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span><span class="choice-name">A friend/);
+    expect(html).toContain("Create game");
+    expect(html).not.toContain("Start game");
+  });
+
+  it("shows the bot picked, and says the game starts at once", () => {
+    const html = render({ request: request({ bot: true }) });
+
+    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span><span class="choice-name">The bot/);
+    expect(html).toContain("The game starts right away.");
+    expect(html).toContain("Start game");
+    expect(html).not.toContain("Create game");
+  });
+
+  it("has no choice of opponent for a game with no bot, only the link to send", () => {
+    const withoutBot = GAMES.map((game) => ({ ...game, bot: false }));
+
+    const html = render({ games: withoutBot, request: request() });
+
+    expect(html).not.toContain("The bot");
+    expect(html).toContain("You get a link to send to your opponent.");
+    expect(html).toContain("Create game");
+  });
+
   it("can't be cancelled while the game is being made", () => {
     const html = render({ request: request({ state: "creating" }) });
 
     expect(html).toContain("Creating…");
     expect(html).not.toContain("Create game");
-    // Both buttons are disabled: Cancel, and the one that now says "Creating…".
-    expect(html.match(/disabled=""/g)).toHaveLength(2);
+    // Both buttons are disabled: Cancel, and the one that now says "Creating…". So is the
+    // choice of opponent, which the request that has gone out can no longer take.
+    expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(2);
+    expect(html).toMatch(/<fieldset[^>]*disabled=""/);
   });
 
   it("shows why the game could not be made, and offers to try again", () => {

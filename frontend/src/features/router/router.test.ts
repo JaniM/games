@@ -15,21 +15,52 @@ describe("parseRoute", () => {
     expect(parseRoute("/games/long-backgammon/")).toEqual({ page: "notFound" });
   });
 
-  it("knows a game page, and what it takes to make the link", () => {
-    const route = { page: "game", kind: "long-backgammon", gameId: ID };
-    expect(parseRoute(`/games/long-backgammon/${ID}`)).toEqual(route);
-    expect(parseRoute(gamePath("long-backgammon", ID))).toEqual(route);
+  it("knows the privacy page, with or without a trailing slash", () => {
+    expect(parseRoute("/privacy")).toEqual({ page: "privacy" });
+    expect(parseRoute("/privacy/")).toEqual({ page: "privacy" });
+  });
+
+  it.each(["/privacy/extra", "/privacy.html", "/Privacy", "/games/privacy"])(
+    "has no privacy page at %s",
+    (path) => {
+      expect(parseRoute(path)).toEqual({ page: "notFound" });
+    },
+  );
+
+  it("knows a game page by the game's id alone, and what it takes to make the link", () => {
+    const route = { page: "game", gameId: ID };
+    expect(parseRoute(`/games/${ID}`)).toEqual(route);
+    expect(parseRoute(`/games/${ID}/`)).toEqual(route);
+    expect(parseRoute(gamePath(ID))).toEqual(route);
+    expect(gamePath(ID)).toBe(`/games/${ID}`);
+  });
+
+  it("knows the ids that games had before they were short: a uuid", () => {
+    const old = "6f1c2a3e-5b4d-4c8a-9e0f-1a2b3c4d5e6f";
+
+    expect(parseRoute(`/games/${old}`)).toEqual({ page: "game", gameId: old });
+  });
+
+  it("still opens a game from a link that has the kind of game in it", () => {
+    expect(parseRoute(`/games/long-backgammon/${ID}`)).toEqual({ page: "game", gameId: ID });
   });
 
   it("reads a pasted upper-case id as the same game", () => {
+    expect(parseRoute(`/games/${ID.toUpperCase()}`)).toMatchObject({ gameId: ID });
     expect(parseRoute(`/games/long-backgammon/${ID.toUpperCase()}`)).toMatchObject({ gameId: ID });
   });
 
   it.each([
     "/nope",
     "/games",
+    "/games/",
     "/games/chess",
     `/games/chess/${ID}`,
+    "/games/not-an-id",
+    "/games/tooshort",
+    `/games/${ID}x`,
+    `/games/${ID}/extra`,
+    `/games//${ID}`,
     "/games/long-backgammon/not-an-id",
     `/games/long-backgammon/${ID}/extra`,
     `/games/long-backgammon//${ID}`,

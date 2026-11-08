@@ -21,6 +21,10 @@ use crate::{
     room::Rooms,
 };
 
+/// How long the bot waits between its actions in tests: short, but long enough for a test to
+/// see the game between two of them.
+pub const TEST_BOT_PAUSE: Duration = Duration::from_millis(20);
+
 pub struct Reply {
     pub status: StatusCode,
     pub headers: HeaderMap,
@@ -37,7 +41,12 @@ impl TestApp {
     pub fn new(pool: PgPool, games: Games) -> Self {
         // Rooms hold a clone of the pool, and `#[sqlx::test]` only gets its connections back
         // for cleaning up once every clone is gone. So rooms must not linger after a test.
-        let rooms = Rooms::with_idle_grace(pool.clone(), games, Duration::from_millis(100));
+        let rooms = Rooms::with_timing(
+            pool.clone(),
+            games,
+            Duration::from_millis(100),
+            TEST_BOT_PAUSE,
+        );
         let router = app(AppState { pool, rooms });
         Self { router }
     }
@@ -98,6 +107,17 @@ impl TestApp {
             .await;
         assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json);
         reply.json["gameId"].as_str().unwrap().to_owned()
+    }
+
+    /// Creates a game against the bot as the token's user. Returns the reply as it is.
+    pub async fn create_bot_game(&self, token: &str, kind: &str) -> Reply {
+        self.send(
+            Method::POST,
+            "/api/games",
+            Some(&bearer(token)),
+            Some(json!({ "kind": kind, "bot": true })),
+        )
+        .await
     }
 
     pub async fn join_game(&self, token: &str, game_id: &str) -> Reply {
@@ -235,7 +255,7 @@ pub async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
 
 // Games for testing the room system.
 
-/// Two players take turns adding to a total. Seat 0 begins.
+/// Two players take turns adding to a total. Seat 0 begins. Its bot adds 1 on its turn.
 pub struct Tally;
 
 #[derive(Serialize, Deserialize)]
@@ -265,11 +285,16 @@ impl Game for Tally {
     const KIND: &'static str = "tally";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
+    const BOT: bool = true;
     type State = TallyState;
     type Action = TallyAction;
 
     fn start() -> TallyState {
         TallyState { total: 0, turn: 0 }
+    }
+
+    fn bot_action(state: &TallyState, seat: usize) -> Option<TallyAction> {
+        (state.turn == seat).then_some(TallyAction::Add { amount: 1 })
     }
 
     fn apply(

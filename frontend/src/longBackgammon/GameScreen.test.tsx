@@ -12,7 +12,7 @@ import { GameScreen, type GameScreenProps, type GameViewRow } from "./GameScreen
 const ADA = "user-a";
 const GRACE = "user-b";
 const STRANGER = "user-x";
-const URL = `https://games.test/games/long-backgammon/${GAME_ID}`;
+const URL = `https://games.test/games/${GAME_ID}`;
 
 const dbs: { dispose(): void }[] = [];
 afterEach(() => {
@@ -48,6 +48,7 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         onRoll={noop}
         onUndo={noop}
         onAutoplay={noop}
+        showAutoplay={true}
         onSelect={noop}
         onMove={noop}
         volume={0.7}
@@ -278,6 +279,14 @@ describe("a game with both players", () => {
     expect(render(null, viewOf())).not.toContain("Auto-play");
   });
 
+  it("leaves auto-play out altogether when the page says not to offer it, as in a release build", () => {
+    const html = render(ADA, viewOf(), { showAutoplay: false });
+
+    expect(html).not.toContain("Auto-play");
+    // The rest of the controls are still there.
+    expect(html).toContain('aria-label="Turn"');
+  });
+
   it("offers no auto-play before the game starts or after it ends", () => {
     expect(render(ADA, waiting)).not.toContain("Auto-play");
     const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
@@ -415,12 +424,22 @@ describe("the strip along the top", () => {
     expect(html.indexOf('class="game-top"')).toBeLessThan(html.indexOf("← All games"));
   });
 
-  it("has a volume slider beside it, set to the volume it is given", () => {
+  it("keeps the volume slider in an options menu beside it, closed until it is wanted", () => {
+    const html = render(ADA, view, { volume: 0.5 });
+
+    expect(html).toMatch(/<details[^>]*class="options"/);
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+    expect(html).toContain(">Options</summary>");
+    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf('class="options"'));
+    expect(html.indexOf('class="options"')).toBeLessThan(html.indexOf('class="volume-slider"'));
+    expect(html.indexOf("</details>")).toBeGreaterThan(html.indexOf('class="volume-slider"'));
+  });
+
+  it("sets the slider to the volume it is given", () => {
     const html = render(ADA, view, { volume: 0.5 });
 
     expect(html).toMatch(/<input[^>]*type="range"[^>]*value="10"/);
     expect(html).toContain('aria-valuetext="50%"');
-    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf('class="volume-slider"'));
   });
 
   it("calls the slider's left end Off", () => {

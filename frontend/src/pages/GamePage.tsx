@@ -17,8 +17,6 @@ import type { TimedCue } from "../longBackgammon/cues";
 import { GameScreen } from "../longBackgammon/GameScreen";
 import { playCue, unlockOnGesture } from "../longBackgammon/sounds";
 
-const KIND = "long-backgammon";
-
 /** Connects a long backgammon game to the page: opens it while the page is up and turns clicks into ops. */
 export function GamePage({ gameId }: { gameId: string }) {
   const view = useQuery(gameViews.get(gameId));
@@ -48,11 +46,13 @@ export function GamePage({ gameId }: { gameId: string }) {
       view={view}
       userId={session?.userId ?? null}
       join={join}
-      inviteUrl={`${location.origin}${gamePath(KIND, gameId)}`}
+      inviteUrl={`${location.origin}${gamePath(gameId)}`}
       onJoin={() => requestJoin({ gameId })}
       onRoll={() => submit({ gameId, action: { type: "roll" } })}
       onUndo={() => submit({ gameId, action: { type: "undo" } })}
       onAutoplay={(on) => autoplay({ gameId, on })}
+      // Only in development: `import.meta.env.DEV` is false in `vite build`, and the button is left out.
+      showAutoplay={import.meta.env.DEV}
       onSelect={(point) => select({ gameId, point })}
       onMove={(step) => submit({ gameId, action: { type: "move", from: step.from, die: step.die } })}
       volume={volume}

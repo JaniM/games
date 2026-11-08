@@ -9,6 +9,7 @@ import {
   loadGames,
   myGames,
   newGame,
+  chooseOpponent,
   openNewGame,
 } from "../features/lobby";
 import { GAMES } from "../games";
@@ -22,6 +23,7 @@ export function Home() {
   const games = useQuery(myGames.byUpdated.updatedAtGte(0));
   const load = useOp(loadGames);
   const open = useOp(openNewGame);
+  const opponent = useOp(chooseOpponent);
   const create = useOp(createGame);
   const close = useOp(closeNewGame);
 
@@ -40,6 +42,7 @@ export function Home() {
       list={list}
       request={request}
       onNewGame={(kind) => open({ kind })}
+      onOpponent={(bot) => opponent({ bot })}
       onCreate={() => create()}
       onClose={() => close()}
       onReload={() => load()}

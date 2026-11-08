@@ -1,6 +1,8 @@
 import type { RowOf } from "millpond";
 import { useRef, useState } from "react";
 import { Link } from "../Link";
+import { OptionsMenu } from "../OptionsMenu";
+import { copyText } from "../copyText";
 import {
   type Seat,
   type Step,
@@ -40,6 +42,8 @@ export interface GameScreenProps {
   onUndo: () => void;
   /** Turns auto-play (this player's turns, played for them) on or off. */
   onAutoplay: (on: boolean) => void;
+  /** Whether to offer auto-play at all. It is a development aid, so release builds leave it out. */
+  showAutoplay: boolean;
   onSelect: (point: number | null) => void;
   onMove: (step: Step) => void;
   /** How loud the sounds are, from 0 (silent) to 1. */
@@ -51,14 +55,14 @@ export interface GameScreenProps {
 
 const HOME = "/";
 
-function Shell({ volume, children }: { volume?: React.ReactNode; children: React.ReactNode }) {
+function Shell({ options, children }: { options?: React.ReactNode; children: React.ReactNode }) {
   return (
     <main className="page game-page">
       <div className="game-top">
         <p className="crumbs">
           <Link to={HOME}>← All games</Link>
         </p>
-        {volume}
+        {options}
       </div>
       <h1 className="game-title">Long backgammon</h1>
       {children}
@@ -79,6 +83,7 @@ export function GameScreen({
   onRoll,
   onUndo,
   onAutoplay,
+  showAutoplay,
   onSelect,
   onMove,
   volume,
@@ -128,13 +133,15 @@ export function GameScreen({
 
   return (
     <Shell
-      volume={
-        // Letting go of the slider plays a knock, so that the new level can be heard.
-        <VolumeControl
-          volume={volume}
-          onChange={onVolume}
-          onSettle={() => onCue({ cue: "move", afterMs: 0 })}
-        />
+      options={
+        <OptionsMenu>
+          {/* Letting go of the slider plays a knock, so that the new level can be heard. */}
+          <VolumeControl
+            volume={volume}
+            onChange={onVolume}
+            onSettle={() => onCue({ cue: "move", afterMs: 0 })}
+          />
+        </OptionsMenu>
       }
     >
       {!connected && (
@@ -207,7 +214,7 @@ export function GameScreen({
       />
 
       <section className="controls" aria-label="Turn">
-        {mySeat !== null && state && !over && (
+        {showAutoplay && mySeat !== null && state && !over && (
           <button
             className="button button-quiet"
             type="button"
@@ -264,14 +271,13 @@ function InviteBox({ url }: { url: string }) {
   const [copied, setCopied] = useState<"yes" | "manual" | null>(null);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
+    if (await copyText(url)) {
       setCopied("yes");
-    } catch {
-      // No clipboard access (an insecure page, or the user said no): select it for them.
-      input.current?.select();
-      setCopied("manual");
+      return;
     }
+    // Neither way of copying worked (or the person said no): select the link for them.
+    if (input.current) selectAll(input.current);
+    setCopied("manual");
   }
 
   return (
@@ -284,15 +290,30 @@ function InviteBox({ url }: { url: string }) {
           readOnly
           value={url}
           aria-label="Game link"
-          onFocus={(event) => event.currentTarget.select()}
+          onFocus={(event) => selectAll(event.currentTarget)}
         />
         <button className="button" type="button" onClick={copy}>
           Copy link
         </button>
       </div>
       <p className="muted" role="status">
-        {copied === "yes" ? "Link copied." : copied === "manual" ? "Press Ctrl+C (⌘C) to copy the selected link." : ""}
+        {copied === "yes" ? "Link copied." : copied === "manual" ? manualCopyHint() : ""}
       </p>
     </section>
   );
+}
+
+/** Selects all of a field's text. Safari on iOS ignores `select()` on a read-only field, but not a range. */
+function selectAll(field: HTMLInputElement) {
+  field.focus();
+  field.select();
+  field.setSelectionRange(0, field.value.length);
+}
+
+/** What to do to copy the selected link by hand: a touch screen has no Ctrl+C. */
+function manualCopyHint(): string {
+  const touch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+  return touch
+    ? "Touch and hold the selected link, then choose Copy."
+    : "Press Ctrl+C (⌘C) to copy the selected link.";
 }

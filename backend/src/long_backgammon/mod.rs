@@ -53,6 +53,7 @@
 //! the last step of the turn in progress and gives its die back (D7). There is no action for
 //! passing.
 
+mod bot;
 mod rules;
 
 use serde::{Deserialize, Serialize};
@@ -411,6 +412,7 @@ impl Game for LongBackgammon {
     const KIND: &'static str = "long-backgammon";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
+    const BOT: bool = true;
     type State = State;
     type Action = Action;
 
@@ -427,6 +429,10 @@ impl Game for LongBackgammon {
 
     fn apply(state: &State, seat: usize, action: Action) -> Result<State, Rejection> {
         state.act(seat, action, || roll().ok())
+    }
+
+    fn bot_action(state: &State, seat: usize) -> Option<Action> {
+        bot::action(state, seat)
     }
 }
 

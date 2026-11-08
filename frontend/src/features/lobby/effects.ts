@@ -21,14 +21,14 @@ export const createGameRequest = effect({
               const res = await apiFetch(ctx, "/api/games", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ kind: request.kind }),
+                body: JSON.stringify({ kind: request.kind, bot: request.bot }),
                 signal: ctx.signal,
               });
               if (res.status === 401) return;
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
               const { gameId } = createdReplySchema.parse(await res.json());
               ctx.run(gameCreated, undefined);
-              const path = gamePath(request.kind, gameId);
+              const path = gamePath(gameId);
               pushPath(path);
               ctx.run(pathChanged, { path });
             } catch (err) {

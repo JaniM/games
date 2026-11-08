@@ -13,8 +13,10 @@ use tracing_subscriber::EnvFilter;
 use crate::{game::Games, room::Rooms};
 
 mod auth;
+mod bot;
 mod error;
 mod game;
+mod game_id;
 mod lobby;
 mod long_backgammon;
 mod profile;

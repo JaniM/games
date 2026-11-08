@@ -2,8 +2,8 @@
 //! WebSocket (see `socket`).
 //!
 //! A game's id is its invite: whoever has it can join while a seat is free, and can watch
-//! the game on its WebSocket whether or not they have a seat. Ids are random, so they
-//! can't be found by guessing.
+//! the game on its WebSocket whether or not they have a seat. Ids are random (see
+//! `game_id`), so they can't be found by guessing.
 
 use axum::{
     Json,
@@ -12,11 +12,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::{
     auth::AuthUser,
     error::ApiError,
+    game_id::GameId,
     room::{RoomError, Rooms},
 };
 
@@ -26,18 +26,23 @@ const LIST_LIMIT: i64 = 100;
 #[derive(Deserialize)]
 pub struct NewGame {
     kind: String,
+    /// Play against the computer. The game starts at once, with the bot in seat 1.
+    #[serde(default)]
+    bot: bool,
 }
 
 /// Where a user sits in a game.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Seat {
-    game_id: Uuid,
+    game_id: GameId,
     seat: usize,
 }
 
-/// `POST /api/games` with `{ "kind": "..." }`: creates a game, with the user in seat 0,
-/// and loads it. Answers 422 for a kind the server doesn't offer.
+/// `POST /api/games` with `{ "kind": "...", "bot": false }`: creates a game, with the user in
+/// seat 0, and loads it. With `"bot": true` the computer takes the other seat and the game
+/// starts at once; `bot` can be left out. Answers 422 for a kind the server doesn't offer,
+/// and for a bot in a game that has none.
 pub async fn create_game(
     AuthUser(user): AuthUser,
     State(rooms): State<Rooms>,
@@ -47,7 +52,12 @@ pub async fn create_game(
         .games()
         .get(&body.kind)
         .ok_or(ApiError::Invalid("unknown kind of game"))?;
-    let game_id = rooms.create(engine, user).await.map_err(api_error)?;
+    let game_id = if body.bot {
+        rooms.create_against_bot(engine, user).await
+    } else {
+        rooms.create(engine, user).await
+    }
+    .map_err(api_error)?;
     Ok((StatusCode::CREATED, Json(Seat { game_id, seat: 0 })))
 }
 
@@ -57,9 +67,9 @@ pub async fn create_game(
 pub async fn join_game(
     AuthUser(user): AuthUser,
     State(rooms): State<Rooms>,
-    Path(game_id): Path<Uuid>,
+    Path(game_id): Path<GameId>,
 ) -> Result<Json<Seat>, ApiError> {
-    let seat = rooms.join(game_id, user).await.map_err(api_error)?;
+    let seat = rooms.join(&game_id, user).await.map_err(api_error)?;
     Ok(Json(Seat { game_id, seat }))
 }
 
@@ -72,7 +82,7 @@ pub struct Games {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listed {
-    game_id: Uuid,
+    game_id: GameId,
     kind: String,
     /// The user's seat.
     seat: i16,
@@ -91,7 +101,16 @@ pub struct Listed {
 }
 
 /// One row of the list query, in the order of its columns.
-type ListedRow = (Uuid, String, i16, i64, bool, bool, i64, Vec<Option<String>>);
+type ListedRow = (
+    GameId,
+    String,
+    i16,
+    i64,
+    bool,
+    bool,
+    i64,
+    Vec<Option<String>>,
+);
 
 /// `GET /api/games`: the games the user is in, most recently changed first, at most 100.
 /// Read from the database, so it also lists games that aren't in memory.
@@ -145,6 +164,7 @@ fn api_error(err: RoomError) -> ApiError {
     match err {
         RoomError::NotFound => ApiError::NotFound,
         RoomError::Full => ApiError::Conflict("the game is full"),
+        RoomError::NoBot => ApiError::Invalid("this game has no computer opponent"),
         // Creating and joining don't produce the others. If one shows up, it is our bug.
         RoomError::NotAPlayer
         | RoomError::NotStarted
@@ -158,9 +178,11 @@ fn api_error(err: RoomError) -> ApiError {
 mod tests {
     use axum::http::Method;
     use serde_json::{Value, json};
+    use uuid::Uuid;
 
     use super::*;
     use crate::{
+        bot::BOT_USER,
         game,
         test_util::{Solo, Tally, TestApp, bearer},
     };
@@ -171,16 +193,16 @@ mod tests {
 
     /// What the database holds for a game: revision, state version, state, players by seat.
     async fn stored(pool: &PgPool, game_id: &str) -> (i64, i32, Option<Value>, Vec<String>) {
-        let id: Uuid = game_id.parse().unwrap();
+        let id: GameId = game_id.parse().unwrap();
         let (revision, version, state): (i64, i32, Option<Value>) =
             sqlx::query_as("SELECT revision, state_version, state FROM games WHERE id = $1")
-                .bind(id)
+                .bind(&id)
                 .fetch_one(pool)
                 .await
                 .unwrap();
         let players: Vec<Uuid> =
             sqlx::query_scalar("SELECT user_id FROM game_players WHERE game_id = $1 ORDER BY seat")
-                .bind(id)
+                .bind(&id)
                 .fetch_all(pool)
                 .await
                 .unwrap();
@@ -239,7 +261,7 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn game_ids_are_random_uuids(pool: PgPool) {
+    async fn game_ids_are_short_and_random(pool: PgPool) {
         let app = app(pool);
         let (_, token) = app.register_user().await;
 
@@ -248,9 +270,124 @@ mod tests {
 
         assert_ne!(first, second);
         for id in [first, second] {
-            let id: Uuid = id.parse().unwrap();
-            assert_eq!(id.get_version_num(), 4, "{id} is not a random uuid");
+            assert_eq!(id.len(), crate::game_id::LENGTH, "{id}");
+            assert!(id.parse::<GameId>().is_ok(), "{id} is not an id");
         }
+    }
+
+    #[sqlx::test]
+    async fn a_game_from_before_ids_were_short_still_works_under_its_uuid(pool: PgPool) {
+        let app = app(pool.clone());
+        let (user_id, token) = app.register_user().await;
+        let (_, joiner) = app.register_user().await;
+        let old = "6f1c2a3e-5b4d-4c8a-9e0f-1a2b3c4d5e6f";
+        sqlx::query("INSERT INTO games (id, kind, state_version) VALUES ($1, 'tally', 1)")
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, 0, $2)")
+            .bind(old)
+            .bind(user_id.parse::<Uuid>().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let listed = list(&app, &token).await;
+        let joined = app.join_game(&joiner, old).await;
+
+        assert_eq!(listed[0]["gameId"], old);
+        assert_eq!(joined.status, StatusCode::OK);
+        assert_eq!(joined.json, json!({ "gameId": old, "seat": 1 }));
+    }
+
+    #[sqlx::test]
+    async fn a_game_against_the_bot_starts_at_once_with_the_bot_in_the_other_seat(pool: PgPool) {
+        let app = app(pool.clone());
+        let (user_id, token) = app.register_user().await;
+
+        let reply = app.create_bot_game(&token, "tally").await;
+
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.json["seat"], 0);
+        let game_id = reply.json["gameId"].as_str().unwrap();
+        let bot = BOT_USER.to_string();
+        assert_eq!(
+            stored(&pool, game_id).await,
+            (
+                0,
+                1,
+                Some(json!({ "total": 0, "turn": 0 })),
+                vec![user_id, bot]
+            )
+        );
+        // The list says so too: two players, started, and the bot by its name.
+        let listed = list(&app, &token).await;
+        assert_eq!(listed[0]["joined"], 2);
+        assert_eq!(listed[0]["started"], true);
+        assert_eq!(listed[0]["playerNames"], json!([null, "Bot"]));
+    }
+
+    #[sqlx::test]
+    async fn nobody_can_take_the_bots_seat(pool: PgPool) {
+        let app = app(pool);
+        let (_, token) = app.register_user().await;
+        let (_, other) = app.register_user().await;
+        let game_id = app.create_bot_game(&token, "tally").await.json["gameId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let reply = app.join_game(&other, &game_id).await;
+
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+    }
+
+    #[sqlx::test]
+    async fn the_bot_cannot_be_signed_in_as(pool: PgPool) {
+        let app = app(pool);
+
+        // The bot has no token, so no token reaches it, not even an empty one.
+        for token in ["", "null", "bot", "Bot"] {
+            let reply = app
+                .send(Method::GET, "/api/me", Some(&bearer(token)), None)
+                .await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{token:?}");
+        }
+    }
+
+    #[sqlx::test]
+    async fn a_bot_is_refused_in_a_game_that_has_none(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, token) = app.register_user().await;
+
+        let reply = app.create_bot_game(&token, "solo").await;
+
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let games: i64 = sqlx::query_scalar("SELECT count(*) FROM games")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(games, 0, "a refused game must not be left behind");
+    }
+
+    #[sqlx::test]
+    async fn without_a_bot_the_game_waits_for_a_player_as_before(pool: PgPool) {
+        let app = app(pool.clone());
+        let (user_id, token) = app.register_user().await;
+
+        let reply = app
+            .send(
+                Method::POST,
+                "/api/games",
+                Some(&bearer(&token)),
+                Some(json!({ "kind": "tally", "bot": false })),
+            )
+            .await;
+
+        assert_eq!(reply.status, StatusCode::CREATED);
+        let game_id = reply.json["gameId"].as_str().unwrap();
+        assert_eq!(stored(&pool, game_id).await, (0, 1, None, vec![user_id]));
     }
 
     #[sqlx::test]
@@ -375,9 +512,7 @@ mod tests {
             .await;
         assert_eq!(no_token.status, StatusCode::UNAUTHORIZED);
 
-        let unknown_game = app
-            .join_game(&other_token, &Uuid::from_u128(1).to_string())
-            .await;
+        let unknown_game = app.join_game(&other_token, "nosuchgame22").await;
         assert_eq!(unknown_game.status, StatusCode::NOT_FOUND);
 
         let not_an_id = app.join_game(&other_token, "tally").await;
@@ -483,7 +618,7 @@ mod tests {
         let done = app.create_game(&ada, "solo").await;
         // What the room writes when a game's rules say it is over (see the room's tests).
         sqlx::query("UPDATE games SET finished = true WHERE id = $1")
-            .bind(done.parse::<Uuid>().unwrap())
+            .bind(&done)
             .execute(&pool)
             .await
             .unwrap();

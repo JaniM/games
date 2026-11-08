@@ -63,6 +63,9 @@ export const stateSchema = z.object({
 export type LongBackgammonState = z.infer<typeof stateSchema>;
 export type Seat = 0 | 1;
 
+/** The only kind of game this client plays. A snapshot of any other kind is not for this page. */
+export const KIND = "long-backgammon";
+
 /** The only layout of `state` this client reads. */
 export const STATE_VERSION = 1;
 
@@ -70,6 +73,7 @@ export const STATE_VERSION = 1;
 export const incomingSnapshotSchema = z.object({
   type: z.literal("snapshot"),
   gameId: z.string(),
+  kind: z.string(),
   revision: z.number().int(),
   stateVersion: z.number().int(),
   players: z.array(z.string()),

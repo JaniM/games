@@ -19,6 +19,8 @@ export const newGame = table(
     id: z.string(),
     state: z.enum(["choosing", "creating", "failed"]),
     kind: z.string(),
+    /** Play against the computer, not a friend who follows a link. */
+    bot: z.boolean(),
     error: z.string().nullable(),
   }),
   { key: "id", indexes: { byState: ["state"] } },
