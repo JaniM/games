@@ -5,9 +5,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
     llm-agents.url = "github:numtide/llm-agents.nix";
+    disko.url = "github:nix-community/disko";
+    disko.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, llm-agents, ... }:
+  outputs = { self, nixpkgs, flake-utils, llm-agents, disko, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -105,7 +107,7 @@
         packages.jailed-claude = jailed-claude;
         # NoCC keeps Rust on Apple's linker, as outside the shell.
         devShells.default = pkgs.mkShellNoCC {
-          packages = projectTools ++ [ jailed-claude ];
+          packages = projectTools ++ [ jailed-claude pkgs.colmena pkgs.nixos-anywhere ];
           LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.libiconv ];
           # A child, not exec, so nix develop's exit cleanup still runs. Scripts using -c stay in bash.
           shellHook = ''
@@ -116,5 +118,7 @@
             fi
           '';
         };
-      });
+      })
+    # The server: nixosConfigurations.bootstrap for nixos-anywhere, colmena for Colmena.
+    // import ./deploy { inherit nixpkgs disko; };
 }

@@ -1,9 +1,7 @@
-# The server's disk, which nixos-anywhere partitions and formats with disko when it installs
-# NixOS. It ERASES the whole disk. `lsblk` on the server shows which one is right.
-#
-# GPT with a BIOS boot partition (for GRUB) and an EFI system partition, so the same layout
-# boots on either kind of firmware. host.nix tells GRUB to use both.
 {
+  # The disk nixos-anywhere partitions and formats with disko. It ERASES the whole disk.
+  # BIOS and UEFI both boot from this, since the VM's firmware isn't pinned down.
+  # Check the device name with lsblk on the VM before installing.
   disko.devices.disk.main = {
     type = "disk";
     device = "/dev/vda";
@@ -13,6 +11,7 @@
         boot = {
           size = "1M";
           type = "EF02";
+          priority = 1;
         };
         ESP = {
           size = "512M";

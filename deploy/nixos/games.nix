@@ -1,18 +1,36 @@
 # The site: Postgres, the backend, and Caddy serving the frontend and proxying /api.
-# Nothing here is specific to one machine; that is host.nix.
+# Nothing here is specific to one machine; that is configuration.nix.
 { lib, pkgs, ... }:
 
 let
   domain = "games.seequ.dev";
   backendAddr = "127.0.0.1:3000";
 
-  backend = pkgs.callPackage ./backend.nix { };
-  frontend = pkgs.callPackage ./frontend.nix { };
+  backend = pkgs.callPackage ./games-backend.nix { };
+  frontend = pkgs.callPackage ./games-frontend.nix { };
+
+  # /api/health answers 200 only while the database does.
+  waitHealthy = pkgs.writeShellApplication {
+    name = "games-wait-healthy";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl ];
+    text = ''
+      for _ in $(seq 30); do
+        if curl -fs http://${backendAddr}/api/health >/dev/null; then
+          echo "backend healthy"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "backend not healthy after 60s: journalctl -u games-backend" >&2
+      exit 1
+    '';
+  };
 in
 {
   # Postgres is reachable only through its Unix socket. The backend runs as the Unix user
   # `games`, which Postgres maps to the role of the same name (peer authentication, the
-  # default for the socket), so there is no password to store.
+  # default for the socket), so there is no password and no secret to store. That is also why
+  # the user is a static one: a dynamic user's name isn't known to Postgres ahead of time.
   services.postgresql = {
     enable = true;
     # The version compose.yaml and the devshell use. A major upgrade needs a dump and restore,
@@ -33,6 +51,19 @@ in
   };
   users.groups.games = { };
 
+  # The packages by name, to build one alone:
+  # nix build .#nixosConfigurations.games.config.system.build.gamesFrontend
+  system.build = {
+    gamesBackend = backend;
+    gamesFrontend = frontend;
+  };
+
+  networking.firewall = {
+    allowedTCPPorts = [ 80 443 ];
+    # HTTP/3.
+    allowedUDPPorts = [ 443 ];
+  };
+
   systemd.services.games-backend = {
     description = "Games backend";
     wantedBy = [ "multi-user.target" ];
@@ -44,33 +75,40 @@ in
     environment = {
       DATABASE_URL = "postgres:///games?host=/run/postgresql&user=games";
       BIND_ADDR = backendAddr;
+      RUST_LOG = "warn,games_backend=info";
     };
 
     serviceConfig = {
       # The backend runs its own migrations on startup.
       ExecStart = lib.getExe backend;
+      # The unit fails, and so does colmena apply, if the backend isn't healthy after a start.
+      ExecStartPost = lib.getExe waitHealthy;
       User = "games";
       Group = "games";
-      Restart = "on-failure";
+      Restart = "always";
       RestartSec = 2;
 
       # It only talks to Postgres and to Caddy, and writes nothing.
-      NoNewPrivileges = true;
-      PrivateTmp = true;
-      PrivateDevices = true;
-      ProtectSystem = "strict";
-      ProtectHome = true;
-      ProtectKernelTunables = true;
-      ProtectKernelModules = true;
-      ProtectControlGroups = true;
-      RestrictAddressFamilies = [
-        "AF_UNIX"
-        "AF_INET"
-        "AF_INET6"
-      ];
-      RestrictNamespaces = true;
+      CapabilityBoundingSet = "";
       LockPersonality = true;
+      NoNewPrivileges = true;
+      PrivateDevices = true;
+      PrivateTmp = true;
+      ProcSubset = "pid";
+      ProtectClock = true;
+      ProtectControlGroups = true;
+      ProtectHome = true;
+      ProtectHostname = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
+      ProtectProc = "invisible";
+      ProtectSystem = "strict";
+      RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_NETLINK" "AF_UNIX" ];
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
       SystemCallArchitectures = "native";
+      UMask = "0077";
     };
   };
 
@@ -78,7 +116,14 @@ in
   # and ports 80 and 443 open.
   services.caddy = {
     enable = true;
+    email = "contact@seequ.dev";
     virtualHosts.${domain}.extraConfig = ''
+      header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+      }
+
+      # The game sockets (/api/games/<id>/ws) go through here too. Left out of `encode` on purpose.
       handle /api/* {
         reverse_proxy ${backendAddr}
       }
@@ -102,14 +147,5 @@ in
         file_server
       }
     '';
-  };
-
-  networking.firewall = {
-    allowedTCPPorts = [
-      80
-      443
-    ];
-    # HTTP/3.
-    allowedUDPPorts = [ 443 ];
   };
 }

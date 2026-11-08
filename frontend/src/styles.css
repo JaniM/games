@@ -880,11 +880,18 @@ form.name-control {
   fill-opacity: 0.7;
 }
 
-.ghost circle {
+.ghost-mark {
   fill: none;
   stroke: var(--accent);
   stroke-width: 3;
   stroke-dasharray: 5 4;
+  /* An outline only catches presses on its line. `.ghost-hit` is what catches them. */
+  pointer-events: none;
+}
+
+/* Transparent, not none: an unpainted shape doesn't receive presses. */
+.ghost-hit {
+  fill: transparent;
 }
 
 .ghost text {

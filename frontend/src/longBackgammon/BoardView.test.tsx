@@ -124,6 +124,57 @@ describe("a checker that moved", () => {
 
 });
 
+// The marker that shows where the selected checker would land moves it there. Whether a press
+// reaches it is for a browser, but what it covers is in the markup: a press on a checker only
+// selects it, so on a full stack the marker has to cover the top checker, or nothing can land.
+describe("the landing marker", () => {
+  /** Seat 0 has picked the checker on point 1 and could play the 6 to point 7. */
+  function pick(onSeven: number) {
+    const state = startingState({
+      points: [board({ 1: 8, 7: onSeven }), board({ 1: 15 })],
+      ...moving([6, 3], [{ from: 1, die: 6 }]),
+    });
+    return renderToString(
+      <BoardView
+        state={state}
+        revision={7}
+        viewer={0}
+        selected={1}
+        interactive
+        motion={null}
+        rolls={0}
+        onSelect={noop}
+        onMove={noop}
+      />,
+    );
+  }
+
+  it("covers the whole top checker of a full stack", () => {
+    const html = pick(7);
+
+    // The top checker of seven is at y = 185, with a radius of 19 and a stroke on it.
+    expect(html).toContain('<circle class="checker checker-white" cx="276" cy="185" r="19"');
+    // The marker sits on it, drawn after it, and its catching area is wider than the checker.
+    expect(html).toContain('<circle class="ghost-hit" cx="276" cy="185" r="21"');
+    expect(html.indexOf('class="ghost-hit"')).toBeGreaterThan(
+      html.indexOf('cx="276" cy="185" r="19"'),
+    );
+  });
+
+  it("covers a stack of exactly five as well, where the marker also sits on the top one", () => {
+    const html = pick(5);
+
+    // The fifth checker and the marker are both at y = 185.
+    expect(html).toContain('<circle class="checker checker-white" cx="276" cy="185" r="19"');
+    expect(html).toContain('<circle class="ghost-hit" cx="276" cy="185" r="21"');
+  });
+
+  it("stays the size of its outline where there is room, so it takes nothing from the checkers", () => {
+    // Two checkers; the marker is in the third place, at y = 117.
+    expect(pick(2)).toContain('<circle class="ghost-hit" cx="276" cy="117" r="17"');
+  });
+});
+
 describe("the dice", () => {
   it("lie still on a board that opened mid-game", () => {
     const html = draw(stepped, null, 0);

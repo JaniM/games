@@ -305,11 +305,21 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
         )}
       </g>
       {dieHere !== null && (
-        // The marker of where the checker would land. It is drawn over the pieces (on a tall
-        // stack it covers the top one), and it moves the checker, like the background.
+        // The marker of where the checker would land. It is drawn over the pieces (on a full
+        // stack it sits on the top one), and it moves the checker, like the background.
         // biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only copy of the background button, which is the keyboard's
         <g className="ghost" onClick={onBackground}>
+          {/* What catches the press: the drawn circle is only an outline, which a press in its
+              middle passes through, to the piece below, and a piece only ever selects. On a full
+              stack that piece is the top one, so the area covers all of it, its edge included. */}
           <circle
+            className="ghost-hit"
+            cx={x + POINT_WIDTH / 2}
+            cy={slotY(row, point.count, point.count + 1)}
+            r={point.count >= MAX_STACK ? RADIUS + 2 : RADIUS - 2}
+          />
+          <circle
+            className="ghost-mark"
             cx={x + POINT_WIDTH / 2}
             cy={slotY(row, point.count, point.count + 1)}
             r={RADIUS - 2}
