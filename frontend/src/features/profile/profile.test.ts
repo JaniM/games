@@ -168,6 +168,23 @@ describe("setting the name", () => {
     expect(server.users.get(OLD.accessToken)?.name).toBe("Ada");
   });
 
+  it("shows the reason when the user is an account, whose name is its username and can't be changed", async () => {
+    const server = fakeServer();
+    const credentials = server.addAccount("ada", "correct horse", OLD);
+    const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify(credentials) });
+    const { db } = setup(server.fetchImpl, storage);
+    start(db);
+    await settle();
+    expect(profileRow(db)).toMatchObject({ state: "idle", name: "ada" });
+
+    db.ops.profile.setName({ name: "Countess" });
+    await settle();
+
+    expect(profileRow(db)).toMatchObject({ state: "idle", name: "ada", pending: null });
+    expect(profileRow(db)?.error).toBe("Error: the name of an account is its username, and can't be changed");
+    expect(server.users.get(OLD.accessToken)?.name).toBe("ada");
+  });
+
   it("keeps the old name when the server can't be reached, and can be tried again", async () => {
     const server = fakeServer();
     server.addUser(OLD, "Ada");

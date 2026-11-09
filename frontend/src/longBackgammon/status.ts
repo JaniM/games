@@ -1,4 +1,5 @@
 import type { LongBackgammonState, Seat, Snapshot, Step } from "../features/game";
+import { playerName } from "../playerName";
 import { landing, pointNumber } from "./layout";
 
 // The words on the page, derived from a snapshot. Kept apart from the components so that
@@ -9,18 +10,22 @@ export function viewerSeat(mySeat: Seat | null, state: LongBackgammonState | nul
   return mySeat ?? state?.white ?? 0;
 }
 
-/** A seat in a sentence: "You", the player's name, or "Player 2" if they have none. */
+/**
+ * A seat in a sentence: "You", the player's name ("Grace (guest)" for a guest, see `playerName`),
+ * or "Player 2" if they have none.
+ */
 export function nameOf(snapshot: Snapshot, seat: Seat, mySeat: Seat | null): string {
   if (seat === mySeat) return "You";
-  return snapshot.playerNames[seat] ?? `Player ${seat + 1}`;
+  return playerName(snapshot.playerNames[seat], snapshot.playerGuests[seat] ?? false, seat);
 }
 
 /** A seat for the bar above or below the board. An empty seat is waiting. */
 export function barNameOf(snapshot: Snapshot, seat: Seat, mySeat: Seat | null): string {
   if (seat >= snapshot.players.length) return "Waiting for an opponent…";
   const name = snapshot.playerNames[seat];
+  // Your own seat says "(you)", which says it all: you know whether you are a guest.
   if (seat === mySeat) return name ? `${name} (you)` : "You";
-  return name ?? `Player ${seat + 1}`;
+  return playerName(name, snapshot.playerGuests[seat] ?? false, seat);
 }
 
 /** "6-5". */
@@ -59,8 +64,10 @@ export function turnText(snapshot: Snapshot, mySeat: Seat | null): string {
 export interface Result {
   /** "You won", "Ada won" or "Draw". */
   title: string;
-  /** "1 point", "Mars: 2 points", or "" for a draw. */
+  /** "1 point", "Mars: 2 points", "Grace forfeited", or "" for a draw. */
   detail: string;
+  /** The loser gave up, so `detail` says who. */
+  forfeited: boolean;
   /** The viewer is a player, and it was them. */
   won: boolean;
 }
@@ -69,10 +76,16 @@ export interface Result {
 export function resultOf(snapshot: Snapshot, mySeat: Seat | null): Result | null {
   const phase = snapshot.state?.phase;
   if (phase?.type !== "over") return null;
-  if (phase.winner === null) return { title: "Draw", detail: "", won: false };
+  if (phase.winner === null) return { title: "Draw", detail: "", forfeited: false, won: false };
   const title = `${nameOf(snapshot, phase.winner, mySeat)} won`;
+  const won = phase.winner === mySeat;
+  if (phase.forfeited) {
+    // A forfeit always scores 1 point, so it is not worth saying. Who gave up is.
+    const loser = nameOf(snapshot, (1 - phase.winner) as Seat, mySeat);
+    return { title, detail: `${loser} forfeited`, forfeited: true, won };
+  }
   const detail = phase.points >= 2 ? `Mars: ${phase.points} points` : `${phase.points} point`;
-  return { title, detail, won: phase.winner === mySeat };
+  return { title, detail, forfeited: false, won };
 }
 
 /**
@@ -117,6 +130,14 @@ export function lastThrowText(state: LongBackgammonState): string {
   return "White has borne off everything. Black gets one last throw.";
 }
 
+/**
+ * A result's detail in the middle of a sentence: "mars: 2 points", "you forfeited". A name
+ * keeps its capital: "Grace forfeited".
+ */
+function inSentence(result: Result): string {
+  return result.forfeited ? result.detail.replace(/^You\b/, "you") : result.detail.toLowerCase();
+}
+
 /** What a position of a game in review says about itself, in two lines. */
 export interface FrameText {
   /** What led to the position: the roll or the step that was just played. */
@@ -134,7 +155,7 @@ export interface FrameText {
 export function frameText(snapshot: Snapshot, state: LongBackgammonState, mySeat: Seat | null): FrameText {
   const result = resultOf({ ...snapshot, state }, mySeat);
   const detail = result
-    ? `Game over. ${result.title}${result.detail ? `, ${result.detail.toLowerCase()}` : ""}.`
+    ? `Game over. ${result.title}${result.detail ? `, ${inSentence(result)}` : ""}.`
     : lastThrowText(state);
 
   if (state.phase.type === "move") {

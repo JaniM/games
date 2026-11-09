@@ -1,9 +1,16 @@
-//! Anonymous accounts. The site registers every new browser as a user and hands
-//! it an access token, which the client then sends as `Authorization: Bearer <token>`.
-//! A WebSocket can't carry that header from a browser, so it sends the token in its
-//! first message instead (see `socket`).
+//! Who a request is from. The site registers every new browser as an anonymous user (a
+//! "guest") and hands it an access token. A guest can later make an account (see `account`),
+//! which signs in with sessions instead. Either way the client sends its token as
+//! `Authorization: Bearer <token>`. A WebSocket can't carry that header from a browser, so it
+//! sends the token in its first message instead (see `socket`).
 //!
-//! The token is 32 random bytes, hex-encoded, and is stored as given.
+//! A token is 32 random bytes, hex-encoded. A guest's is stored as given, in
+//! `users.access_token`. A session's is stored as its SHA-256 (`sessions.token_hash`), so a copy
+//! of the table opens no account. A session that hasn't been seen for [`SESSION_LIFETIME`]
+//! doesn't count any more: `GET /api/me` is what sees it (see `profile`), and the site reads
+//! the profile whenever it opens. Guests never expire.
+
+use std::time::Duration;
 
 use axum::{
     Json,
@@ -11,12 +18,16 @@ use axum::{
     http::{HeaderMap, StatusCode, header, request::Parts},
 };
 use serde::Serialize;
-use sqlx::PgPool;
+use sha2::{Digest, Sha256};
+use sqlx::{PgExecutor, PgPool};
 use uuid::Uuid;
 
 use crate::error::ApiError;
 
 const TOKEN_BYTES: usize = 32;
+
+/// How long a session may go unseen before it stops working.
+pub const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +36,7 @@ pub struct Registration {
     access_token: String,
 }
 
-/// `POST /api/register`: creates a user and returns its id with a fresh access token.
+/// `POST /api/register`: creates a guest and returns its id with a fresh access token.
 pub async fn register(
     State(pool): State<PgPool>,
 ) -> Result<(StatusCode, Json<Registration>), ApiError> {
@@ -45,6 +56,15 @@ pub async fn register(
     ))
 }
 
+/// What identifies a session in `sessions`: the SHA-256 of its token.
+pub struct SessionKey(Vec<u8>);
+
+impl SessionKey {
+    fn of(token: &str) -> Self {
+        Self(Sha256::digest(token.as_bytes()).as_slice().to_vec())
+    }
+}
+
 /// The user a request's access token belongs to. Add it as a handler argument to
 /// require authentication; the request is rejected with 401 before the handler runs.
 pub struct AuthUser(pub Uuid);
@@ -58,21 +78,116 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
         let token = bearer_token(&parts.headers).ok_or(ApiError::Unauthorized)?;
-        authenticate(&PgPool::from_ref(state), token)
+        lookup(&PgPool::from_ref(state), token)
             .await
-            .map(Self)
+            .map(|identity| Self(identity.user_id))
+    }
+}
+
+/// [`AuthUser`] that also says which session the token is, for a handler that has to do
+/// something to it. `session` is `None` for a guest's token, which is not a session.
+pub struct AuthSession {
+    pub user_id: Uuid,
+    pub session: Option<SessionKey>,
+}
+
+impl<S> FromRequestParts<S> for AuthSession
+where
+    PgPool: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        let token = bearer_token(&parts.headers).ok_or(ApiError::Unauthorized)?;
+        lookup(&PgPool::from_ref(state), token)
+            .await
+            .map(|identity| Self {
+                user_id: identity.user_id,
+                session: identity.session,
+            })
     }
 }
 
 /// The user an access token belongs to, or `Unauthorized` if no user has it. For
 /// callers that get the token some other way than the `Authorization` header.
 pub async fn authenticate(pool: &PgPool, token: &str) -> Result<Uuid, ApiError> {
-    let user_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE access_token = $1")
-        .bind(token)
-        .fetch_optional(pool)
+    lookup(pool, token).await.map(|identity| identity.user_id)
+}
+
+struct Identity {
+    user_id: Uuid,
+    session: Option<SessionKey>,
+}
+
+/// A guest's token is found in `users`, a session's in `sessions` (if it hasn't expired).
+async fn lookup(pool: &PgPool, token: &str) -> Result<Identity, ApiError> {
+    let key = SessionKey::of(token);
+    let found: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT id, NULL::bytea FROM users WHERE access_token = $1
+         UNION ALL
+         SELECT user_id, token_hash FROM sessions
+          WHERE token_hash = $2 AND last_seen_at > now() - make_interval(secs => $3)",
+    )
+    .bind(token)
+    .bind(&key.0)
+    .bind(SESSION_LIFETIME.as_secs_f64())
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::database("could not look up an access token"))?;
+    found
+        .map(|(user_id, session)| Identity {
+            user_id,
+            session: session.map(SessionKey),
+        })
+        .ok_or(ApiError::Unauthorized)
+}
+
+/// Signs `user_id` in on one more browser. Returns the session's token, which is not kept: only
+/// its hash is.
+pub async fn create_session<'c>(
+    executor: impl PgExecutor<'c>,
+    user_id: Uuid,
+) -> Result<String, ApiError> {
+    let token = new_token()?;
+    sqlx::query("INSERT INTO sessions (token_hash, user_id) VALUES ($1, $2)")
+        .bind(SessionKey::of(&token).0)
+        .bind(user_id)
+        .execute(executor)
         .await
-        .map_err(ApiError::database("could not look up an access token"))?;
-    user_id.ok_or(ApiError::Unauthorized)
+        .map_err(ApiError::database("could not make a session"))?;
+    Ok(token)
+}
+
+/// Records that the session was in use just now, which keeps it from expiring.
+pub async fn touch_session(pool: &PgPool, session: &SessionKey) -> Result<(), ApiError> {
+    sqlx::query("UPDATE sessions SET last_seen_at = now() WHERE token_hash = $1")
+        .bind(&session.0)
+        .execute(pool)
+        .await
+        .map_err(ApiError::database("could not update a session"))?;
+    Ok(())
+}
+
+/// Signs the session out. The token stops working at once.
+pub async fn end_session(pool: &PgPool, session: &SessionKey) -> Result<(), ApiError> {
+    sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+        .bind(&session.0)
+        .execute(pool)
+        .await
+        .map_err(ApiError::database("could not end a session"))?;
+    Ok(())
+}
+
+/// Deletes the sessions that have expired. They are already refused, so this only keeps the
+/// table from growing; sign-in does it, which is often enough.
+pub async fn sweep_expired_sessions<'c>(executor: impl PgExecutor<'c>) -> Result<(), ApiError> {
+    sqlx::query("DELETE FROM sessions WHERE last_seen_at <= now() - make_interval(secs => $1)")
+        .bind(SESSION_LIFETIME.as_secs_f64())
+        .execute(executor)
+        .await
+        .map_err(ApiError::database("could not sweep expired sessions"))?;
+    Ok(())
 }
 
 fn new_token() -> Result<String, ApiError> {

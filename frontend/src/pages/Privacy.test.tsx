@@ -34,11 +34,49 @@ describe("the privacy policy", () => {
     expect(html).toContain("the game’s state");
   });
 
-  it("says what the browser keeps, under the keys the code uses", () => {
+  it("says what an account keeps on the server: a hash of the password and of each session's token", () => {
+    const html = privacy();
+
+    expect(html).toContain("your username");
+    expect(html).toContain("your password as a hash that can’t be turned back into the password");
+    expect(html).toContain("a hash of its token, when it was made and when it was last used");
+    expect(html).toContain("your access token, if you are a guest");
+    // Not an email: an account has none.
+    expect(html).toContain("and no email address");
+    expect(html).toContain("a lost password can’t be reset");
+  });
+
+  it("says how long a session lasts", () => {
+    const html = privacy();
+
+    expect(html).toContain("has not been used for 30 days stops working");
+    expect(html).toContain("signing out ends it at once");
+  });
+
+  it("says what the browser keeps, under the keys the code uses, including the username of an account", () => {
     const html = privacy();
 
     expect(html).toContain("<code>games.session</code>");
     expect(html).toContain("<code>games.volume</code>");
+    expect(html).toContain("and your username if you have an account");
+  });
+
+  it("says that the username is the name in games, that nobody else can have it, and that guests are marked", () => {
+    const html = privacy();
+
+    expect(html).toContain("Your username is your name in games.");
+    expect(html).toContain("Nobody else can have it, whatever its case, and you can’t change it later.");
+    expect(html).toContain("It replaces the display name you had as a guest.");
+    expect(html).toContain("other players see it with “(guest)” after it");
+    expect(html).toContain("If you have an account, your username is shown as your name.");
+    expect(html).not.toContain("Your username is not shown to anyone");
+  });
+
+  it("says that only a guest's name can be changed", () => {
+    const html = privacy();
+
+    expect(html).toContain("If you are a guest, you can change your display name at any time");
+    expect(html).toContain("The name of an account is its username, which can’t be changed.");
   });
 
   it("says who can see a game, including anyone who only has the link", () => {
@@ -64,8 +102,25 @@ describe("the privacy policy", () => {
     expect(html).not.toContain("does not record");
   });
 
-  it("says that nothing is deleted on its own and there is no button for it", () => {
-    expect(privacy()).toContain("no button on the site to delete them yourself");
+  it("says that a user can delete themselves, and what that does to their games", () => {
+    const html = privacy();
+
+    expect(html).toContain("You can delete your user");
+    expect(html).toContain("from the same menu, whether you have an account or are a guest");
+    expect(html).toContain("Your username (your name), password hash, sessions and display name are deleted.");
+    expect(html).toContain("Games you are playing against another person are forfeited, so they win");
+    expect(html).toContain("as do your finished games against other people");
+    expect(html).toContain("Games against the bot, and games nobody else has joined, are deleted.");
+    expect(html).toContain("It can’t be undone.");
+    expect(html).not.toContain("no button on the site to delete them yourself");
+  });
+
+  it("points to the account menu for the display name and for signing out", () => {
+    const html = privacy();
+
+    expect(html).toContain("from the account menu in the top right corner");
+    expect(html).toContain("You can sign out from the same menu");
+    expect(html).toContain("<strong>You can delete your user</strong> from the same menu");
   });
 
   it("names the company that runs the site and where to write to it", () => {
@@ -81,7 +136,7 @@ describe("the privacy policy", () => {
 
     expect(html).toContain("Acme Ltd runs this site.");
     expect(html).toContain("Acme Ltd, which runs the site, can read everything the server keeps.");
-    expect(html).toContain("kept until Acme Ltd deletes them");
+    expect(html).toContain("or until Acme Ltd deletes them");
     expect(html).not.toContain("Seequ");
   });
 

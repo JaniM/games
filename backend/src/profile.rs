@@ -1,11 +1,17 @@
-//! What a user chooses to show other players. For now that is a display name.
+//! What a user shows other players: a name. A guest chooses it (or has none), and clients show it
+//! with a guest indicator. A registered user's name is their username (see `account`), which
+//! can't be changed here.
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, error::ApiError, room::Rooms};
+use crate::{
+    auth::{AuthSession, AuthUser, touch_session},
+    error::ApiError,
+    room::Rooms,
+};
 
 /// Matches the `CHECK` on `users.name`. Counted in characters, not bytes.
 const MAX_NAME_CHARS: usize = 32;
@@ -14,22 +20,34 @@ const MAX_NAME_CHARS: usize = 32;
 #[serde(rename_all = "camelCase")]
 pub struct Me {
     user_id: Uuid,
-    /// Null until the user picks one.
+    /// What other players see: the username of an account, a guest's own choice, or null for a
+    /// guest who hasn't picked one.
     name: Option<String>,
+    /// The name an account signs in with, which is also its `name`; null for a guest.
+    username: Option<String>,
 }
 
 /// `GET /api/me`: the authenticated user. Clients can use it to check that a
-/// stored token still works.
+/// stored token still works. It is also what keeps a session from expiring (see
+/// `auth::SESSION_LIFETIME`): the site calls it whenever it opens.
 pub async fn me(
-    AuthUser(user_id): AuthUser,
+    AuthSession { user_id, session }: AuthSession,
     State(pool): State<PgPool>,
 ) -> Result<Json<Me>, ApiError> {
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(ApiError::database("could not read a user's name"))?;
-    Ok(Json(Me { user_id, name }))
+    if let Some(session) = session {
+        touch_session(&pool, &session).await?;
+    }
+    let (name, username): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT name, username FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(ApiError::database("could not read a user"))?;
+    Ok(Json(Me {
+        user_id,
+        name,
+        username,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -37,10 +55,11 @@ pub struct NewName {
     name: String,
 }
 
-/// `PATCH /api/me` with `{ "name": "..." }`: sets the display name. Surrounding
+/// `PATCH /api/me` with `{ "name": "..." }`: sets a guest's name. Surrounding
 /// whitespace is dropped. Answers 422 if what is left isn't 1 to 32 characters
-/// without control characters. Returns the updated user. Games the user is playing show the
-/// new name to the other players and watchers at once.
+/// without control characters, and 409 for an account, whose name is its username. Returns the
+/// updated user. Games the user is playing show the new name to the other players and watchers
+/// at once.
 pub async fn set_name(
     AuthUser(user_id): AuthUser,
     State(pool): State<PgPool>,
@@ -50,17 +69,23 @@ pub async fn set_name(
     let name = clean_name(&body.name).ok_or(ApiError::Invalid(
         "name must be 1 to 32 characters, without control characters",
     ))?;
-    sqlx::query("UPDATE users SET name = $2 WHERE id = $1")
+    let changed = sqlx::query("UPDATE users SET name = $2 WHERE id = $1 AND username IS NULL")
         .bind(user_id)
         .bind(name)
         .execute(&pool)
         .await
         .map_err(ApiError::database("could not set a user's name"))?;
+    if changed.rows_affected() == 0 {
+        return Err(ApiError::Conflict(
+            "the name of an account is its username, and can't be changed",
+        ));
+    }
     // Only now, so that the rooms read the new name.
     rooms.name_changed(user_id);
     Ok(Json(Me {
         user_id,
         name: Some(name.to_owned()),
+        username: None,
     }))
 }
 
@@ -94,6 +119,49 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn an_account_cannot_change_its_name_which_is_its_username(pool: PgPool) {
+        let app = crate::test_util::TestApp::new(pool.clone(), crate::game::Games::default());
+        let (_, session) = app.register_account("Ada", "correct horse").await;
+
+        let reply = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(&session)),
+                Some(json!({ "name": "Countess" })),
+            )
+            .await;
+
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        let me = app
+            .send(Method::GET, "/api/me", Some(&bearer(&session)), None)
+            .await;
+        assert_eq!(me.json["name"], "Ada");
+        assert_eq!(me.json["username"], "Ada");
+    }
+
+    #[sqlx::test]
+    async fn a_guest_can_still_pick_any_name_even_one_an_account_has(pool: PgPool) {
+        let app = crate::test_util::TestApp::new(pool.clone(), crate::game::Games::default());
+        app.register_account("Ada", "correct horse").await;
+        let (_, guest) = app.register_user().await;
+
+        let reply = app
+            .send(
+                Method::PATCH,
+                "/api/me",
+                Some(&bearer(&guest)),
+                Some(json!({ "name": "Ada" })),
+            )
+            .await;
+
+        // Two users called Ada: the clients tell them apart by the guest indicator.
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.json["name"], "Ada");
+        assert_eq!(reply.json["username"], serde_json::Value::Null);
+    }
+
+    #[sqlx::test]
     async fn a_new_user_has_no_name(pool: PgPool) {
         let (_, token) = register_user(&pool).await;
 
@@ -109,10 +177,16 @@ mod tests {
 
         let reply = patch_name(&pool, &token, json!({ "name": "Ada" })).await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(reply.json, json!({ "userId": user_id, "name": "Ada" }));
+        assert_eq!(
+            reply.json,
+            json!({ "userId": user_id, "name": "Ada", "username": null })
+        );
 
         let reply = get_me(&pool, &token).await;
-        assert_eq!(reply.json, json!({ "userId": user_id, "name": "Ada" }));
+        assert_eq!(
+            reply.json,
+            json!({ "userId": user_id, "name": "Ada", "username": null })
+        );
     }
 
     #[sqlx::test]

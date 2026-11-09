@@ -7,7 +7,9 @@ const MAX_NAME_LENGTH = 32;
 
 /**
  * The user's display name, with a way to change it. Shows the name (or a prompt to
- * pick one) as a button; clicking it swaps in a small form.
+ * pick one) as a button; clicking it swaps in a small form. It lives in the account menu, so
+ * Esc in the form only cancels the edit: it says it has used the key, and the menu leaves it
+ * alone (see `closesMenu`).
  */
 export function NameControl() {
   const profile = useQuery(profileState.get(PROFILE_ID));
@@ -37,7 +39,9 @@ export function NameControl() {
           autoFocus
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setDraft(null);
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            setDraft(null);
           }}
         />
         <button className="button button-small" type="submit" disabled={!draft.trim()}>

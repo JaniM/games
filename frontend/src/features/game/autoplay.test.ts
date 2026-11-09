@@ -68,7 +68,7 @@ describe("what auto-play does", () => {
 
   it("does nothing before the game starts, once it is over, or with no step to play", () => {
     expect(autoplayAction(snapshotOf({ state: null }), "user-a")).toBeNull();
-    const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     expect(autoplayAction(snapshotOf({ state: over }), "user-a")).toBeNull();
     const stuck = startingState(moving([6, 3], []));
     expect(autoplayAction(snapshotOf({ state: stuck }), "user-a")).toBeNull();

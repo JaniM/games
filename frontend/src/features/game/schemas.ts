@@ -24,11 +24,15 @@ export const phaseSchema = z.discriminatedUnion("type", [
     remaining: z.array(z.number().int()),
     played: z.array(stepSchema),
   }),
-  /** `winner` is null for a draw. `points` is 2 for a mars. */
+  /**
+   * `winner` is null for a draw. `points` is 2 for a mars. `forfeited`: the other player gave up,
+   * which scores the winner 1 point whatever the board looks like (D10 in the rules).
+   */
   z.object({
     type: z.literal("over"),
     winner: seatSchema.nullable(),
     points: z.number().int(),
+    forfeited: z.boolean(),
   }),
 ]);
 export type Phase = z.infer<typeof phaseSchema>;
@@ -126,6 +130,8 @@ export const incomingSnapshotSchema = z.object({
   stateVersion: z.number().int(),
   players: z.array(z.string()),
   playerNames: z.array(z.string().nullable()),
+  /** True for a player with no account: shown with a guest indicator. */
+  playerGuests: z.array(z.boolean()),
   state: z.unknown(),
   /** Left out by a server from before rematches, which means none. */
   rematch: rematchSchema.nullish(),
@@ -136,8 +142,16 @@ export const snapshotSchema = z.object({
   revision: z.number().int(),
   /** User ids by seat. */
   players: z.array(z.string()),
-  /** Display names by seat; null for a player who has not picked one. */
+  /**
+   * Names by seat: an account's username, or what a guest typed. Null for a guest who has not
+   * picked one.
+   */
   playerNames: z.array(z.string().nullable()),
+  /**
+   * Who is a guest, by seat. A guest's name is only what they typed, so it is shown with a guest
+   * indicator (see `playerName`); the bot and a player who has deleted themselves are not guests.
+   */
+  playerGuests: z.array(z.boolean()),
   state: stateSchema.nullable(),
   /** Null until a player of the finished game asks to play it again. */
   rematch: rematchSchema.nullable(),
@@ -156,6 +170,12 @@ export const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("move"), from: z.number().int(), die: z.number().int() }),
   /** Takes back the last step of the turn in progress, and gives its die back. */
   z.object({ type: z.literal("undo") }),
+  /**
+   * Gives up the game (D10). Not an action of the game: the server has a message of its own
+   * for it, which `sendActions` sends in its place. It is here so that it goes out the way
+   * actions do, one at a time, with the page waiting for the answer.
+   */
+  z.object({ type: z.literal("forfeit") }),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 

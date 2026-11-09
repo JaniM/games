@@ -108,6 +108,18 @@ pub trait Game: 'static {
         action: Self::Action,
     ) -> Result<Self::State, Rejection>;
 
+    /// The state after `seat` gives up the game, or why it can't. The other players win.
+    ///
+    /// Unlike an action it may come at any time, not only on `seat`'s turn, so it doesn't go
+    /// through [`Game::apply`]. A game that is already over refuses it. The default refuses
+    /// everything: a game for two or more players says how a forfeit ends it.
+    ///
+    /// Besides a player's own request, the server forfeits for a user who deletes their account.
+    fn forfeit(state: &Self::State, seat: usize) -> Result<Self::State, Rejection> {
+        let _ = (state, seat);
+        Err(Rejection::new("this game can't be forfeited"))
+    }
+
     /// The action the computer opponent plays for `seat` in this state, or `None` if it has
     /// nothing to play: it isn't `seat`'s turn, or the game is over. Called again after every
     /// action, so the bot needs no memory of its own, and a game that was stored half way
@@ -142,6 +154,9 @@ pub trait Live: Send {
     /// action is rejected like one against the rules.
     fn apply(&self, seat: usize, action: Value) -> Result<Box<dyn Live>, Rejection>;
 
+    /// The game after `seat` gives up. See [`Game::forfeit`].
+    fn forfeit(&self, seat: usize) -> Result<Box<dyn Live>, Rejection>;
+
     /// The state as JSON, to store and to send to clients.
     fn to_json(&self) -> Result<Value, StateError>;
 
@@ -163,6 +178,11 @@ impl<G: Game> Live for Running<G> {
         let action = serde_json::from_value::<G::Action>(action)
             .map_err(|err| Rejection::new(format!("not a valid action: {err}")))?;
         let next = G::apply(&self.0, seat, action)?;
+        Ok(Box::new(Running::<G>(next)))
+    }
+
+    fn forfeit(&self, seat: usize) -> Result<Box<dyn Live>, Rejection> {
+        let next = G::forfeit(&self.0, seat)?;
         Ok(Box::new(Running::<G>(next)))
     }
 

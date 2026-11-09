@@ -11,7 +11,7 @@ const step = (to: number | "off"): Motion => ({
   to: { at: to, count: 1 },
 });
 const over = (winner: 0 | 1 | null) =>
-  startingState({ points: [board({}), board({ 1: 15 })], phase: { type: "over", winner, points: 1 } });
+  startingState({ points: [board({}), board({ 1: 15 })], phase: { type: "over", winner, points: 1, forfeited: false } });
 
 describe("the sounds for a change", () => {
   it("rattles the dice at the moment they are thrown", () => {

@@ -118,7 +118,7 @@ describe("a step", () => {
     const after = startingState({
       points: [board({}), board({ 1: 15 })],
       off: [15, 0],
-      phase: { type: "over", winner: 0, points: 2 },
+      phase: { type: "over", winner: 0, points: 2, forfeited: false },
     });
 
     expect(motionBetween(before, after, 0)).toMatchObject({
@@ -187,7 +187,7 @@ describe("going back through the game, as a review does", () => {
     const over = startingState({
       points: [board({}), board({ 1: 15 })],
       off: [15, 0],
-      phase: { type: "over", winner: 0, points: 2 },
+      phase: { type: "over", winner: 0, points: 2, forfeited: false },
     });
 
     expect(motionBetween(over, before, 0)).toEqual({
@@ -277,7 +277,7 @@ describe("seeing a game end", () => {
   const over = startingState({
     points: [board({}), board({ 1: 15 })],
     off: [15, 0],
-    phase: { type: "over", winner: 0, points: 1 },
+    phase: { type: "over", winner: 0, points: 1, forfeited: false },
   });
   const held = (state: typeof nearlyOver, revision: number) => ({
     revision,

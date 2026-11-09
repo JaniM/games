@@ -206,6 +206,23 @@ export const submitAction = op((tx, args: { gameId: string; action: Action }) =>
   send(tx, args.gameId, action, to === "off" ? null : to, []);
 });
 
+/**
+ * Gives up the game (D10): sends the forfeit and waits for the answer, which is the snapshot
+ * of the finished game. Ignored unless the user is a player in a game that is on, the
+ * connection is open and no action is waiting for its answer. Unlike a move it doesn't wait for
+ * the user's turn, and it ends a combined move that is half played: what is still queued is
+ * dropped, since the game will be over.
+ */
+export const forfeitGame = op((tx, args: { gameId: string }) => {
+  const view = tx.read(gameViews.get(args.gameId));
+  if (view?.connection !== "open" || view.busy) return;
+  const state = view.snapshot?.state;
+  const userId = tx.read(sessionState.get(SESSION_ID))?.userId ?? null;
+  if (!view.snapshot || !state || state.phase.type === "over") return;
+  if (seatOf(view.snapshot, userId) === null) return;
+  send(tx, args.gameId, { type: "forfeit" }, null, []);
+});
+
 /** Queues `action` to go out, and waits for its answer. `queued` are the steps to send after it. */
 function send(tx: Tx, gameId: string, action: Action, selected: number | null, queued: Step[]) {
   tx.insert(gameActions, { gameId, action });

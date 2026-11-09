@@ -54,6 +54,15 @@ export const loadGames = op((tx) => {
   tx.upsert(gamesList, { id: GAMES_LIST_ID, state: "loading", error: null });
 });
 
+/**
+ * Drops the games shown and reads them again, because the user is someone else now (they signed
+ * in or out, or deleted themselves). The `loadGamesList` effect reads once the session is ready.
+ */
+export const forgetGames = op((tx) => {
+  for (const game of tx.read(myGames.all())) tx.delete(myGames, game.gameId);
+  tx.upsert(gamesList, { id: GAMES_LIST_ID, state: "loading", error: null });
+});
+
 /** Replaces the user's games with what the server listed. */
 export const gamesLoaded = op((tx, args: { games: z.infer<typeof gamesReplySchema>["games"] }) => {
   const listed = new Set(args.games.map((game) => game.gameId));

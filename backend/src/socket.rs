@@ -16,16 +16,21 @@
 //!
 //! ```json
 //! { "type": "snapshot", "gameId": "…", "kind": "…", "revision": 3, "stateVersion": 1,
-//!   "players": ["<user id of seat 0>", "…"], "playerNames": ["Ada", null], "state": { … },
+//!   "players": ["<user id of seat 0>", "…"], "playerNames": ["Ada", null],
+//!   "playerGuests": [false, true], "state": { … },
 //!   "rematch": null }
 //! ```
 //!
 //! `state` is whatever the game defines, and is null until every seat is taken. A snapshot
 //! holds only the newest state; the ones before it are in the game's history, which is read
 //! over HTTP (see `history`) and whose `revision`s are the ones snapshots carry.
-//! `playerNames` is parallel to `players` and null for a player who has no name. A player
-//! who changes their name is published at once, as a snapshot with the same `revision` as
-//! before (the game did not change), so replace what you have unless `revision` is lower.
+//! `playerNames` is parallel to `players` and null for a player who has no name. A registered
+//! user's name is their username, which nobody else has. `playerGuests` is parallel too, and true
+//! for a guest, who has no account and whose name is only what they typed: show it with a guest
+//! indicator. The bot and a user who has deleted themselves are not guests. A player who changes
+//! their name, or a guest who makes an account, is published at once, as a snapshot with the same
+//! `revision` as before (the game did not change), so replace what you have unless `revision`
+//! is lower.
 //!
 //! `rematch` is null until a player of the finished game asks to play it again (over HTTP,
 //! see `lobby`). Then it is `{ "type": "offered", "by": <seat> }` until the other player
@@ -54,6 +59,15 @@
 //! The codes are `rejected` (against the rules), `not-started`, `not-a-player` (the
 //! sender has no seat in the game), `bad-message` and `internal`. The connection stays
 //! open after an error.
+//!
+//! A player can also give up the game, on either turn, with
+//!
+//! ```json
+//! { "type": "forfeit" }
+//! ```
+//!
+//! The other players win. It is accepted and refused like an action: the new state comes back
+//! to everyone as a snapshot, and a game that is already over answers `rejected`.
 //!
 //! The server closes the socket, with a code from [`close`], if the client can't
 //! be admitted or the game goes away. After 1012 the client can reconnect for a fresh start.
@@ -104,6 +118,7 @@ pub mod close {
 enum ClientMessage {
     Hello { token: String },
     Action { action: Value },
+    Forfeit,
 }
 
 #[derive(Serialize)]
@@ -224,14 +239,15 @@ async fn on_text(
     connection: &Connection,
     text: &str,
 ) -> Result<(), Failure> {
-    let action = match serde_json::from_str::<ClientMessage>(text) {
-        Ok(ClientMessage::Action { action }) => action,
+    let done = match serde_json::from_str::<ClientMessage>(text) {
+        Ok(ClientMessage::Action { action }) => connection.act(action).await,
+        Ok(ClientMessage::Forfeit) => connection.forfeit().await,
         Ok(ClientMessage::Hello { .. }) => {
             return report(socket, "bad-message", "already signed in").await;
         }
         Err(err) => return report(socket, "bad-message", &err.to_string()).await,
     };
-    match connection.act(action).await {
+    match done {
         // The new state reaches this client like everyone else's, as a snapshot.
         Ok(()) => Ok(()),
         Err(RoomError::Rejected(reason)) => report(socket, "rejected", &reason).await,
@@ -797,5 +813,310 @@ mod tests {
         let seen = following.next().await;
         assert_eq!(seen["state"], json!({ "over": false }));
         assert_eq!(seen["rematch"], json!(null));
+    }
+}
+
+#[cfg(test)]
+mod forfeit_tests {
+    use serde_json::{Value, json};
+    use sqlx::PgPool;
+
+    use crate::{
+        game::Games,
+        long_backgammon::LongBackgammon,
+        test_util::{Client, Tally, TestApp},
+    };
+
+    fn app(pool: &PgPool) -> TestApp {
+        TestApp::new(
+            pool.clone(),
+            Games::default().with::<LongBackgammon>().with::<Tally>(),
+        )
+    }
+
+    fn forfeit() -> Value {
+        json!({ "type": "forfeit" })
+    }
+
+    /// A started game of `kind` between two new users: (game id, tokens by seat).
+    async fn started(app: &TestApp, kind: &str) -> (String, [String; 2]) {
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let game_id = app.create_game(&first, kind).await;
+        app.join_game(&second, &game_id).await;
+        (game_id, [first, second])
+    }
+
+    /// Reads snapshots until the game is over. Returns that one.
+    async fn until_over(client: &mut Client) -> Value {
+        for _ in 0..50 {
+            let snapshot = client.next().await;
+            if snapshot["state"]["phase"]["type"] == "over" {
+                return snapshot;
+            }
+        }
+        panic!("the game never ended");
+    }
+
+    async fn finished(pool: &PgPool, game_id: &str) -> bool {
+        sqlx::query_scalar("SELECT finished FROM games WHERE id = $1")
+            .bind(game_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Both players connected to a started game of backgammon, past their first snapshot.
+    /// Returns the game id, the seat to move, and the clients by seat.
+    async fn connected(
+        app: &TestApp,
+        server: &crate::test_util::Server,
+    ) -> (String, usize, [Client; 2]) {
+        let (game_id, [first, second]) = started(app, "long-backgammon").await;
+        let mut ada = Client::sign_in(server, &game_id, &first).await;
+        let mut grace = Client::sign_in(server, &game_id, &second).await;
+        let snapshot = ada.next().await;
+        grace.next().await;
+        let turn = snapshot["state"]["turn"].as_u64().unwrap() as usize;
+        (game_id, turn, [ada, grace])
+    }
+
+    #[sqlx::test]
+    async fn a_player_can_forfeit_on_the_opponents_turn_and_everyone_sees_it(pool: PgPool) {
+        let app = app(&pool);
+        let server = app.serve().await;
+        let (game_id, turn, mut clients) = connected(&app, &server).await;
+        let waiting = 1 - turn;
+
+        clients[waiting].say(forfeit()).await;
+
+        for client in &mut clients {
+            let snapshot = client.next().await;
+            assert_eq!(snapshot["revision"], 2);
+            assert_eq!(
+                snapshot["state"]["phase"],
+                json!({ "type": "over", "winner": turn, "points": 1, "forfeited": true })
+            );
+            assert_eq!(snapshot["state"]["legal"], json!([]));
+        }
+        assert!(finished(&pool, &game_id).await);
+    }
+
+    #[sqlx::test]
+    async fn the_player_to_move_can_forfeit_too(pool: PgPool) {
+        let app = app(&pool);
+        let server = app.serve().await;
+        let (_, turn, mut clients) = connected(&app, &server).await;
+
+        clients[turn].say(forfeit()).await;
+
+        let snapshot = clients[1 - turn].next().await;
+        assert_eq!(snapshot["state"]["phase"]["winner"], 1 - turn);
+        assert_eq!(snapshot["state"]["phase"]["forfeited"], true);
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_is_over_cannot_be_forfeited_again(pool: PgPool) {
+        let app = app(&pool);
+        let server = app.serve().await;
+        let (_, _, [mut ada, mut grace]) = connected(&app, &server).await;
+        ada.say(forfeit()).await;
+        until_over(&mut ada).await;
+        until_over(&mut grace).await;
+
+        grace.say(forfeit()).await;
+
+        let error = grace.next().await;
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "rejected");
+        assert_eq!(error["message"], "the game is over");
+        // The result is what the first forfeit made it.
+        ada.expect_silence().await;
+    }
+
+    #[sqlx::test]
+    async fn a_watcher_cannot_forfeit(pool: PgPool) {
+        let app = app(&pool);
+        let (game_id, _) = started(&app, "long-backgammon").await;
+        let (_, watcher_token) = app.register_user().await;
+        let server = app.serve().await;
+        let mut watcher = Client::sign_in(&server, &game_id, &watcher_token).await;
+        watcher.next().await;
+
+        watcher.say(forfeit()).await;
+
+        let error = watcher.next().await;
+        assert_eq!(error["code"], "not-a-player");
+        watcher.expect_silence().await;
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_has_not_started_cannot_be_forfeited(pool: PgPool) {
+        let app = app(&pool);
+        let (_, creator) = app.register_user().await;
+        let game_id = app.create_game(&creator, "long-backgammon").await;
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &creator).await;
+        client.next().await;
+
+        client.say(forfeit()).await;
+
+        assert_eq!(client.next().await["code"], "not-started");
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_cannot_be_forfeited_says_so(pool: PgPool) {
+        let app = app(&pool);
+        let (game_id, [first, _]) = started(&app, "tally").await;
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &first).await;
+        client.next().await;
+
+        client.say(forfeit()).await;
+
+        let error = client.next().await;
+        assert_eq!(error["code"], "rejected");
+        assert_eq!(error["message"], "this game can't be forfeited");
+    }
+
+    #[sqlx::test]
+    async fn forfeiting_a_game_against_the_bot_ends_it_and_the_bot_stops(pool: PgPool) {
+        let app = app(&pool);
+        let (_, human) = app.register_user().await;
+        let reply = app.create_bot_game(&human, "long-backgammon").await;
+        let game_id = reply.json["gameId"].as_str().unwrap().to_owned();
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &human).await;
+        client.next().await;
+
+        client.say(forfeit()).await;
+
+        // The bot is seat 1; it may have been playing as the forfeit arrived.
+        let snapshot = until_over(&mut client).await;
+        assert_eq!(snapshot["state"]["phase"]["winner"], 1);
+        assert_eq!(snapshot["state"]["phase"]["forfeited"], true);
+        client.expect_silence().await;
+        assert!(finished(&pool, &game_id).await);
+    }
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use axum::http::Method;
+    use serde_json::json;
+    use sqlx::PgPool;
+
+    use crate::{
+        game::Games,
+        test_util::{Client, Tally, TestApp, bearer},
+    };
+
+    const PASSWORD: &str = "correct horse battery";
+
+    fn app(pool: &PgPool) -> TestApp {
+        TestApp::new(pool.clone(), Games::default().with::<Tally>())
+    }
+
+    async fn rename(app: &TestApp, token: &str, name: &str) {
+        app.send(
+            Method::PATCH,
+            "/api/me",
+            Some(&bearer(token)),
+            Some(json!({ "name": name })),
+        )
+        .await;
+    }
+
+    #[sqlx::test]
+    async fn snapshots_say_which_players_are_guests(pool: PgPool) {
+        let app = app(&pool);
+        let (_, ada) = app.register_account("Ada", PASSWORD).await;
+        let (_, guest) = app.register_user().await;
+        rename(&app, &guest, "Ada").await;
+        let game_id = app.create_game(&ada, "tally").await;
+        app.join_game(&guest, &game_id).await;
+        let server = app.serve().await;
+
+        let mut client = Client::sign_in(&server, &game_id, &ada).await;
+        let snapshot = client.next().await;
+
+        // Two players called Ada, and only the guest is marked as one.
+        assert_eq!(snapshot["playerNames"], json!(["Ada", "Ada"]));
+        assert_eq!(snapshot["playerGuests"], json!([false, true]));
+    }
+
+    #[sqlx::test]
+    async fn the_bot_is_not_a_guest(pool: PgPool) {
+        let app = app(&pool);
+        let (_, human) = app.register_user().await;
+        let reply = app.create_bot_game(&human, "tally").await;
+        let game_id = reply.json["gameId"].as_str().unwrap().to_owned();
+        let server = app.serve().await;
+
+        let mut client = Client::sign_in(&server, &game_id, &human).await;
+        let snapshot = client.next().await;
+
+        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+        assert_eq!(snapshot["playerGuests"], json!([true, false]));
+    }
+
+    #[sqlx::test]
+    async fn a_guest_who_makes_an_account_is_published_at_once_under_the_username(pool: PgPool) {
+        let app = app(&pool);
+        let (_, creator) = app.register_user().await;
+        rename(&app, &creator, "Ada L").await;
+        let game_id = app.create_game(&creator, "tally").await;
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &creator).await;
+        let before = client.next().await;
+        assert_eq!(before["playerNames"], json!(["Ada L"]));
+        assert_eq!(before["playerGuests"], json!([true]));
+
+        let made = app.create_account(&creator, "ada", PASSWORD).await;
+        assert_eq!(made.status, axum::http::StatusCode::CREATED);
+
+        let after = client.next().await;
+        assert_eq!(after["playerNames"], json!(["ada"]));
+        assert_eq!(after["playerGuests"], json!([false]));
+        // Nothing about the game changed.
+        assert_eq!(after["revision"], before["revision"]);
+    }
+
+    #[sqlx::test]
+    async fn a_guest_who_makes_an_account_with_the_same_name_is_published_all_the_same(
+        pool: PgPool,
+    ) {
+        let app = app(&pool);
+        let (_, creator) = app.register_user().await;
+        rename(&app, &creator, "ada").await;
+        let game_id = app.create_game(&creator, "tally").await;
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &creator).await;
+        client.next().await;
+
+        app.create_account(&creator, "ada", PASSWORD).await;
+
+        // The name is the same, but the user is not a guest any more.
+        let after = client.next().await;
+        assert_eq!(after["playerNames"], json!(["ada"]));
+        assert_eq!(after["playerGuests"], json!([false]));
+    }
+
+    #[sqlx::test]
+    async fn a_user_who_deleted_themselves_is_not_a_guest(pool: PgPool) {
+        let app = app(&pool);
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let game_id = app.create_game(&first, "tally").await;
+        app.join_game(&second, &game_id).await;
+        app.send(Method::DELETE, "/api/me", Some(&bearer(&first)), None)
+            .await;
+        let server = app.serve().await;
+
+        let mut client = Client::sign_in(&server, &game_id, &second).await;
+        let snapshot = client.next().await;
+
+        assert_eq!(snapshot["playerNames"], json!(["Deleted player", null]));
+        assert_eq!(snapshot["playerGuests"], json!([false, true]));
     }
 }

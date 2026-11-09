@@ -1,6 +1,6 @@
 import { createDb } from "millpond";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
+import { BOT_USER_ID, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
 import { LOCATION_ID, locationState, router } from "../router";
 import { session } from "../session";
 import { GAMES_LIST_ID, NEW_GAME_ID, gamesList, lobby, myGames, newGame } from "./index";
@@ -250,6 +250,7 @@ describe("your games", () => {
         finished: false,
         updatedAt: 10,
         playerNames: [null],
+        playerGuests: [true],
       },
       {
         gameId: gameIdOf(2),
@@ -260,6 +261,7 @@ describe("your games", () => {
         finished: false,
         updatedAt: 20,
         playerNames: [null, null],
+        playerGuests: [true, true],
       },
     ]);
   });
@@ -289,6 +291,28 @@ describe("your games", () => {
     await settle();
 
     expect(db.read(myGames.get(gameIdOf(1)))?.playerNames).toEqual(["Ada", "Grace", null]);
+  });
+
+  it("lists which of them are guests: an account is not, the bot is not, a guest who picked 'Ada' is", async () => {
+    const { db, server } = setup();
+    await settle(); // registers as user-1, a guest
+    const me = server.users.get(issued(1).accessToken);
+    if (me) me.name = "Ada";
+    const grace = server.addAccount("grace", "correct horse", issued(2));
+    server.addGame({ ...mine(1, [grace.userId]), updatedAt: 10 });
+    server.addGame({ id: gameIdOf(2), kind: "long-backgammon", players: [issued(1).userId, BOT_USER_ID] });
+
+    db.ops.lobby.loadGames();
+    await settle();
+
+    expect(db.read(myGames.get(gameIdOf(1)))).toMatchObject({
+      playerNames: ["Ada", "grace"],
+      playerGuests: [true, false],
+    });
+    expect(db.read(myGames.get(gameIdOf(2)))).toMatchObject({
+      playerNames: ["Ada", "Bot"],
+      playerGuests: [true, false],
+    });
   });
 
   it("lists games of every kind oldest first by the index, so the page needs no sort", async () => {

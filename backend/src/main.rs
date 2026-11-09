@@ -10,8 +10,9 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::EnvFilter;
 
-use crate::{game::Games, room::Rooms};
+use crate::{account::Accounts, game::Games, room::Rooms};
 
+mod account;
 mod auth;
 mod bot;
 mod error;
@@ -61,17 +62,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// What handlers share. They take the parts they need with `State<PgPool>` or `State<Rooms>`.
+/// What handlers share. They take the parts they need with `State<PgPool>`, `State<Rooms>` or
+/// `State<Accounts>`.
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
     rooms: Rooms,
+    accounts: Accounts,
 }
 
 impl AppState {
     fn new(pool: PgPool, games: Games) -> Self {
         Self {
             rooms: Rooms::new(pool.clone(), games),
+            accounts: Accounts::new(),
             pool,
         }
     }
@@ -89,11 +93,25 @@ impl FromRef<AppState> for Rooms {
     }
 }
 
+impl FromRef<AppState> for Accounts {
+    fn from_ref(state: &AppState) -> Self {
+        state.accounts.clone()
+    }
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/register", post(auth::register))
-        .route("/api/me", get(profile::me).patch(profile::set_name))
+        .route("/api/account", post(account::create))
+        .route("/api/login", post(account::login))
+        .route("/api/logout", post(account::logout))
+        .route(
+            "/api/me",
+            get(profile::me)
+                .patch(profile::set_name)
+                .delete(account::delete),
+        )
         .route(
             "/api/games",
             get(lobby::list_games).post(lobby::create_game),

@@ -4,6 +4,7 @@ import { Modal } from "../Modal";
 import type { gamesList, myGames, newGame } from "../features/lobby";
 import { gamePath } from "../features/router";
 import type { GameInfo } from "../games";
+import { playerName } from "../playerName";
 
 export type MyGameRow = RowOf<typeof myGames>;
 export type GamesListRow = RowOf<typeof gamesList>;
@@ -97,14 +98,15 @@ export function HomeScreen({
 }
 
 /**
- * Who is in a game, by seat: "Ada (you) vs Grace". As on the game page, you are "You" if you
- * have no name, and another player without one is "Player 2".
+ * Who is in a game, by seat: "Ada (you) vs Grace (guest)". As on the game page, you are "You" if
+ * you have no name, another player without one is "Player 2", and another player who is a guest is
+ * marked as one (see `playerName`).
  */
-export function playersText(game: Pick<MyGameRow, "seat" | "playerNames">): string {
+export function playersText(game: Pick<MyGameRow, "seat" | "playerNames" | "playerGuests">): string {
   return game.playerNames
     .map((name, seat) => {
       if (seat === game.seat) return name ? `${name} (you)` : "You";
-      return name ?? `Player ${seat + 1}`;
+      return playerName(name, game.playerGuests[seat] ?? false, seat);
     })
     .join(" vs ");
 }

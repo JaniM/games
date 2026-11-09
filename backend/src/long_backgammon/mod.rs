@@ -33,8 +33,11 @@
 //! - `{ "type": "move", "dice": [a, b], "remaining": […], "played": [step, …] }`: `turn`
 //!   rolled `dice`, and `remaining` are the dice still to play (four for a double). `played`
 //!   are this turn's steps so far.
-//! - `{ "type": "over", "winner": 0, "points": 1 }`: the game is over. `winner` is a seat, or
-//!   null for a draw. `points` are what it scored: 1 (oyn), 2 (mars), or 0 for a draw.
+//! - `{ "type": "over", "winner": 0, "points": 1, "forfeited": false }`: the game is over.
+//!   `winner` is a seat, or null for a draw. `points` are what it scored: 1 (oyn), 2 (mars), or
+//!   0 for a draw. `forfeited` is true when the other player gave up (D10), which always scores
+//!   1 point for `winner`; states stored before forfeits existed have no `forfeited`, meaning
+//!   false.
 //!
 //! A step is `{ "from": 3, "die": 5 }`: the checker on own point `from` moves `die` points,
 //! to `from + die`, or off the board from 25 on. `legal` lists exactly the steps `turn` may
@@ -59,7 +62,8 @@
 //! `{ "type": "roll" }` rolls the dice for the player to move, and
 //! `{ "type": "move", "from": 3, "die": 5 }` plays a step. `{ "type": "undo" }` takes back
 //! the last step of the turn in progress and gives its die back (D7). There is no action for
-//! passing.
+//! passing. Giving up is not an action either: a player sends the socket's own `forfeit`
+//! message (D10), which is allowed on either turn.
 
 mod bot;
 mod rules;
@@ -102,8 +106,16 @@ enum Phase {
         /// A seat, or none for a draw.
         winner: Option<usize>,
         points: u8,
+        /// The loser gave up (D10): `winner` is the other seat and `points` is
+        /// [`FORFEIT_POINTS`], whatever the board looks like. Games stored before forfeits
+        /// existed don't have it, and were not forfeited.
+        #[serde(default)]
+        forfeited: bool,
     },
 }
+
+/// What a forfeit scores for the winner, whatever the loser has borne off (D10).
+const FORFEIT_POINTS: u8 = 1;
 
 /// A turn that has ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +260,27 @@ impl State {
     }
 }
 
+impl State {
+    /// The state after `seat` gives up (D10): the other seat wins [`FORFEIT_POINTS`]. Not a
+    /// move, so it is allowed on either turn and in the middle of one. A game that is over
+    /// can't be given up.
+    fn forfeit(&self, seat: usize) -> Result<State, Rejection> {
+        if seat >= 2 {
+            return Err(Rejection::new("there is no such seat"));
+        }
+        if matches!(self.position.phase, Phase::Over { .. }) {
+            return Err(Rejection::new("the game is over"));
+        }
+        let mut position = self.position.clone();
+        position.phase = Phase::Over {
+            winner: Some(1 - seat),
+            points: FORFEIT_POINTS,
+            forfeited: true,
+        };
+        Ok(Self::reached(position))
+    }
+}
+
 impl Position {
     /// A new game: all of both players' checkers on their heads, and White to roll.
     fn new(white: usize) -> Self {
@@ -289,9 +322,14 @@ impl Position {
                     return Err("the dice are not dice".to_owned());
                 }
             }
-            Phase::Over { winner, .. } => {
+            Phase::Over {
+                winner, forfeited, ..
+            } => {
                 if let Some(winner) = winner {
                     seat(*winner)?;
+                }
+                if *forfeited && winner.is_none() {
+                    return Err("a forfeited game has a winner".to_owned());
                 }
             }
             Phase::Roll => {}
@@ -436,7 +474,11 @@ impl Position {
                 // Mars: the loser has borne off nothing. Judged now, after any last throw.
                 let points =
                     winner.map_or(0, |winner| if self.off[1 - winner] == 0 { 2 } else { 1 });
-                self.phase = Phase::Over { winner, points };
+                self.phase = Phase::Over {
+                    winner,
+                    points,
+                    forfeited: false,
+                };
             }
             None => self.turn = other,
         }
@@ -472,6 +514,10 @@ impl Game for LongBackgammon {
 
     fn apply(state: &State, seat: usize, action: Action) -> Result<State, Rejection> {
         state.act(seat, action, || roll().ok())
+    }
+
+    fn forfeit(state: &State, seat: usize) -> Result<State, Rejection> {
+        state.forfeit(seat)
     }
 
     fn bot_action(state: &State, seat: usize) -> Option<Action> {
@@ -560,6 +606,7 @@ mod tests {
         position.phase = Phase::Over {
             winner: Some(0),
             points: 1,
+            forfeited: false,
         };
         assert!(LongBackgammon::is_over(&state(position)));
     }
@@ -931,6 +978,7 @@ mod tests {
         over.phase = Phase::Over {
             winner: Some(0),
             points: 1,
+            forfeited: false,
         };
 
         assert_eq!(reason(undo(&state(over), 0)), "the game is over");
@@ -1096,7 +1144,8 @@ mod tests {
             game.position.phase,
             Phase::Over {
                 winner: Some(0),
-                points: 1
+                points: 1,
+                forfeited: false,
             }
         );
         assert_eq!(game.legal, Vec::new());
@@ -1118,7 +1167,8 @@ mod tests {
             game.position.phase,
             Phase::Over {
                 winner: None,
-                points: 0
+                points: 0,
+                forfeited: false,
             }
         );
     }
@@ -1138,7 +1188,8 @@ mod tests {
             game.position.phase,
             Phase::Over {
                 winner: Some(0),
-                points: 2
+                points: 2,
+                forfeited: false,
             }
         );
     }
@@ -1158,7 +1209,8 @@ mod tests {
             game.position.phase,
             Phase::Over {
                 winner: Some(1),
-                points: 1
+                points: 1,
+                forfeited: false,
             }
         );
         assert!(!game.position.last_throw);
@@ -1177,7 +1229,8 @@ mod tests {
             game.position.phase,
             Phase::Over {
                 winner: Some(1),
-                points: 2
+                points: 2,
+                forfeited: false,
             }
         );
     }
@@ -1504,7 +1557,7 @@ mod tests {
         let mut outcomes = [0; 3];
         for seed in 0..60 {
             let (game, _) = random_game(seed);
-            let Phase::Over { winner, points } = game.position.phase else {
+            let Phase::Over { winner, points, .. } = game.position.phase else {
                 unreachable!()
             };
             match winner {
@@ -1518,5 +1571,152 @@ mod tests {
 
         // Someone wins most games, both seats get to win, and the last throw has some effect.
         assert!(outcomes[0] > 5 && outcomes[1] > 5, "{outcomes:?}");
+    }
+
+    // --- Forfeit (D10) ---
+
+    fn forfeit(state: &State, seat: usize) -> Result<State, Rejection> {
+        state.forfeit(seat)
+    }
+
+    fn forfeited(winner: usize) -> Phase {
+        Phase::Over {
+            winner: Some(winner),
+            points: 1,
+            forfeited: true,
+        }
+    }
+
+    #[test]
+    fn a_forfeit_ends_the_game_and_the_other_player_wins_one_point() {
+        let game = fresh(0);
+
+        let over = forfeit(&game, 0).unwrap();
+
+        assert_eq!(over.position.phase, forfeited(1));
+        assert!(LongBackgammon::is_over(&over));
+        assert_eq!(over.legal, Vec::new());
+        assert_eq!(over.combos, Vec::<Vec<Step>>::new());
+    }
+
+    #[test]
+    fn a_forfeit_may_come_on_the_opponents_turn() {
+        // White (seat 0) is to roll; Black gives up all the same.
+        let over = forfeit(&fresh(0), 1).unwrap();
+
+        assert_eq!(over.position.phase, forfeited(0));
+    }
+
+    #[test]
+    fn a_forfeit_may_come_in_the_middle_of_a_turn() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let game = play(&game, 0, 1, 2).unwrap();
+        assert!(matches!(game.position.phase, Phase::Move { .. }));
+
+        assert_eq!(forfeit(&game, 0).unwrap().position.phase, forfeited(1));
+        assert_eq!(forfeit(&game, 1).unwrap().position.phase, forfeited(0));
+    }
+
+    #[test]
+    fn a_forfeit_scores_one_point_even_when_the_forfeiter_has_borne_off_nothing() {
+        // Played to its end this would be a mars, worth 2: the loser has borne off nothing.
+        let game = state(position(&[(1, 15)], &[(1, 15)], [0, 0]));
+
+        let Phase::Over { points, .. } = forfeit(&game, 1).unwrap().position.phase else {
+            panic!("not over");
+        };
+
+        assert_eq!(points, 1);
+    }
+
+    #[test]
+    fn a_forfeit_in_the_last_throw_loses_whoever_gives_up() {
+        // White has borne off everything and Black has the last throw, so White was winning.
+        let last_throw = state(Position {
+            last_throw: true,
+            turn: 1,
+            ..position(&[], &[(1, 15)], [15, 0])
+        });
+
+        assert_eq!(
+            forfeit(&last_throw, 0).unwrap().position.phase,
+            forfeited(1)
+        );
+        assert_eq!(
+            forfeit(&last_throw, 1).unwrap().position.phase,
+            forfeited(0)
+        );
+    }
+
+    #[test]
+    fn a_game_that_is_over_cannot_be_forfeited() {
+        let over = forfeit(&fresh(0), 0).unwrap();
+        assert_eq!(reason(forfeit(&over, 0)), "the game is over");
+        assert_eq!(reason(forfeit(&over, 1)), "the game is over");
+
+        let mut won = Position::new(0);
+        won.phase = Phase::Over {
+            winner: Some(0),
+            points: 1,
+            forfeited: false,
+        };
+        assert_eq!(reason(forfeit(&state(won), 1)), "the game is over");
+    }
+
+    #[test]
+    fn nothing_is_played_after_a_forfeit() {
+        let over = forfeit(&fresh(0), 0).unwrap();
+
+        assert_eq!(
+            reason(over.act(0, Action::Roll, || Some([1, 2]))),
+            "the game is over"
+        );
+        assert_eq!(
+            reason(over.act(1, Action::Roll, || Some([1, 2]))),
+            "the game is over"
+        );
+    }
+
+    #[test]
+    fn only_the_two_seats_can_forfeit() {
+        assert_eq!(reason(forfeit(&fresh(0), 2)), "there is no such seat");
+    }
+
+    #[test]
+    fn a_forfeit_is_what_it_was_when_stored_and_read_again() {
+        let over = forfeit(&rolled(&fresh(1), 1, [3, 4]), 1).unwrap();
+
+        assert_eq!(reread(&over), over);
+        let read: State = serde_json::from_value(recorded(&over)).unwrap();
+        assert_eq!(read.position.phase, forfeited(0));
+        assert_eq!(
+            serde_json::to_value(&over).unwrap()["phase"],
+            json!({ "type": "over", "winner": 0, "points": 1, "forfeited": true })
+        );
+    }
+
+    #[test]
+    fn a_game_stored_before_forfeits_existed_was_not_forfeited() {
+        let mut won = Position::new(0);
+        won.phase = Phase::Over {
+            winner: Some(0),
+            points: 2,
+            forfeited: false,
+        };
+        let won = state(won);
+        let mut json = serde_json::to_value(&won).unwrap();
+        json["phase"].as_object_mut().unwrap().remove("forfeited");
+
+        let read: State = serde_json::from_value(json).unwrap();
+
+        assert_eq!(read, won);
+    }
+
+    #[test]
+    fn a_stored_forfeit_without_a_winner_is_refused() {
+        let mut json = serde_json::to_value(forfeit(&fresh(0), 0).unwrap()).unwrap();
+        json["phase"]["winner"] = Value::Null;
+
+        assert!(serde_json::from_value::<State>(json).is_err());
     }
 }

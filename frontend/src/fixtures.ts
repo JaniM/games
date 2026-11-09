@@ -50,6 +50,8 @@ export function snapshotOf(overrides: Partial<Snapshot> = {}): Snapshot {
     revision: 1,
     players: ["user-a", "user-b"],
     playerNames: ["Ada", "Grace"],
+    // Both have accounts, so their names are shown as they are.
+    playerGuests: [false, false],
     state: startingState(),
     rematch: null,
     ...overrides,

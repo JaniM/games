@@ -463,7 +463,7 @@ describe("diceFaces", () => {
     expect(diceFaces(startingState({ turn: 1, lastTurn: { ...lastTurn, dice: [4, 4] } }))).toEqual(
       Array.from({ length: 4 }, () => ({ value: 4, used: true })),
     );
-    const over = startingState({ lastTurn, phase: { type: "over", winner: 0, points: 1 } });
+    const over = startingState({ lastTurn, phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     expect(diceFaces(over)).toHaveLength(2);
   });
 

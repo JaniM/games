@@ -12,6 +12,7 @@ export const gamesReplySchema = z.object({
       finished: z.boolean(),
       updatedAt: z.number(),
       playerNames: z.array(z.string().nullable()),
+      playerGuests: z.array(z.boolean()),
     }),
   ),
 });

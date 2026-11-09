@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["ws"] }
 getrandom = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "json"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tracing = "0.1.44"
@@ -18,3 +20,11 @@ uuid = { version = "1.29.1", features = ["serde"] }
 futures-util = "0.3.31"
 tokio-tungstenite = "0.29.0"
 tower = { version = "0.5.3", features = ["util"] }
+
+# Argon2 fills 19 MiB of memory for every password it hashes, which takes seconds when it is
+# not optimised. The tests (which use this profile too) sign users in dozens of times.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

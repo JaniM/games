@@ -136,6 +136,37 @@ describe("connecting", () => {
   });
 });
 
+describe("who is a guest", () => {
+  it("keeps, with each snapshot, which players are guests", async () => {
+    const { db } = setup();
+
+    await connected(db, { players: ["u1", "u2"], playerNames: ["Ada", "Grace"], playerGuests: [false, true] });
+
+    expect(view(db)?.snapshot?.playerGuests).toEqual([false, true]);
+  });
+
+  it("follows a guest who makes an account: the next snapshot of the same revision says so", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { revision: 3, playerNames: ["Ada L", "Grace"], playerGuests: [true, true] });
+
+    socket.receive(snapshotMessage({ revision: 3, playerNames: ["ada", "Grace"], playerGuests: [false, true] }));
+    await settle();
+
+    expect(view(db)?.snapshot).toMatchObject({ playerNames: ["ada", "Grace"], playerGuests: [false, true] });
+  });
+
+  it("is a snapshot this client can't read when a server leaves it out", async () => {
+    const { db } = setup();
+    const socket = await connected(db);
+    const { playerGuests: _left, ...without } = snapshotMessage({ revision: 2 });
+
+    socket.receive(without);
+    await settle();
+
+    expect(view(db)?.problem).toContain("newer version");
+  });
+});
+
 describe("snapshots", () => {
   it("replace each other, newest first", async () => {
     const { db } = setup();
@@ -1087,7 +1118,7 @@ describe("joining", () => {
 describe("a rematch", () => {
   const ME = issued(1).userId;
   const NEXT = gameIdOf(2);
-  const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+  const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
 
   /** The message for a finished game that the user played in, as the server sends it. */
   const finished = (overrides: Record<string, unknown> = {}) => ({
@@ -1385,7 +1416,7 @@ describe("reviewing a game", () => {
   const over = startingState({
     off: [15, 2],
     turns: [41, 40],
-    phase: { type: "over", winner: 0, points: 1 },
+    phase: { type: "over", winner: 0, points: 1, forfeited: false },
     lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
   });
 
@@ -1794,5 +1825,147 @@ describe("reviewing a game", () => {
         error: "This game needs a newer version of the site. Reload the page to get it.",
       });
     });
+  });
+});
+
+describe("forfeiting", () => {
+  const me = issued(1).userId;
+  const forfeit = (db: TestDb) => db.ops.game.forfeitGame({ gameId: GAME_ID });
+  const messages = (socket: FakeWebSocket) => socket.sent.filter((m) => m.type !== "hello");
+  const over = (winner: 0 | 1) =>
+    startingState({ phase: { type: "over", winner, points: 1, forfeited: true } });
+
+  it("sends the forfeit as a message of its own, not as an action, and waits for the answer", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me, "other"] });
+
+    forfeit(db);
+    await settle();
+
+    expect(messages(socket)).toEqual([{ type: "forfeit" }]);
+    expect(view(db)?.busy).toBe(true);
+    expect(db.read(gameActions.all())).toEqual([]);
+  });
+
+  it("is allowed when it is the other player's turn", async () => {
+    const { db } = setup();
+    // Seat 0 is to move; this browser's user is seat 1.
+    const socket = await connected(db, { players: ["other", me] });
+
+    forfeit(db);
+    await settle();
+
+    expect(messages(socket)).toEqual([{ type: "forfeit" }]);
+  });
+
+  it("is allowed in the middle of a turn, and drops what is left of a combined move", async () => {
+    const { db } = setup();
+    const three = { from: 1, die: 3 };
+    const six = { from: 4, die: 6 };
+    const start = startingState({
+      ...moving([3, 6], [three, { from: 1, die: 6 }], [], [3, 6], [[three, six]]),
+    });
+    const socket = await connected(db, { players: [me, "other"], state: start });
+    db.ops.game.submitMoves({ gameId: GAME_ID, steps: [three, six] });
+    await settle();
+    // The server has played the 3. The 6 is queued, and nothing is waiting for an answer.
+    socket.receive(
+      snapshotMessage({
+        revision: 2,
+        players: [me, "other"],
+        state: startingState({ ...moving([3, 6], [six], [three], [6]) }),
+      }),
+    );
+    await Promise.resolve();
+    expect(view(db)).toMatchObject({ busy: false, queued: [six] });
+
+    forfeit(db);
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: true, queued: [] });
+    expect(messages(socket).at(-1)).toEqual({ type: "forfeit" });
+  });
+
+  it("is ignored by someone who is only watching", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: ["one", "other"] });
+
+    forfeit(db);
+    await settle();
+
+    expect(messages(socket)).toEqual([]);
+    expect(view(db)?.busy).toBe(false);
+  });
+
+  it("is ignored before the game has started, and after it is over", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me], playerNames: [null], state: null });
+    forfeit(db);
+    await settle();
+    expect(messages(socket)).toEqual([]);
+
+    socket.receive(snapshotMessage({ revision: 2, players: [me, "other"], state: over(1) }));
+    await settle();
+    forfeit(db);
+    await settle();
+    expect(messages(socket)).toEqual([]);
+  });
+
+  it("is ignored while an action waits for its answer, and while the connection is not open", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me, "other"] });
+    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "roll" } });
+    await settle();
+
+    forfeit(db);
+    await settle();
+    expect(messages(socket)).toEqual([{ type: "action", action: { type: "roll" } }]);
+
+    socket.serverClose(1006);
+    forfeit(db);
+    await settle();
+    expect(messages(socket)).toEqual([{ type: "action", action: { type: "roll" } }]);
+  });
+
+  it("ends with the snapshot of the finished game, which says it was a forfeit", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me, "other"] });
+    forfeit(db);
+    await settle();
+
+    socket.receive(snapshotMessage({ revision: 2, players: [me, "other"], state: over(1) }));
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, error: null });
+    expect(view(db)?.snapshot?.state?.phase).toEqual({
+      type: "over",
+      winner: 1,
+      points: 1,
+      forfeited: true,
+    });
+  });
+
+  it("shows the server's reason when it refuses, and is free to act again", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me, "other"] });
+    forfeit(db);
+    await settle();
+
+    socket.receive({ type: "error", code: "rejected", message: "the game is over" });
+    await settle();
+
+    expect(view(db)).toMatchObject({ busy: false, error: "the game is over" });
+  });
+
+  it("is refused as a state this client can't read when a server leaves out who forfeited", async () => {
+    const { db } = setup();
+    const socket = await connected(db, { players: [me, "other"] });
+    const old = { type: "over", winner: 1, points: 1 };
+
+    socket.receive(snapshotMessage({ revision: 2, state: { ...over(1), phase: old } }));
+    await settle();
+
+    // The page keeps what it had and says it needs a newer version.
+    expect(view(db)?.problem).toContain("newer version");
   });
 });

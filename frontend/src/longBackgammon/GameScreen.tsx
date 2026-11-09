@@ -19,12 +19,14 @@ import { gamePath } from "../features/router";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
+import { ForfeitControl } from "./ForfeitControl";
 import { type Colour, colourOf } from "./layout";
 import { ReviewPanel } from "./ReviewPanel";
 import {
   barNameOf,
   frameText,
   lastThrowText,
+  nameOf,
   rematchStage,
   resultOf,
   turnText,
@@ -66,6 +68,8 @@ export interface GameScreenProps {
   onRoll: () => void;
   /** Takes back the last step of the turn in progress. */
   onUndo: () => void;
+  /** Gives up the game. The screen asks the player to confirm first. */
+  onForfeit: () => void;
   /** Turns auto-play (this player's turns, played for them) on or off. */
   onAutoplay: (on: boolean) => void;
   /** Whether to offer auto-play at all. It is a development aid, so release builds leave it out. */
@@ -128,6 +132,7 @@ export function GameScreen({
   onStepFrame,
   onRoll,
   onUndo,
+  onForfeit,
   onAutoplay,
   showAutoplay,
   onSelect,
@@ -178,6 +183,8 @@ export function GameScreen({
   const canReview = state !== null && hasMoves(state);
   // Only a step of the turn in progress can be taken back: the one that ends the turn is final.
   const canUndo = canAct && state?.phase.type === "move" && state.phase.played.length > 0;
+  // Any time in a game that is on, even when it is not their turn.
+  const canForfeit = mySeat !== null && state !== null && !over;
   const canJoin = userId !== null && mySeat === null && !isFull(snapshot);
   const waiting = !isFull(snapshot);
 
@@ -286,12 +293,19 @@ export function GameScreen({
         </p>
       )}
       {lastThrow && <p className="status-warning">{lastThrow}</p>}
-      {(canReview || (showAutoplay && mySeat !== null && state)) && (
+      {(canReview || canForfeit || (showAutoplay && mySeat !== null && state)) && (
         <div className="status-actions">
           {canReview && (
             <button className="button button-quiet button-small" type="button" onClick={onReview}>
               Review moves
             </button>
+          )}
+          {canForfeit && (
+            <ForfeitControl
+              opponent={nameOf(snapshot, opponent, mySeat)}
+              disabled={!connected || view.busy}
+              onForfeit={onForfeit}
+            />
           )}
           {showAutoplay && mySeat !== null && state && (
             <button

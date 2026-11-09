@@ -1,4 +1,5 @@
 import { createDb } from "millpond";
+import { account } from "./features/account";
 import { backend } from "./features/backend";
 import { game } from "./features/game";
 import { lobby } from "./features/lobby";
@@ -15,5 +16,5 @@ import { sound } from "./features/sound";
  * fresh microtask, so they show up in the browser console.
  */
 export const db = createDb({
-  features: { backend, game, lobby, profile, router, session, sound },
+  features: { account, backend, game, lobby, profile, router, session, sound },
 });

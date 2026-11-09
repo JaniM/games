@@ -138,9 +138,9 @@ a {
 /* --- The corners --- */
 
 /*
- * The corner of the whole page, not of the centred column. The name is always here, over
+ * The corner of the whole page, not of the centred column. The account menu is always here, over
  * whatever else is in the corner (the strip of a game page, and its menu), and never wider
- * than the screen: when its form opens it covers what is beside it instead of pushing it.
+ * than the screen: its panel floats over what is beside it instead of pushing it.
  * Everything in the two top corners has the same line, so that their text sits on one baseline.
  */
 .top-right,
@@ -194,28 +194,18 @@ a {
 }
 
 /*
- * The form, while the name is edited. Its input gives way before its buttons do when the
- * corner is narrower than the form would like (`.top-right` is at most as wide as the screen),
- * and its own background and shadow cover what the form is over: the strip beside it.
+ * The form, while the name is edited, is in the account menu's panel. Its input gives way before
+ * its buttons do when the panel is narrower than the form would like, and the buttons wrap under
+ * it if they must.
  */
-.top-right .name-control {
+.options-panel .name-control {
+  flex-wrap: wrap;
   min-width: 0;
 }
 
-form.name-control {
-  background: var(--bg);
-  border-radius: var(--radius);
-  /* A ring of the page's colour around the form, and a shadow under it. Neither takes room. */
-  box-shadow:
-    0 0 0 0.25rem var(--bg),
-    0 0.25rem 1rem rgb(0 0 0 / 0.25);
-}
-
-/* On a phone the name, when it is not being edited, leaves room for the strip beside it. */
-@media (max-width: 46rem) {
-  .name-button {
-    max-width: 8rem;
-  }
+/* The name, in the panel, may use the width of the panel. */
+.options-panel .name-button {
+  max-width: 100%;
 }
 
 /* --- Fields --- */
@@ -302,6 +292,128 @@ form.name-control {
 /* In the name's form the buttons keep their size, and the input gives way. */
 form.name-control .button {
   flex: none;
+}
+
+/* --- The account menu and its forms --- */
+
+/* The button of the account menu says the display name, which may be long: it is cut short. */
+.options-label-clipped {
+  display: inline-block;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* On a phone the name leaves room for the strip beside it. */
+@media (max-width: 46rem) {
+  .options-label-clipped {
+    max-width: 8rem;
+  }
+}
+
+/* What is in the panel: the display name and who the user is, then what they can do about it. */
+.account-block {
+  min-width: 15rem;
+  line-height: 1.5;
+}
+
+.account-label,
+.account-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.account-note {
+  margin-top: 0.25rem;
+}
+
+/* An account's name in the panel: text, not a button, since it can't be changed. */
+.account-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.account-note strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* The actions, one to a line between hairlines, like any list on the site. */
+.menu-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.25rem 0;
+  font: inherit;
+  line-height: 1.5;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.menu-item:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* The forms in the dialogs: a label over its field, one under another. */
+.account-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.field {
+  display: block;
+  margin: 0 0 0.75rem;
+}
+
+.field-label {
+  display: block;
+  margin: 0 0 0.25rem;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.field-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* What a deletion does to the games, in a list between hairlines. */
+.account-effects {
+  margin: 0 0 0.75rem;
+  padding: 0;
+  font-size: var(--text-sm);
+  list-style: none;
+  border-bottom: 1px solid var(--rule);
+}
+
+.account-effects li {
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--rule);
 }
 
 /* --- Plain text --- */
@@ -689,6 +801,14 @@ form.name-control .button {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.2);
+}
+
+/* A panel in the right corner lines up with the right edge of its button, and is never wider than the screen. */
+.options-panel-end {
+  left: auto;
+  right: 0;
+  width: max-content;
+  max-width: calc(100vw - 3rem);
 }
 
 /* The volume slider, in the options panel of a game page. */
@@ -1474,7 +1594,7 @@ form.name-control .button {
  * The last thing on the page, in the bottom right corner. A page shorter than the screen
  * leaves it at the bottom of the screen (the auto margin takes up the rest of `#root`); a
  * longer page leaves it at the very end, after everything, and not over the content. Its
- * right edge lines up with the name in the top right corner (`.top-right`).
+ * right edge lines up with the account menu in the top right corner (`.top-right`).
  */
 .site-footer {
   margin-top: auto;

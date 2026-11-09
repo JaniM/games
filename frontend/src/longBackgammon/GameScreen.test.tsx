@@ -60,6 +60,7 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         onStepFrame={noop}
         onRoll={noop}
         onUndo={noop}
+        onForfeit={noop}
         onAutoplay={noop}
         showAutoplay={true}
         onSelect={noop}
@@ -209,7 +210,7 @@ describe("a game with both players", () => {
   });
 
   it("highlights nobody when the game is over", () => {
-    const state = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
 
     expect(render(ADA, viewOf({ snapshot: snapshotOf({ state }) }))).not.toContain("player-bar-active");
   });
@@ -360,8 +361,75 @@ describe("a game with both players", () => {
 
   it("offers no auto-play before the game starts or after it ends", () => {
     expect(render(ADA, waiting)).not.toContain("Auto-play");
-    const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     expect(render(ADA, viewOf({ snapshot: snapshotOf({ state: over }) }))).not.toContain("Auto-play");
+  });
+
+  it("marks an opponent who is a guest, and no one else", () => {
+    const guests = viewOf({ snapshot: snapshotOf({ playerGuests: [true, true] }) });
+
+    // Ada is seat 0, and sees herself as she is.
+    const ada = render(ADA, guests);
+    expect(ada).toContain("Grace (guest)");
+    expect(ada).toContain("Ada (you)");
+    expect(ada).not.toContain("Ada (guest)");
+    // A spectator sees both marked.
+    const spectator = render(STRANGER, guests);
+    expect(spectator).toContain("Ada (guest)");
+    expect(spectator).toContain("Grace (guest)");
+    // And with accounts, nobody is.
+    expect(render(ADA, viewOf())).not.toContain("(guest)");
+  });
+
+  it("names a guest who has won, in the result", () => {
+    const state = startingState({ phase: { type: "over", winner: 1, points: 1, forfeited: false } });
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state, playerGuests: [true, true] }) }));
+
+    expect(html).toContain(">Grace (guest) won<");
+  });
+
+  it("offers a player a way to forfeit, on their own turn and on the other's, and nobody else", () => {
+    expect(render(ADA, viewOf())).toMatch(/<button[^>]*>Forfeit</);
+    // Giving up is not a move: it doesn't wait for the player's turn.
+    expect(render(GRACE, viewOf())).toMatch(/<button[^>]*>Forfeit</);
+
+    expect(render(STRANGER, viewOf())).not.toContain("Forfeit");
+    expect(render(null, viewOf())).not.toContain("Forfeit");
+  });
+
+  it("offers no forfeit before the game starts or after it ends", () => {
+    expect(render(ADA, waiting)).not.toContain("Forfeit");
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
+    expect(render(ADA, viewOf({ snapshot: snapshotOf({ state: over }) }))).not.toContain("Forfeit");
+  });
+
+  it("holds the forfeit back while an action waits for its answer, or the connection is down", () => {
+    expect(render(ADA, viewOf())).not.toMatch(/<button[^>]*disabled[^>]*>Forfeit</);
+    expect(render(ADA, viewOf({ busy: true }))).toMatch(/<button[^>]*disabled[^>]*>Forfeit</);
+    expect(render(ADA, viewOf({ connection: "reconnecting" }))).toMatch(/<button[^>]*disabled[^>]*>Forfeit</);
+  });
+
+  it("asks nothing yet: the question comes with the press", () => {
+    expect(render(ADA, viewOf())).not.toContain("Forfeit this game?");
+  });
+
+  it("shows who gave up, instead of what the win is worth", () => {
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: true } });
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+
+    expect(html).toContain(">You won<");
+    expect(html).toContain(">Grace forfeited<");
+    expect(html).not.toContain(">1 point<");
+    expect(html).toContain('class="result result-won"');
+  });
+
+  it("shows the other player what happened, as the one who gave up", () => {
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: true } });
+    const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state }) }));
+
+    expect(html).toContain(">Ada won<");
+    expect(html).toContain(">You forfeited<");
+    expect(html).not.toContain('class="result result-won"');
   });
 
   it("shows nothing to click to someone who is not the mover", () => {
@@ -392,7 +460,7 @@ describe("a game with both players", () => {
   it("shows the result when the game is over, and no one to move", () => {
     const state = startingState({
       off: [15, 3],
-      phase: { type: "over", winner: 0, points: 1 },
+      phase: { type: "over", winner: 0, points: 1, forfeited: false },
     });
     const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state }) }));
 
@@ -406,7 +474,7 @@ describe("a game with both players", () => {
   });
 
   it("replaces the status with the result, and offers the way back to the games", () => {
-    const state = startingState({ phase: { type: "over", winner: 0, points: 2 } });
+    const state = startingState({ phase: { type: "over", winner: 0, points: 2, forfeited: false } });
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
 
     expect(html).not.toContain('aria-label="Turn"');
@@ -418,7 +486,7 @@ describe("a game with both players", () => {
   });
 
   it("makes the way back the main button for someone who is only watching", () => {
-    const state = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     const html = render(STRANGER, viewOf({ snapshot: snapshotOf({ state }) }));
 
     expect(html).toMatch(/<a[^>]*class="button"[^>]*href="\/"[^>]*>All games</);
@@ -444,7 +512,7 @@ describe("a game with both players", () => {
   });
 
   it("puts the result there too, in the place of the status", () => {
-    const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state: over }) }));
 
     expect(html.indexOf('aria-label="Result"')).toBeGreaterThan(html.lastIndexOf('class="player-bar'));
@@ -563,7 +631,7 @@ describe("the strip along the top", () => {
 
     expect(html).toMatch(/<details[^>]*class="options"/);
     expect(html).not.toMatch(/<details[^>]*\sopen/);
-    expect(html).toContain(">Options</summary>");
+    expect(html).toContain(">Options</span></summary>");
     expect(html.indexOf("← All games")).toBeLessThan(html.indexOf('class="options"'));
     expect(html.indexOf('class="options"')).toBeLessThan(html.indexOf('class="volume-slider"'));
     expect(html.indexOf("</details>")).toBeGreaterThan(html.indexOf('class="volume-slider"'));
@@ -582,7 +650,7 @@ describe("the strip along the top", () => {
 });
 
 describe("the rematch of a finished game", () => {
-  const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+  const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
   const finished = (rematch: Snapshot["rematch"] = null, overrides: Partial<GameViewRow> = {}) =>
     viewOf({ snapshot: snapshotOf({ state: over, rematch }), ...overrides });
   /** The buttons about the rematch: the review is another matter (see "reviewing a game"). */
@@ -700,7 +768,7 @@ describe("reviewing a game", () => {
   const over = startingState({
     off: [15, 2],
     turns: [41, 40],
-    phase: { type: "over", winner: 0, points: 1 },
+    phase: { type: "over", winner: 0, points: 1, forfeited: false },
     lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
   });
 

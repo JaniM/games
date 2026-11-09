@@ -29,6 +29,7 @@ import {
 } from "./ops";
 import { asFrame } from "./review";
 import {
+  type Action,
   type Frame,
   KIND,
   STATE_VERSION,
@@ -172,7 +173,7 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
     ctx.run(gameProblem, { gameId, problem: OTHER_GAME });
     return false;
   }
-  const { revision, stateVersion, players, playerNames, state, rematch } = incoming.data;
+  const { revision, stateVersion, players, playerNames, playerGuests, state, rematch } = incoming.data;
   const parsed = state === null ? { success: true as const, data: null } : stateSchema.safeParse(state);
   if (stateVersion !== STATE_VERSION || !parsed.success) {
     ctx.run(gameProblem, { gameId, problem: NEWER_VERSION });
@@ -180,7 +181,7 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
   }
   ctx.run(snapshotReceived, {
     gameId,
-    snapshot: { revision, players, playerNames, state: parsed.data, rematch: rematch ?? null },
+    snapshot: { revision, players, playerNames, playerGuests, state: parsed.data, rematch: rematch ?? null },
   });
   return true;
 }
@@ -199,6 +200,14 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * What goes on the socket for an action. A forfeit is a message of its own, not an action
+ * of the game (see `socket.rs`).
+ */
+function messageFor(action: Action): { type: string; action?: Action } {
+  return action.type === "forfeit" ? { type: "forfeit" } : { type: "action", action };
+}
+
 /** Sends each queued action on its game's socket, and drops it if there is no open socket. */
 export const sendActions = effect({
   inputs: [gameActions],
@@ -208,7 +217,7 @@ export const sendActions = effect({
         async (ctx) => {
           const socket = socketOf(row.gameId);
           if (socket?.readyState === SOCKET_OPEN) {
-            socket.send(JSON.stringify({ type: "action", action: row.action }));
+            socket.send(JSON.stringify(messageFor(row.action)));
             ctx.run(actionSent, { id: row.id });
           } else {
             ctx.run(actionDropped, { id: row.id, gameId: row.gameId });

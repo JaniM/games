@@ -15,6 +15,7 @@ use sqlx::PgPool;
 
 use crate::{
     auth::AuthUser,
+    bot::BOT_USER,
     error::ApiError,
     game_id::GameId,
     rematch::Rematch,
@@ -140,6 +141,9 @@ pub struct Listed {
     /// picked a name. As in a game's snapshot, so `player_names[seat]` is the user's own name
     /// in their seat.
     player_names: Vec<Option<String>>,
+    /// Which of those players are guests, by seat, as in a game's snapshot
+    /// (`Snapshot::player_guests`).
+    player_guests: Vec<bool>,
 }
 
 /// One row of the list query, in the order of its columns.
@@ -152,6 +156,7 @@ type ListedRow = (
     bool,
     i64,
     Vec<Option<String>>,
+    Vec<bool>,
 );
 
 /// `GET /api/games`: the games the user is in, most recently changed first, at most 100.
@@ -172,6 +177,12 @@ pub async fn list_games(
                       FROM game_players gp
                       JOIN users u ON u.id = gp.user_id
                       WHERE gp.game_id = g.id
+                      ORDER BY gp.seat),
+                -- A guest here is one in a room (`read_players` in `room`): keep the two the same.
+                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND u.id <> $3
+                      FROM game_players gp
+                      JOIN users u ON u.id = gp.user_id
+                      WHERE gp.game_id = g.id
                       ORDER BY gp.seat)
          FROM game_players p
          JOIN games g ON g.id = p.game_id
@@ -181,13 +192,14 @@ pub async fn list_games(
     )
     .bind(user)
     .bind(LIST_LIMIT)
+    .bind(BOT_USER)
     .fetch_all(&pool)
     .await
     .map_err(ApiError::database("could not list a user's games"))?;
     let games = rows
         .into_iter()
         .map(
-            |(game_id, kind, seat, joined, started, finished, updated_at, player_names)| Listed {
+            |(
                 game_id,
                 kind,
                 seat,
@@ -196,6 +208,17 @@ pub async fn list_games(
                 finished,
                 updated_at,
                 player_names,
+                player_guests,
+            )| Listed {
+                game_id,
+                kind,
+                seat,
+                joined,
+                started,
+                finished,
+                updated_at,
+                player_names,
+                player_guests,
             },
         )
         .collect();
@@ -375,6 +398,8 @@ mod tests {
         assert_eq!(listed[0]["joined"], 2);
         assert_eq!(listed[0]["started"], true);
         assert_eq!(listed[0]["playerNames"], json!([null, "Bot"]));
+        // The user is a guest, and the bot is not.
+        assert_eq!(listed[0]["playerGuests"], json!([true, false]));
     }
 
     #[sqlx::test]

@@ -54,6 +54,7 @@ const game = (n: number, overrides: Partial<MyGameRow> = {}): MyGameRow => ({
   finished: false,
   updatedAt: 1_700_000_000_000 + n * 60_000,
   playerNames: ["Ada", "Grace"],
+  playerGuests: [false, false],
   ...overrides,
 });
 
@@ -125,18 +126,43 @@ describe("where a game stands", () => {
 });
 
 describe("the players of a game", () => {
+  const accounts = [false, false];
+
   it("are named in seat order, with the user marked", () => {
-    expect(playersText({ seat: 0, playerNames: ["Ada", "Grace"] })).toBe("Ada (you) vs Grace");
-    expect(playersText({ seat: 1, playerNames: ["Ada", "Grace"] })).toBe("Ada vs Grace (you)");
+    expect(playersText({ seat: 0, playerNames: ["Ada", "Grace"], playerGuests: accounts })).toBe(
+      "Ada (you) vs Grace",
+    );
+    expect(playersText({ seat: 1, playerNames: ["Ada", "Grace"], playerGuests: accounts })).toBe(
+      "Ada vs Grace (you)",
+    );
   });
 
   it("are only the ones who have joined", () => {
-    expect(playersText({ seat: 0, playerNames: ["Ada"] })).toBe("Ada (you)");
+    expect(playersText({ seat: 0, playerNames: ["Ada"], playerGuests: [false] })).toBe("Ada (you)");
   });
 
   it("get a stand-in name when they have none", () => {
-    expect(playersText({ seat: 0, playerNames: [null, null] })).toBe("You vs Player 2");
-    expect(playersText({ seat: 1, playerNames: [null, null] })).toBe("Player 1 vs You");
+    expect(playersText({ seat: 0, playerNames: [null, null], playerGuests: [true, true] })).toBe(
+      "You vs Player 2",
+    );
+    expect(playersText({ seat: 1, playerNames: [null, null], playerGuests: [true, true] })).toBe(
+      "Player 1 vs You",
+    );
+  });
+
+  it("mark another player who is a guest, and not the user, who knows", () => {
+    expect(playersText({ seat: 0, playerNames: ["Ada", "Grace"], playerGuests: [true, true] })).toBe(
+      "Ada (you) vs Grace (guest)",
+    );
+    expect(playersText({ seat: 1, playerNames: ["Ada", "Grace"], playerGuests: [true, true] })).toBe(
+      "Ada (guest) vs Grace (you)",
+    );
+  });
+
+  it("do not mark the bot", () => {
+    expect(playersText({ seat: 0, playerNames: ["Ada", "Bot"], playerGuests: [true, false] })).toBe(
+      "Ada (you) vs Bot",
+    );
   });
 
   it("show in the list of the user's games, each game with its own", () => {

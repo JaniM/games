@@ -135,6 +135,7 @@ mod tests {
         position.phase = Phase::Over {
             winner: Some(0),
             points: 1,
+            forfeited: false,
         };
 
         assert_eq!(action(&State::reached(position), 0), None);

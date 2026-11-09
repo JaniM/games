@@ -33,7 +33,7 @@ const over = startingState({
   turn: 0,
   off: [15, 2],
   turns: [41, 40],
-  phase: { type: "over", winner: 0, points: 1 },
+  phase: { type: "over", winner: 0, points: 1, forfeited: false },
   lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
 });
 

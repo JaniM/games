@@ -2,7 +2,7 @@ import { createDb } from "millpond";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeServer, fakeStorage, issued, json, settle } from "../../testing";
 import { STORAGE_KEY, loadCredentials } from "./credentials";
-import { SESSION_ID, apiFetch, session, sessionState } from "./index";
+import { SESSION_ID, apiFetch, session, sessionFlags, sessionState } from "./index";
 
 const FRESH = issued(1);
 const OLD = { userId: "user-old", accessToken: "token-old" };
@@ -23,6 +23,7 @@ type TestDb = ReturnType<typeof setup>["db"];
 const start = (db: TestDb) => db.ops.session.startSession({ stored: loadCredentials() });
 
 const row = (db: TestDb) => db.read(sessionState.get(SESSION_ID));
+const flags = (db: TestDb) => db.read(sessionFlags.get(SESSION_ID));
 
 /** The context an effect task would pass to `apiFetch`. */
 const taskContext = (db: TestDb) => ({ db, run: db.run.bind(db) });
@@ -43,7 +44,15 @@ describe("first visit", () => {
     expect(row(db)).toMatchObject({ state: "registering", accessToken: null });
 
     await settle();
-    expect(row(db)).toEqual({ id: SESSION_ID, state: "ready", error: null, ...FRESH });
+    expect(row(db)).toEqual({
+      id: SESSION_ID,
+      state: "ready",
+      error: null,
+      username: null,
+      rejected: null,
+      ...FRESH,
+    });
+    expect(flags(db)).toEqual({ id: SESSION_ID, upgrading: false, signedOutAs: null });
     expect(paths(fetchMock)).toEqual(["/api/register"]);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
   });
@@ -296,5 +305,173 @@ describe("apiFetch", () => {
     await expect(apiFetch(taskContext(db), "/api/me")).rejects.toThrow("network down");
 
     expect(row(db)).toMatchObject({ state: "ready", ...OLD });
+  });
+});
+
+describe("an account's session", () => {
+  const ACCOUNT = { userId: "user-9", accessToken: "session-9", username: "ada" };
+  const savedAccount = () => fakeStorage({ [STORAGE_KEY]: JSON.stringify(ACCOUNT) });
+
+  it("is adopted with its username, and a guest's has none", async () => {
+    const { db } = setup(fakeServer().fetchImpl, savedAccount());
+
+    start(db);
+    expect(row(db)).toMatchObject({ state: "ready", ...ACCOUNT });
+
+    const guest = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+    start(guest.db);
+    expect(row(guest.db)).toMatchObject({ state: "ready", ...OLD, username: null });
+  });
+
+  it("keeps the username of credentials a tab saved before accounts, as none", async () => {
+    // What local storage held then: no username at all.
+    const { db } = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+
+    expect(loadCredentials()).toEqual(OLD);
+    start(db);
+    expect(row(db)?.username).toBeNull();
+  });
+
+  describe("when the server refuses it", () => {
+    it("registers a guest, and remembers whose session it was", async () => {
+      const server = fakeServer();
+      const { db } = setup(server.fetchImpl, savedAccount());
+      start(db);
+
+      await apiFetch(taskContext(db), "/api/me"); // the server has never heard of it
+      expect(row(db)).toMatchObject({ state: "registering", rejected: "session-9" });
+      expect(flags(db)?.signedOutAs).toBe("ada");
+      await settle();
+
+      expect(row(db)).toMatchObject({ state: "ready", ...FRESH, username: null });
+      expect(flags(db)?.signedOutAs).toBe("ada");
+    });
+
+    it("says nothing of a guest's token", async () => {
+      const { db } = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+      start(db);
+
+      await apiFetch(taskContext(db), "/api/me");
+      await settle();
+
+      expect(flags(db)?.signedOutAs).toBeNull();
+    });
+
+    it("can be told it has been seen, and signing in clears it too", async () => {
+      const { db } = setup(fakeServer().fetchImpl, savedAccount());
+      start(db);
+      await apiFetch(taskContext(db), "/api/me");
+      await settle();
+
+      db.ops.session.signedOutNoticeDismissed();
+      expect(flags(db)?.signedOutAs).toBeNull();
+
+      await apiFetch(taskContext(db), "/api/me"); // the guest's token is not known either
+      await settle();
+      db.ops.session.signedIn(ACCOUNT);
+      expect(row(db)).toMatchObject({ ...ACCOUNT, rejected: null });
+      expect(flags(db)).toMatchObject({ signedOutAs: null, upgrading: false });
+    });
+  });
+
+  describe("while a guest is turning into an account", () => {
+    it("ignores a 401 for the guest token, which the server retires on the way", async () => {
+      const { db } = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+      start(db);
+      db.ops.session.upgradeStarted();
+
+      db.ops.session.tokenRejected({ accessToken: OLD.accessToken });
+      await settle();
+
+      expect(row(db)).toMatchObject({ state: "ready", ...OLD });
+      expect(flags(db)?.upgrading).toBe(true);
+    });
+
+    it("goes back to losing the guest token when the account was not made", async () => {
+      const { db } = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+      start(db);
+      db.ops.session.upgradeStarted();
+
+      db.ops.session.upgradeFailed();
+      db.ops.session.tokenRejected({ accessToken: OLD.accessToken });
+
+      expect(row(db)?.state).toBe("registering");
+      expect(flags(db)?.upgrading).toBe(false);
+    });
+
+    it("is only for a guest that is ready: an account has nothing to upgrade", async () => {
+      const { db } = setup(fakeServer().fetchImpl, savedAccount());
+      start(db);
+
+      db.ops.session.upgradeStarted();
+
+      expect(flags(db)?.upgrading).toBe(false);
+    });
+
+    it("is over when the account's session arrives, which is a new token for the same user", async () => {
+      const { db } = setup(fakeServer().fetchImpl, fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) }));
+      start(db);
+      db.ops.session.upgradeStarted();
+
+      db.ops.session.signedIn({ userId: OLD.userId, accessToken: "session-1", username: "ada" });
+
+      expect(row(db)).toMatchObject({
+        state: "ready",
+        userId: OLD.userId,
+        accessToken: "session-1",
+        username: "ada",
+      });
+      expect(flags(db)?.upgrading).toBe(false);
+    });
+  });
+
+  describe("in a second tab of the same browser", () => {
+    it("is taken up instead of registering again, when the token this tab lost was another", async () => {
+      const server = fakeServer();
+      const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify(OLD) });
+      const { db, fetchMock } = setup(server.fetchImpl, storage);
+      start(db);
+      // The other tab made an account, which retired the guest token, and saved its session.
+      storage.data.set(STORAGE_KEY, JSON.stringify(ACCOUNT));
+
+      await apiFetch(taskContext(db), "/api/me");
+      await settle();
+
+      expect(row(db)).toMatchObject({ state: "ready", ...ACCOUNT });
+      expect(flags(db)?.signedOutAs).toBeNull();
+      expect(paths(fetchMock)).not.toContain("/api/register");
+      expect(JSON.parse(storage.data.get(STORAGE_KEY) ?? "null")).toEqual(ACCOUNT);
+    });
+
+    it("registers anew when what is saved is the very token that was refused", async () => {
+      const server = fakeServer();
+      const { db, fetchMock } = setup(server.fetchImpl, savedAccount());
+      start(db);
+
+      await apiFetch(taskContext(db), "/api/me");
+      await settle();
+
+      expect(paths(fetchMock).filter((path) => path === "/api/register")).toHaveLength(1);
+      expect(row(db)).toMatchObject({ state: "ready", ...FRESH });
+    });
+
+    it("does not overwrite what the user saved by signing in while a guest was being registered", async () => {
+      let answer: (res: Response) => void = () => {};
+      const storage = fakeStorage();
+      const { db } = setup(
+        () => new Promise<Response>((resolve) => (answer = resolve)),
+        storage,
+      );
+      start(db); // registering: the answer is held back
+      await Promise.resolve();
+
+      storage.data.set(STORAGE_KEY, JSON.stringify(ACCOUNT));
+      db.ops.session.signedIn(ACCOUNT);
+      answer(json(FRESH, 201));
+      await settle();
+
+      expect(row(db)).toMatchObject({ state: "ready", ...ACCOUNT });
+      expect(JSON.parse(storage.data.get(STORAGE_KEY) ?? "null")).toEqual(ACCOUNT);
+    });
   });
 });

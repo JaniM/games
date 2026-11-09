@@ -1,5 +1,6 @@
 import { useQuery } from "millpond/react";
-import { NameControl } from "./NameControl";
+import { AccountDialogs } from "./AccountDialogs";
+import { AccountMenu } from "./AccountMenu";
 import { SiteFooter } from "./SiteFooter";
 import { LOCATION_ID, locationState, parseRoute } from "./features/router";
 import { GamePage } from "./pages/GamePage";
@@ -14,8 +15,9 @@ export function App() {
   return (
     <>
       <div className="top-right">
-        <NameControl />
+        <AccountMenu />
       </div>
+      <AccountDialogs />
       {route.page === "home" && <Home />}
       {/* Keyed, so that moving from one game to another starts a fresh page. */}
       {route.page === "game" && <GamePage key={route.gameId} gameId={route.gameId} />}

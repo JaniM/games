@@ -4,6 +4,7 @@ import {
   chooseOpponent,
   closeNewGame,
   createGame,
+  forgetGames,
   gameCreateFailed,
   gameCreated,
   gamesLoadFailed,
@@ -23,6 +24,7 @@ export const lobby = feature({
     gameCreated,
     gameCreateFailed,
     loadGames,
+    forgetGames,
     gamesLoaded,
     gamesLoadFailed,
   },
@@ -30,5 +32,5 @@ export const lobby = feature({
 });
 
 // Components import definitions by value; they never need the assembled db.
-export { chooseOpponent, closeNewGame, createGame, loadGames, openNewGame } from "./ops";
+export { chooseOpponent, closeNewGame, createGame, forgetGames, loadGames, openNewGame } from "./ops";
 export { GAMES_LIST_ID, NEW_GAME_ID, gamesList, myGames, newGame } from "./tables";

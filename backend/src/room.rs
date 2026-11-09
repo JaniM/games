@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{broadcast, mpsc, oneshot, watch},
     time::Instant,
 };
 use uuid::Uuid;
@@ -75,6 +75,12 @@ pub struct Snapshot {
     /// as before (the game itself didn't change). So of two snapshots with the same
     /// revision, the later one is the newer.
     pub player_names: Vec<Option<String>>,
+    /// Which players are guests, parallel to `players`: users who haven't made an account. A
+    /// registered user's name is their username, which nobody else can have; a guest's name is
+    /// whatever they typed, so clients show it with a guest indicator. The bot and a user who has
+    /// deleted themselves are not guests. Published with `player_names`, and changes with them:
+    /// a guest who makes an account is published at once.
+    pub player_guests: Vec<bool>,
     /// Null until every seat is taken.
     pub state: Option<Value>,
     /// Null until a player of the finished game asks to play again.
@@ -95,7 +101,8 @@ pub enum RoomError {
     NotStarted,
     /// A rematch was asked about a game that hasn't ended.
     NotOver,
-    /// A rematch was asked about a game that isn't for two players, so has no other side.
+    /// A rematch was asked about a game that isn't for two players, so has no other side, or
+    /// whose other player has deleted their user.
     NoRematch,
     /// The game's rules refused the action. The reason is for the player.
     Rejected(String),
@@ -120,7 +127,14 @@ struct Shared {
     /// How to reach each room. An entry whose channel is closed is a room that has shut
     /// down, and counts as absent. Rooms remove their own entry on the way out.
     open: Mutex<HashMap<GameId, mpsc::UnboundedSender<Command>>>,
+    /// Says which user has just deleted themselves, so that their connections end (see
+    /// [`Rooms::user_gone`]).
+    gone: broadcast::Sender<Uuid>,
 }
+
+/// How many deleted users a connection may miss before it can't tell whether it was one of
+/// them. Missing that many ends the connection, which only costs the client a reconnect.
+const GONE_BACKLOG: usize = 64;
 
 impl Rooms {
     pub fn new(pool: PgPool, games: Games) -> Self {
@@ -140,6 +154,7 @@ impl Rooms {
                 idle_grace,
                 bot_pause,
                 open: Mutex::default(),
+                gone: broadcast::channel(GONE_BACKLOG).0,
             }),
         }
     }
@@ -218,6 +233,44 @@ impl Rooms {
         Ok(seat)
     }
 
+    /// Ends every connection `user` has, to any game: they have deleted themselves, and their
+    /// token (which a socket only checked when it opened) no longer means anything. Their
+    /// sockets close as a game going away does, and a client that reconnects is turned away
+    /// as unauthorized. Doesn't wait.
+    pub fn user_gone(&self, user: Uuid) {
+        // Nobody listening is fine: nobody is connected.
+        _ = self.shared.gone.send(user);
+    }
+
+    /// Stops the rooms in memory of games that have been deleted, so that nobody keeps
+    /// watching what isn't there. Their connections end like those of any room that goes away.
+    pub fn close(&self, games: &[GameId]) {
+        let open = self.shared.open();
+        for id in games {
+            if let Some(commands) = open.get(id) {
+                _ = commands.send(Command::Close);
+            }
+        }
+    }
+
+    /// Tells the game's room (loading it if need be) that `user`, a player of it, has deleted
+    /// themselves: the game shows them as deleted, and a rematch that was waiting for them is
+    /// dropped, because nobody is left to answer it. Call it after the user is deleted: the room
+    /// reads that from the database.
+    pub async fn user_deleted(&self, game_id: &GameId, user: Uuid) -> Result<(), RoomError> {
+        self.request(game_id, |reply| Command::UserDeleted { user, reply })
+            .await
+            .map(|_| ())
+    }
+
+    /// Makes `user`, a player, give up the game, without a connection: for the server to
+    /// forfeit for a user who is deleting their account. Errors as [`Connection::forfeit`] does.
+    pub async fn forfeit(&self, game_id: &GameId, user: Uuid) -> Result<(), RoomError> {
+        self.request(game_id, |reply| Command::Forfeit { user, reply })
+            .await
+            .map(|_| ())
+    }
+
     /// `user`, a player of the finished game, asks to play it again, or says yes to the other
     /// player's ask (see [`rematch`](crate::rematch)). Returns where the rematch stands. When
     /// it is [`Rematch::Accepted`] the new game exists, with the same players, and is loaded.
@@ -256,6 +309,8 @@ impl Rooms {
     /// looked up when the connection acts, so a watcher who [`join`](Rooms::join)s the
     /// game can play on the connection they already have.
     pub async fn connect(&self, game_id: &GameId, user: Uuid) -> Result<Connection, RoomError> {
+        // Before the request, so that a deletion that happens while it waits is not missed.
+        let gone = self.shared.gone.subscribe();
         let (snapshots, commands) = self
             .request(game_id, |reply| Command::Connect { reply })
             .await?;
@@ -263,6 +318,7 @@ impl Rooms {
             user,
             snapshots,
             commands,
+            gone,
         })
     }
 
@@ -365,6 +421,11 @@ enum Command {
         action: Value,
         reply: oneshot::Sender<Result<(), RoomError>>,
     },
+    /// A player gives up the game.
+    Forfeit {
+        user: Uuid,
+        reply: oneshot::Sender<Result<(), RoomError>>,
+    },
     /// A player asks for a rematch, or answers yes. The reply is where the rematch stands.
     AskRematch {
         user: Uuid,
@@ -377,6 +438,13 @@ enum Command {
     },
     /// A user changed their display name. Nobody waits for an answer.
     NameChanged { user: Uuid },
+    /// A player deleted their user. See [`Rooms::user_deleted`].
+    UserDeleted {
+        user: Uuid,
+        reply: oneshot::Sender<Result<(), RoomError>>,
+    },
+    /// The game was deleted: stop. Nobody waits for an answer.
+    Close,
 }
 
 impl Command {
@@ -386,9 +454,11 @@ impl Command {
             Self::Connect { reply, .. } => _ = reply.send(Err(err)),
             Self::Join { reply, .. } => _ = reply.send(Err(err)),
             Self::Act { reply, .. } => _ = reply.send(Err(err)),
+            Self::Forfeit { reply, .. } => _ = reply.send(Err(err)),
             Self::AskRematch { reply, .. } => _ = reply.send(Err(err)),
             Self::DeclineRematch { reply, .. } => _ = reply.send(Err(err)),
-            Self::NameChanged { .. } => {}
+            Self::NameChanged { .. } | Self::Close => {}
+            Self::UserDeleted { reply, .. } => _ = reply.send(Err(err)),
         }
     }
 }
@@ -398,6 +468,8 @@ pub struct Connection {
     user: Uuid,
     snapshots: watch::Receiver<Arc<Snapshot>>,
     commands: mpsc::UnboundedSender<Command>,
+    /// The users who delete themselves while this connection is open.
+    gone: broadcast::Receiver<Uuid>,
 }
 
 impl Connection {
@@ -408,10 +480,23 @@ impl Connection {
 
     /// Waits for a snapshot newer than the last one seen and returns the newest. Only the
     /// latest matters, so a slow reader skips the ones in between. Returns `None` when the
-    /// room has shut down; connect again to get a fresh one.
+    /// room has shut down, or this connection's user has deleted themselves (see
+    /// [`Rooms::user_gone`]); connect again to get a fresh one.
     pub async fn changed(&mut self) -> Option<Arc<Snapshot>> {
-        self.snapshots.changed().await.ok()?;
-        Some(self.latest())
+        loop {
+            tokio::select! {
+                changed = self.snapshots.changed() => {
+                    changed.ok()?;
+                    return Some(self.latest());
+                }
+                gone = self.gone.recv() => match gone {
+                    Ok(user) if user != self.user => {}
+                    // This user, or too many to tell whether it was: end the connection.
+                    // Reconnecting is all that costs a user who is still here.
+                    _ => return None,
+                },
+            }
+        }
     }
 
     /// Plays an action as this connection's user, who must have a seat in the game by now
@@ -427,6 +512,18 @@ impl Connection {
         self.commands.send(command).map_err(|_| RoomError::Gone)?;
         answer.await.map_err(|_| RoomError::Internal)?
     }
+
+    /// Gives up the game as this connection's user, who must have a seat in it. Errors as
+    /// [`Connection::act`] does; a game that is over refuses with [`RoomError::Rejected`].
+    pub async fn forfeit(&self) -> Result<(), RoomError> {
+        let (reply, answer) = oneshot::channel();
+        let command = Command::Forfeit {
+            user: self.user,
+            reply,
+        };
+        self.commands.send(command).map_err(|_| RoomError::Gone)?;
+        answer.await.map_err(|_| RoomError::Internal)?
+    }
 }
 
 /// The state behind a room, owned by its task.
@@ -436,8 +533,8 @@ struct Room {
     id: GameId,
     /// By seat.
     players: Vec<Uuid>,
-    /// The players' display names, by seat. See [`Snapshot::player_names`].
-    names: Vec<Option<String>>,
+    /// Who the players are, by seat, as clients are told.
+    who: Who,
     /// The game, in its own type. It becomes JSON only to be stored and sent, and is never
     /// read back from JSON while the room is up. Null until every seat is taken.
     live: Option<Box<dyn Live>>,
@@ -487,7 +584,7 @@ impl Room {
             .transpose()
             .map_err(|err| internal(err, "could not read a stored game state"))?;
         let state = to_json(live.as_deref())?;
-        let names = read_names(&shared.pool, &players)
+        let who = read_players(&shared.pool, &players)
             .await
             .map_err(|err| internal(err, "could not load the names of a game's players"))?;
 
@@ -497,7 +594,8 @@ impl Room {
             revision,
             state_version: engine.state_version(),
             players: players.clone(),
-            player_names: names.clone(),
+            player_names: who.names.clone(),
+            player_guests: who.guests.clone(),
             state,
             rematch: rematch.clone(),
         };
@@ -506,7 +604,7 @@ impl Room {
             engine: engine.clone(),
             id: id.clone(),
             players,
-            names,
+            who,
             live,
             revision,
             rematch,
@@ -593,11 +691,15 @@ impl Room {
                 action,
                 reply,
             } => _ = reply.send(self.act(user, action).await),
+            Command::Forfeit { user, reply } => _ = reply.send(self.forfeit(user).await),
             Command::AskRematch { user, reply } => _ = reply.send(self.ask_rematch(user).await),
             Command::DeclineRematch { user, reply } => {
                 _ = reply.send(self.decline_rematch(user).await)
             }
             Command::NameChanged { user } => self.name_changed(user).await,
+            Command::UserDeleted { user, reply } => _ = reply.send(self.user_deleted(user).await),
+            // The room can't trust what it has any more, as after a failed save: it stops.
+            Command::Close => self.stale = true,
         }
     }
 
@@ -645,6 +747,19 @@ impl Room {
         self.commit(next).await
     }
 
+    /// `user`, a player, gives up the game. Allowed on any turn, once the game has started and
+    /// until it is over (the game refuses it then).
+    async fn forfeit(&mut self, user: Uuid) -> Result<(), RoomError> {
+        let seat = self.seat_of(user).ok_or(RoomError::NotAPlayer)?;
+        let Some(live) = &self.live else {
+            return Err(RoomError::NotStarted);
+        };
+        let next = live
+            .forfeit(seat)
+            .map_err(|rejection| RoomError::Rejected(rejection.reason().to_owned()))?;
+        self.commit(next).await
+    }
+
     /// Makes `next`, the game after an action, the game: saves it, and then tells everyone.
     async fn commit(&mut self, next: Box<dyn Live>) -> Result<(), RoomError> {
         let state = to_json(Some(next.as_ref()))?;
@@ -667,9 +782,14 @@ impl Room {
             return Err(RoomError::NoRematch);
         }
         match &self.live {
-            Some(live) if live.is_over() => Ok(seat),
-            _ => Err(RoomError::NotOver),
+            Some(live) if live.is_over() => {}
+            _ => return Err(RoomError::NotOver),
         }
+        // Nobody to play it with.
+        if (0..self.players.len()).any(|other| other != seat && self.who.deleted[other]) {
+            return Err(RoomError::NoRematch);
+        }
+        Ok(seat)
     }
 
     async fn ask_rematch(&mut self, user: Uuid) -> Result<Option<Rematch>, RoomError> {
@@ -727,30 +847,55 @@ impl Room {
         )
     }
 
-    /// Publishes the game again if `user`, a player here, has a different name than the room
-    /// shows. The revision stays: nothing about the game changed, only how it is labelled.
+    /// Publishes the game again if `user`, a player here, is labelled differently than the room
+    /// shows: a new name, or a guest who has made an account. The revision stays: nothing about
+    /// the game changed, only how it is labelled.
     async fn name_changed(&mut self, user: Uuid) {
         if self.seat_of(user).is_none() {
             return; // Watchers' names aren't shown.
         }
-        let before = self.names.clone();
+        let before = self.who.clone();
         self.refresh_names().await;
-        if self.names != before {
+        if self.who != before {
             // The state is what the last snapshot has. Read it first: `publish` replaces the snapshot.
             let state = self.snapshots.borrow().state.clone();
             self.publish(state);
         }
     }
 
-    /// Reads the players' names again, to publish with a change. A name that can't be read
-    /// is not worth failing a change that is already saved, so the old names stay.
+    /// Reads the players' names (and whether they have deleted their user) again, to publish
+    /// with a change. A name that can't be read is not worth failing a change that is already
+    /// saved, so the old names stay.
     async fn refresh_names(&mut self) {
-        match read_names(&self.pool, &self.players).await {
-            Ok(names) => self.names = names,
+        match read_players(&self.pool, &self.players).await {
+            Ok(who) => self.who = who,
             Err(err) => {
                 tracing::warn!(%err, game = %self.id, "could not refresh the players' names")
             }
         }
+    }
+
+    /// `user`, a player here, has deleted their user. Shows them as deleted, and drops a
+    /// rematch that is still undecided: nobody is left to answer it.
+    async fn user_deleted(&mut self, user: Uuid) -> Result<(), RoomError> {
+        if self.seat_of(user).is_none() {
+            return Ok(());
+        }
+        let before = self.who.clone();
+        self.refresh_names().await;
+        if matches!(
+            self.rematch,
+            Some(Rematch::Offered { .. } | Rematch::Declined { .. })
+        ) {
+            // Saves it as the next revision and publishes, with the names read just now.
+            return self.change_rematch(Outcome::Becomes(None)).await;
+        }
+        if self.who != before {
+            // The state is what the last snapshot has. Read it first: `publish` replaces the snapshot.
+            let state = self.snapshots.borrow().state.clone();
+            self.publish(state);
+        }
+        Ok(())
     }
 
     fn seat_of(&self, user: Uuid) -> Option<usize> {
@@ -793,28 +938,55 @@ impl Room {
             revision: self.revision,
             state_version: self.engine.state_version(),
             players: self.players.clone(),
-            player_names: self.names.clone(),
+            player_names: self.who.names.clone(),
+            player_guests: self.who.guests.clone(),
             state,
             rematch: self.rematch.clone(),
         }));
     }
 }
 
-/// The display names of `players`, in their order. Null for one who hasn't picked a name.
-async fn read_names(pool: &PgPool, players: &[Uuid]) -> Result<Vec<Option<String>>, sqlx::Error> {
-    let rows: Vec<(Uuid, Option<String>)> =
-        sqlx::query_as("SELECT id, name FROM users WHERE id = ANY($1)")
-            .bind(players)
-            .fetch_all(pool)
-            .await?;
-    Ok(players
-        .iter()
-        .map(|player| {
-            rows.iter()
-                .find(|(id, _)| id == player)
-                .and_then(|(_, name)| name.clone())
-        })
-        .collect())
+/// Who a game's players are, besides their ids: what clients are shown, and what the room needs
+/// to know about them. All by seat.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Who {
+    /// The display names: null for one who hasn't picked a name. A registered user's name is
+    /// their username.
+    names: Vec<Option<String>>,
+    /// Who has deleted their user. A game with one has nobody to play a rematch with.
+    deleted: Vec<bool>,
+    /// Who is a guest: has no username, and is neither the bot nor deleted. See
+    /// [`Snapshot::player_guests`].
+    guests: Vec<bool>,
+}
+
+/// Reads who `players` are, in their order.
+async fn read_players(pool: &PgPool, players: &[Uuid]) -> Result<Who, sqlx::Error> {
+    // A guest here is one in `list_games` (in `lobby`): keep the two the same.
+    let rows: Vec<(Uuid, Option<String>, bool, bool)> = sqlx::query_as(
+        "SELECT id, name, deleted_at IS NOT NULL,
+                username IS NULL AND deleted_at IS NULL AND id <> $2
+           FROM users WHERE id = ANY($1)",
+    )
+    .bind(players)
+    .bind(BOT_USER)
+    .fetch_all(pool)
+    .await?;
+    let row = |player: &Uuid| rows.iter().find(|(id, ..)| id == player);
+    Ok(Who {
+        names: players
+            .iter()
+            .map(|player| row(player).and_then(|(_, name, ..)| name.clone()))
+            .collect(),
+        deleted: players
+            .iter()
+            .map(|player| row(player).is_some_and(|(_, _, deleted, _)| *deleted))
+            .collect(),
+        guests: players
+            .iter()
+            .map(|player| row(player).is_some_and(|(.., guest)| *guest))
+            .collect(),
+    })
 }
 
 /// The game's state as JSON, to store and to send. Null for a game that hasn't started.
@@ -1213,6 +1385,8 @@ mod tests {
                 state_version: 1,
                 players: vec![creator],
                 player_names: vec![None],
+                // A user made by `user` is a guest.
+                player_guests: vec![true],
                 state: None,
                 rematch: None,
             }

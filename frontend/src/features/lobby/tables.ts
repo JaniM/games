@@ -60,6 +60,8 @@ export const myGames = table(
     updatedAt: z.number(),
     /** The names of the players who have joined, by seat; null for one who has no name. */
     playerNames: z.array(z.string().nullable()),
+    /** Which of them are guests, by seat: shown with a guest indicator. */
+    playerGuests: z.array(z.boolean()),
   }),
   // Indexing `updatedAt` makes a range query on it (`updatedAtGte(0)` for all of them)
   // come back oldest first, so the page needs no sort of its own: it reverses the result

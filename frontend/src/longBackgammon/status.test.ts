@@ -46,6 +46,61 @@ describe("names", () => {
   it("label your own bar 'You' if you have no name", () => {
     expect(barNameOf(snap({ playerNames: [null, "Grace"] }), 0, 0)).toBe("You");
   });
+
+  describe("of a guest", () => {
+    // Both are guests, and Grace has typed the name of an account.
+    const guests = snap({ playerGuests: [true, true] });
+
+    it("carry a guest indicator in a sentence and on the bar, for the other player", () => {
+      expect(nameOf(guests, 1, 0)).toBe("Grace (guest)");
+      expect(barNameOf(guests, 1, 0)).toBe("Grace (guest)");
+    });
+
+    it("carry none for the viewer's own seat, who says 'You' and '(you)'", () => {
+      expect(nameOf(guests, 0, 0)).toBe("You");
+      expect(barNameOf(guests, 0, 0)).toBe("Ada (you)");
+    });
+
+    it("carry it for both when watching", () => {
+      expect(nameOf(guests, 0, null)).toBe("Ada (guest)");
+      expect(barNameOf(guests, 1, null)).toBe("Grace (guest)");
+    });
+
+    it("are not marked when they have no name: 'Player 2' is no username", () => {
+      const nameless = snap({ playerNames: [null, null], playerGuests: [true, true] });
+
+      expect(nameOf(nameless, 1, 0)).toBe("Player 2");
+      expect(barNameOf(nameless, 1, 0)).toBe("Player 2");
+    });
+
+    it("leave an account unmarked beside a guest of the same name", () => {
+      const same = snap({ playerNames: ["Ada", "Ada"], playerGuests: [false, true] });
+
+      expect(nameOf(same, 0, null)).toBe("Ada");
+      expect(nameOf(same, 1, null)).toBe("Ada (guest)");
+    });
+
+    it("leave the bot unmarked", () => {
+      const bot = snap({ playerNames: ["Ada", "Bot"], playerGuests: [true, false] });
+
+      expect(barNameOf(bot, 1, 0)).toBe("Bot");
+      expect(nameOf(bot, 1, 0)).toBe("Bot");
+    });
+
+    it("run through what is said about the game: whose turn, who won, who forfeited, the rematch", () => {
+      expect(turnText(guests, 0)).toBe("Your turn. Roll the dice.");
+      expect(turnText(guests, 1)).toBe("Waiting for Ada (guest) to roll.");
+      const lost = snap({
+        playerGuests: [true, true],
+        state: startingState({ phase: { type: "over", winner: 1, points: 1, forfeited: true } }),
+      });
+      expect(resultOf(lost, 0)).toMatchObject({ title: "Grace (guest) won", detail: "You forfeited" });
+      expect(resultOf(lost, 1)).toMatchObject({ title: "You won", detail: "Ada (guest) forfeited" });
+      const over = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
+      const asked = snap({ playerGuests: [true, true], state: over, rematch: { type: "offered", by: 1 } });
+      expect(rematchStage(asked, 0).line).toBe("Grace (guest) wants a rematch.");
+    });
+  });
 });
 
 describe("turnText", () => {
@@ -70,31 +125,64 @@ describe("turnText", () => {
   });
 
   it("is empty when the game is over", () => {
-    const state = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     expect(turnText(snap({ state }), 0)).toBe("");
   });
 });
 
 describe("resultOf", () => {
   const over = (winner: 0 | 1 | null, points: number) =>
-    snap({ state: startingState({ phase: { type: "over", winner, points } }) });
+    snap({ state: startingState({ phase: { type: "over", winner, points, forfeited: false } }) });
 
   it("is null while the game is on", () => {
     expect(resultOf(snap(), 0)).toBeNull();
   });
 
   it("says who won and what it is worth", () => {
-    expect(resultOf(over(0, 1), 0)).toEqual({ title: "You won", detail: "1 point", won: true });
-    expect(resultOf(over(0, 1), 1)).toEqual({ title: "Ada won", detail: "1 point", won: false });
-    expect(resultOf(over(1, 1), null)).toEqual({ title: "Grace won", detail: "1 point", won: false });
+    expect(resultOf(over(0, 1), 0)).toEqual({ title: "You won", detail: "1 point", forfeited: false, won: true });
+    expect(resultOf(over(0, 1), 1)).toEqual({ title: "Ada won", detail: "1 point", forfeited: false, won: false });
+    expect(resultOf(over(1, 1), null)).toEqual({ title: "Grace won", detail: "1 point", forfeited: false, won: false });
   });
 
   it("calls a double win a mars", () => {
-    expect(resultOf(over(1, 2), 1)).toEqual({ title: "You won", detail: "Mars: 2 points", won: true });
+    expect(resultOf(over(1, 2), 1)).toEqual({ title: "You won", detail: "Mars: 2 points", forfeited: false, won: true });
   });
 
   it("calls it a draw", () => {
-    expect(resultOf(over(null, 0), 0)).toEqual({ title: "Draw", detail: "", won: false });
+    expect(resultOf(over(null, 0), 0)).toEqual({ title: "Draw", detail: "", forfeited: false, won: false });
+  });
+
+  describe("after a forfeit", () => {
+    const forfeit = (winner: 0 | 1) =>
+      snap({ state: startingState({ phase: { type: "over", winner, points: 1, forfeited: true } }) });
+
+    it("says who gave up instead of what the win is worth", () => {
+      expect(resultOf(forfeit(0), 0)).toEqual({
+        title: "You won",
+        detail: "Grace forfeited",
+        forfeited: true,
+        won: true,
+      });
+      expect(resultOf(forfeit(0), 1)).toEqual({
+        title: "Ada won",
+        detail: "You forfeited",
+        forfeited: true,
+        won: false,
+      });
+    });
+
+    it("names both for someone who is watching", () => {
+      expect(resultOf(forfeit(1), null)).toMatchObject({ title: "Grace won", detail: "Ada forfeited" });
+    });
+
+    it("names a player who has no name, as everywhere else", () => {
+      const nameless = snap({
+        playerNames: [null, null],
+        state: startingState({ phase: { type: "over", winner: 1, points: 1, forfeited: true } }),
+      });
+
+      expect(resultOf(nameless, null)).toMatchObject({ title: "Player 2 won", detail: "Player 1 forfeited" });
+    });
   });
 });
 
@@ -122,13 +210,13 @@ describe("lastThrowText", () => {
 
   it("is empty otherwise, and once the game is over", () => {
     expect(lastThrowText(startingState())).toBe("");
-    const over = startingState({ lastThrow: true, phase: { type: "over", winner: 0, points: 1 } });
+    const over = startingState({ lastThrow: true, phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     expect(lastThrowText(over)).toBe("");
   });
 });
 
 describe("rematchStage", () => {
-  const over = { type: "over", winner: 0, points: 1 } as const;
+  const over = { type: "over", winner: 0, points: 1, forfeited: false } as const;
   const rematchOf = (rematch: Rematch | null) => snap({ state: startingState({ phase: over }), rematch });
 
   it("lets a player ask when nobody has", () => {
@@ -260,7 +348,7 @@ describe("frameText, for a position of a game in review", () => {
     const over = startingState({
       off: [15, 3],
       turns: [40, 39],
-      phase: { type: "over", winner: 0, points: 1 },
+      phase: { type: "over", winner: 0, points: 1, forfeited: false },
       lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
     });
 
@@ -270,11 +358,11 @@ describe("frameText, for a position of a game in review", () => {
 
   it("gives a mars its two points, and a draw no points", () => {
     const mars = startingState({
-      phase: { type: "over", winner: 1, points: 2 },
+      phase: { type: "over", winner: 1, points: 2, forfeited: false },
       lastTurn: { seat: 1, dice: [1, 2], played: [{ from: 24, die: 1 }] },
     });
     const draw = startingState({
-      phase: { type: "over", winner: null, points: 0 },
+      phase: { type: "over", winner: null, points: 0, forfeited: false },
       lastTurn: { seat: 1, dice: [1, 2], played: [{ from: 24, die: 1 }] },
     });
 
@@ -282,10 +370,22 @@ describe("frameText, for a position of a game in review", () => {
     expect(look(draw).detail).toBe("Game over. Draw.");
   });
 
+  it("says who forfeited, keeping a name's capital and lowering \"You\" in the middle of the sentence", () => {
+    const forfeit = (winner: 0 | 1) =>
+      startingState({
+        phase: { type: "over", winner, points: 1, forfeited: true },
+        lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+      });
+
+    expect(look(forfeit(0), 0).detail).toBe("Game over. You won, Grace forfeited.");
+    expect(look(forfeit(0), 1).detail).toBe("Game over. Ada won, you forfeited.");
+    expect(look(forfeit(1), null).detail).toBe("Game over. Grace won, Ada forfeited.");
+  });
+
   it("tells the result of the position it is given, not of the game as it stands now", () => {
     // The snapshot is of a game that is over, but the position in review is from the middle of it.
     const live = snap({
-      state: startingState({ phase: { type: "over", winner: 0, points: 1 } }),
+      state: startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } }),
     });
     const middle = startingState(moving([6, 3], []));
 

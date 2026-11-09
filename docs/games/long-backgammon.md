@@ -9,7 +9,7 @@ This is the source of truth for the rules of long backgammon on this site (also 
 
 ## Overview
 
-Two players, 15 checkers each, one pair of dice. Both players move their checkers the same way around the board (counter-clockwise), starting from one point each (the "head") and ending in their last quadrant (their "home"). **There is no hitting.** A point holding any opposing checker is simply blocked. The first player to bear off all 15 checkers wins. There is no doubling cube.
+Two players, 15 checkers each, one pair of dice. Both players move their checkers the same way around the board (counter-clockwise), starting from one point each (the "head") and ending in their last quadrant (their "home"). **There is no hitting.** A point holding any opposing checker is simply blocked. The first player to bear off all 15 checkers wins, unless the other player gives up first (a forfeit, [D10](#decisions)). There is no doubling cube.
 
 ## Coordinates
 
@@ -81,6 +81,7 @@ A move that creates a block is **illegal unless at least one opposing checker is
 - **Oyn:** the loser has borne off at least one checker. The winner scores **1 point**.
 - **Mars:** the loser has borne off no checkers. The winner scores **2 points**.
 - **Draw rule (last throw).** White always moves first, so if **White** bears off the 15th checker, **Black gets one last turn**. If Black bears off all 15 checkers on that turn, the game is a **draw**. Otherwise White wins. If Black bears off the 15th checker first, the game ends at once. Mars is judged after Black's last turn. (See [D5](#decisions).)
+- **Forfeit (site rule).** A player may give up at any time in a game that has started and is not over, on either turn and even in the middle of their own. The other player wins and scores **1 point**, whatever either side has borne off. (See [D10](#decisions).)
 - Coke (3 points) and home mars (4 points) are informal and are **not used**.
 
 ## Decisions
@@ -98,6 +99,7 @@ Points where the sources are silent or disagree. The entry in the Choice column 
 | D7 | May a player take back a step? | **Yes, within the turn in progress; never the roll, and never the step that ends the turn.** | Not a rule of the sources: a site feature the user asked for on 2026-11-08, with this scope chosen from three (this one, an explicit "end turn" confirmation, and a takeback up to the opponent's roll). Undoing only returns to a position the player already had, so every rule above still holds. The head rule, the must-play rules and the prime rule are worked out again from the restored position. The opponent sees each step and each undo as it happens. |
 | D8 | Which die bears off the selected checker when two different dice could? | **The larger die, in the site's UI.** | Not a rule of the sources: a site decision the user made on 2026-11-08. The bear-off button shows no die, so it cannot ask. This removes the player's choice of die in those positions, which can matter for what the other die may play. The server still accepts either die; only this client makes the choice, so it is the one place to change if the choice should come back. |
 | D9 | May the site play several dice of one checker with a single click (a combined move)? | **Yes, as the same steps one after the other.** The server lists every line of two or more steps by one checker, each step legal in the position the steps before it lead to, and the client sends them as ordinary moves, a short pause apart. Where a 6 then a 3 and a 3 then a 6 reach the same point, the line the server lists first is played: the smaller die first. The bear-off tray plays one die when one can bear the checker off (the larger, as in D8), and several dice only when no single die can. | Not a rule of the sources: a site feature the user asked for on 2026-11-09. A combined move adds no rule: it is the "one checker may be moved by both dice, one after the other" of A turn, 3, so the intermediate point is a legal landing point, the prime and head rules are judged after each step, and the must-play rules apply to every step. The opponent sees each step as it happens, and an undo takes them back one at a time. The choice of order where two reach the same point cannot change the position the turn ends in, but it does change the point the checker passes over, which is only seen on the board. |
+| D10 | May a player give up, and what does it score? | **Yes, at any time in a game that has started and is not over, on either turn and even in the middle of a turn. The other player wins and scores 1 point, whatever either side has borne off.** A forfeit ends the game at once: there is no last throw after it, and mars does not apply. | Not a rule of the sources: a site feature the user asked for on 2026-11-09, with the score chosen from two (this one, and scoring it like a finished game, where a forfeiter who had borne off nothing would give the winner a mars, 2 points). A forfeit is not a move, so the turn rules do not apply to it, and it cannot be taken back. It loses in every position, including the last throw ([D5](#decisions)): if White has borne off all 15 and Black has the last throw, a forfeit by either player gives the win to the other. The site also forfeits for a player who deletes their account, in each of their games that is still being played against another person. |
 
 ## Worked examples
 
@@ -113,6 +115,7 @@ All use each player's **own index**. They assume the points mentioned are otherw
 8. **Bear-off overshoot with nothing farther.** All checkers are home, on points 21–24 only. A 6 bears off the checker on 21, the farthest one.
 9. **Last throw.** White bears off the 15th checker on its turn. Black has borne off 12 checkers and gets one more turn. If Black bears off its remaining 3, the game is a draw. If not, White wins 1 point (Black has borne off at least one).
 10. **Undo.** A player rolls 5-2 and plays the 5 from the head (1→6). The head is used up, so the 2 could only be played from 6. The player undoes the step: the checker is back on the head, the 5 is back to play, and the 2 may now be played from the head (1→3), or the 5 played again. After 1→6 and 6→8 the turn is over, so neither step can be undone.
+11. **Forfeit.** It is White's turn and White has rolled 5-2 and played the 5. Black, who has borne off nothing, gives up. The game is over at once: White wins **1 point**, not the 2 of a mars, and the rest of White's turn is not played. Had White given up instead, Black would have won 1 point in the same way.
 
 ## Out of scope
 

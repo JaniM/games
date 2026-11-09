@@ -16,7 +16,9 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use tower::ServiceExt;
 
 use crate::{
-    AppState, app,
+    AppState,
+    account::Accounts,
+    app,
     game::{Game, Games, Rejection, StateError},
     room::Rooms,
 };
@@ -47,7 +49,11 @@ impl TestApp {
             Duration::from_millis(100),
             TEST_BOT_PAUSE,
         );
-        let router = app(AppState { pool, rooms });
+        let router = app(AppState {
+            pool,
+            rooms,
+            accounts: Accounts::new(),
+        });
         Self { router }
     }
 
@@ -89,6 +95,39 @@ impl TestApp {
     pub async fn register_user(&self) -> (String, String) {
         let reply = self.send(Method::POST, "/api/register", None, None).await;
         assert_eq!(reply.status, StatusCode::CREATED);
+        (
+            reply.json["userId"].as_str().unwrap().to_owned(),
+            reply.json["accessToken"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    /// Makes the token's guest an account. Returns the reply as it is.
+    pub async fn create_account(&self, token: &str, username: &str, password: &str) -> Reply {
+        self.send(
+            Method::POST,
+            "/api/account",
+            Some(&bearer(token)),
+            Some(json!({ "username": username, "password": password })),
+        )
+        .await
+    }
+
+    /// Signs in with a username and password. Returns the reply as it is.
+    pub async fn login(&self, username: &str, password: &str) -> Reply {
+        self.send(
+            Method::POST,
+            "/api/login",
+            None,
+            Some(json!({ "username": username, "password": password })),
+        )
+        .await
+    }
+
+    /// Makes a guest an account and returns its user id and session token.
+    pub async fn register_account(&self, username: &str, password: &str) -> (String, String) {
+        let (_, guest_token) = self.register_user().await;
+        let reply = self.create_account(&guest_token, username, password).await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json);
         (
             reply.json["userId"].as_str().unwrap().to_owned(),
             reply.json["accessToken"].as_str().unwrap().to_owned(),

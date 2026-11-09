@@ -54,8 +54,9 @@ export const saveName = effect({
               });
               if (res.status === 401) return;
               if (!res.ok) {
-                // 422 carries the reason, in words meant for the user.
-                throw new Error(res.status === 422 ? await res.text() : `HTTP ${res.status}`);
+                // 422 (not a name) and 409 (an account's name can't be changed) carry the
+                // reason, in words meant for the user.
+                throw new Error([409, 422].includes(res.status) ? await res.text() : `HTTP ${res.status}`);
               }
               ctx.run(nameSaved, { name: meSchema.parse(await res.json()).name });
             } catch (err) {

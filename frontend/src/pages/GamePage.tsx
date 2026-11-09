@@ -5,6 +5,7 @@ import {
   closeGame,
   closeReview,
   declineRematch,
+  forfeitGame,
   gameViews,
   joinGame,
   joinRequests,
@@ -45,6 +46,7 @@ export function GamePage({ gameId }: { gameId: string }) {
   const showPosition = useOp(showFrame);
   const stepPosition = useOp(stepFrame);
   const select = useOp(selectPoint);
+  const forfeit = useOp(forfeitGame);
   const submit = useOp(submitAction);
   const submitMove = useOp(submitMoves);
   const autoplay = useOp(setAutoplay);
@@ -79,6 +81,7 @@ export function GamePage({ gameId }: { gameId: string }) {
       onStepFrame={(by) => stepPosition({ gameId, by })}
       onRoll={() => submit({ gameId, action: { type: "roll" } })}
       onUndo={() => submit({ gameId, action: { type: "undo" } })}
+      onForfeit={() => forfeit({ gameId })}
       onAutoplay={(on) => autoplay({ gameId, on })}
       // Only in development: `import.meta.env.DEV` is false in `vite build`, and the button is left out.
       showAutoplay={import.meta.env.DEV}
