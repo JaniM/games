@@ -92,6 +92,16 @@ describe("where a game stands", () => {
     expect(html).toContain("my-game-state my-game-state-done");
   });
 
+  it("is drawn with its own dot: one for a game in play, one for a game that waits, one for a finished one", () => {
+    const html = render({
+      mine: [game(1, { started: true }), game(2, { started: false }), game(3, { finished: true })],
+    });
+
+    expect(html).toContain("my-game-state my-game-state-live");
+    expect(html).toContain("my-game-state my-game-state-waiting");
+    expect(html).toContain("my-game-state my-game-state-done");
+  });
+
   it("is on the same row as the date of the last change", () => {
     const html = render({ mine: [game(1)] });
 
@@ -215,7 +225,6 @@ describe("the dialog for creating a game", () => {
     expect(html).toContain("<dialog");
     expect(html).toContain("New game: Long backgammon");
     expect(html).toContain("Race all fifteen of your checkers");
-    expect(html).toContain("Anyone who has");
     expect(html).toContain("Create game");
     expect(html).toContain("Cancel");
     expect(html).not.toContain("Creating…");
@@ -224,20 +233,27 @@ describe("the dialog for creating a game", () => {
   it("offers the bot as the opponent for a game that has one, with a friend picked to begin with", () => {
     const html = render({ request: request() });
 
-    expect(html).toContain("A friend");
-    expect(html).toContain("The bot");
-    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span><span class="choice-name">A friend/);
+    expect(html).toContain("Play vs a friend");
+    expect(html).toContain("Play vs a bot");
+    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span class="choice-name">Play vs a friend/);
     expect(html).toContain("Create game");
     expect(html).not.toContain("Start game");
   });
 
-  it("shows the bot picked, and says the game starts at once", () => {
+  it("offers the two opponents as plain labels, with no line of explanation under either", () => {
+    const html = render({ request: request() });
+
+    expect(html).not.toContain("choice-text");
+    expect(html).not.toContain("starts right away");
+    expect(html).not.toContain("Anyone who has");
+  });
+
+  it("shows the bot picked, and still calls the button Create game", () => {
     const html = render({ request: request({ bot: true }) });
 
-    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span><span class="choice-name">The bot/);
-    expect(html).toContain("The game starts right away.");
-    expect(html).toContain("Start game");
-    expect(html).not.toContain("Create game");
+    expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span class="choice-name">Play vs a bot/);
+    expect(html).toContain("Create game");
+    expect(html).not.toContain("Start game");
   });
 
   it("has no choice of opponent for a game with no bot, only the link to send", () => {
@@ -245,7 +261,7 @@ describe("the dialog for creating a game", () => {
 
     const html = render({ games: withoutBot, request: request() });
 
-    expect(html).not.toContain("The bot");
+    expect(html).not.toContain("Play vs a bot");
     expect(html).toContain("You get a link to send to your opponent.");
     expect(html).toContain("Create game");
   });

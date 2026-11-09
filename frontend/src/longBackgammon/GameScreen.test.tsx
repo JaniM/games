@@ -61,6 +61,16 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
   );
 }
 
+/**
+ * The board and what is laid over it, up to the bar of the player below it, and the rest of the
+ * page without it.
+ */
+function splitBoard(html: string): { wrap: string; elsewhere: string } {
+  const from = html.indexOf('class="board-wrap"');
+  const to = html.indexOf('class="player-bar', from);
+  return { wrap: html.slice(from, to), elsewhere: html.slice(0, from) + html.slice(to) };
+}
+
 /** A game with Ada waiting alone for an opponent. */
 const waiting = viewOf({
   snapshot: snapshotOf({ players: [ADA], playerNames: ["Ada"], state: null }),
@@ -132,15 +142,14 @@ describe("a game with both players", () => {
     expect(other).toContain("Waiting for Ada to roll.");
   });
 
-  it("puts the roll button on the board, under the dice, not in the turn controls", () => {
-    const html = render(ADA, viewOf());
+  it("puts the roll button on the board, under the dice, not in the status", () => {
+    const { wrap, elsewhere } = splitBoard(render(ADA, viewOf()));
 
-    const wrap = html.slice(html.indexOf('class="board-wrap"'), html.indexOf('aria-label="Turn"'));
     expect(wrap).toContain("Roll dice");
     // After the board, positioned by percentages of it, centred under the dice.
     expect(wrap.indexOf("</svg>")).toBeLessThan(wrap.indexOf("Roll dice"));
     expect(wrap).toMatch(/class="button under-dice"[^>]*style="left:65\.56%;top:\d+\.\d+%"/);
-    expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Roll dice");
+    expect(elsewhere).not.toContain("Roll dice");
   });
 
   it("does not offer a second roll while the first is on its way", () => {
@@ -155,6 +164,42 @@ describe("a game with both players", () => {
     expect(html).toContain(">White<");
     expect(html).toContain(">Black<");
     expect(html).toContain("to move");
+  });
+
+  it("puts the viewer's own bar over the board and the opponent's under it", () => {
+    const html = render(GRACE, viewOf());
+    const board = html.indexOf('class="board-wrap"');
+
+    expect(html.indexOf("Grace (you)")).toBeLessThan(board);
+    expect(html.indexOf(">Ada<")).toBeGreaterThan(board);
+    expect(html).toMatch(/class="player-bar player-bar-above[ "][^>]*>(?:(?!<\/div>)[\s\S])*Grace \(you\)/);
+    expect(html).toMatch(/class="player-bar player-bar-below[ "][^>]*>(?:(?!<\/div>)[\s\S])*Ada/);
+  });
+
+  it("puts a spectator's view the same way: White over the board", () => {
+    const html = render(STRANGER, viewOf());
+    const board = html.indexOf('class="board-wrap"');
+
+    // Nobody is "you"; the bar over the board is the one the board is turned for, White's.
+    expect(html.indexOf(">Ada<")).toBeLessThan(board);
+    expect(html.indexOf(">Grace<")).toBeGreaterThan(board);
+  });
+
+  it("highlights the player to move, wherever their bar is", () => {
+    // Ada (White, seat 0) is to roll first.
+    const ada = render(ADA, viewOf());
+    expect(ada).toMatch(/class="player-bar player-bar-above player-bar-active"/);
+    expect(ada.match(/player-bar-active/g)).toHaveLength(1);
+
+    const grace = render(GRACE, viewOf());
+    expect(grace).toMatch(/class="player-bar player-bar-below player-bar-active"/);
+    expect(grace.match(/player-bar-active/g)).toHaveLength(1);
+  });
+
+  it("highlights nobody when the game is over", () => {
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+
+    expect(render(ADA, viewOf({ snapshot: snapshotOf({ state }) }))).not.toContain("player-bar-active");
   });
 
   it("shows the dice, and lets the mover pick a checker", () => {
@@ -247,13 +292,13 @@ describe("a game with both players", () => {
   it("puts the undo on the board, between the trays, where it covers no stack", () => {
     const state = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+    const { wrap, elsewhere } = splitBoard(html);
 
-    const wrap = html.slice(html.indexOf('class="board-wrap"'), html.indexOf('aria-label="Turn"'));
     // After the board, positioned by percentages of it: the trays' column, halfway down.
     expect(wrap.indexOf("</svg>")).toBeLessThan(wrap.indexOf("Undo"));
     expect(wrap).toMatch(/class="button button-quiet between-trays"[^>]*style="left:92\.78%;top:50\.00%"/);
     expect(wrap).not.toContain("under-dice");
-    expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Undo");
+    expect(elsewhere).not.toContain("Undo");
     // The roll button comes before the first step and is not there now.
     expect(html).not.toContain("Roll dice");
   });
@@ -339,9 +384,56 @@ describe("a game with both players", () => {
     });
     const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state }) }));
 
-    expect(html).toContain("Ada won the game (1 point).");
+    expect(html).toContain('aria-label="Result"');
+    expect(html).toContain("Game over");
+    expect(html).toContain(">Ada won<");
+    expect(html).toContain(">1 point<");
+    expect(html).not.toContain('class="result result-won"');
     expect(html).not.toContain("to move");
     expect(html).not.toContain("Roll dice");
+  });
+
+  it("replaces the status with the result, and offers the way back to the games", () => {
+    const state = startingState({ phase: { type: "over", winner: 0, points: 2 } });
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+
+    expect(html).not.toContain('aria-label="Turn"');
+    expect(html).toContain('class="result result-won"');
+    expect(html).toContain(">You won<");
+    expect(html).toContain(">Mars: 2 points<");
+    expect(html).toMatch(/<a[^>]*class="button"[^>]*href="\/"[^>]*>All games</);
+  });
+
+  it("marks the status as the viewer's own while it is their move, and not otherwise", () => {
+    expect(render(ADA, viewOf())).toContain('data-turn="mine"');
+    expect(render(GRACE, viewOf())).toContain('data-turn="wait"');
+    expect(render(STRANGER, viewOf())).toContain('data-turn="wait"');
+  });
+
+  it("puts a lost connection in the status, where it moves nothing", () => {
+    const html = render(ADA, viewOf({ connection: "reconnecting" }));
+
+    expect(html).toMatch(/status-detail status-detail-alert"><span role="alert">Connection lost\. Reconnecting…/);
+  });
+
+  it("puts the status under the board, after both player bars", () => {
+    const html = render(ADA, viewOf());
+
+    expect(html.indexOf('aria-label="Turn"')).toBeGreaterThan(html.indexOf('class="board-wrap"'));
+    expect(html.indexOf('aria-label="Turn"')).toBeGreaterThan(html.lastIndexOf('class="player-bar'));
+  });
+
+  it("puts the result there too, in the place of the status", () => {
+    const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const html = render(ADA, viewOf({ snapshot: snapshotOf({ state: over }) }));
+
+    expect(html.indexOf('aria-label="Result"')).toBeGreaterThan(html.lastIndexOf('class="player-bar'));
+    expect(html).not.toContain('aria-label="Turn"');
+  });
+
+  it("leaves out the line under the turn when there is nothing to say", () => {
+    // Nobody has played, nothing is wrong, and the game has started.
+    expect(render(ADA, viewOf())).not.toContain("status-detail");
   });
 });
 

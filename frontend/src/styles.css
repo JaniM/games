@@ -1,3 +1,16 @@
+/*
+ * The look of the site, in the order a page is built: the tokens, the page, the front page, the
+ * game page, the board. Four rules hold it together:
+ *
+ *  - Two typefaces, each with a job. The display face (`--font-display`) is for titles and for
+ *    nothing else; everything else is the UI face. Sizes come from the `--text-*` scale and the
+ *    weights are 400 and 600. A size or weight that is not on the scale is a mistake.
+ *  - One corner radius (`--radius`). Round is for things that are round: dots, swatches, radios.
+ *  - Lists are divided by hairlines (`--rule`), not boxed. A box is for what floats above the
+ *    page (the dialog, the menu) and for what is pressed (buttons, fields).
+ *  - The accent is for what is the player's to do, and for what is picked. Not for decoration.
+ */
+
 :root {
   color-scheme: light dark;
 
@@ -5,15 +18,32 @@
   --fg: #1d1b18;
   --muted: #6b655c;
   --card: #fffdf9;
-  --border: #e0dacd;
+  /* Between things; and the edge of a control, which has to be seen (--line, 3:1 on --bg). */
+  --rule: #ddd6c8;
+  --line: #8a8374;
   --accent: #a4472b;
+  --on-accent: #fffdf9;
+  /* The accent, faintly: what is picked, and what is the player's turn. */
+  --tint: color-mix(in srgb, var(--accent) 9%, var(--bg));
 
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  --radius: 4px;
+
+  /*
+   * System fonts on purpose: nothing is fetched from anyone (the privacy page says so). The
+   * display stack is the old-style serif of each platform: Iowan Old Style on Apple devices,
+   * Palatino on Windows, Georgia as the last resort.
+   */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-title: clamp(2rem, 5.5vw, 2.75rem);
+
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--fg);
   background: var(--bg);
@@ -25,8 +55,10 @@
     --fg: #efebe3;
     --muted: #a39c8f;
     --card: #1f1c16;
-    --border: #353128;
+    --rule: #2f2b23;
+    --line: #6d675a;
     --accent: #e08a6a;
+    --on-accent: #16140f;
   }
 }
 
@@ -39,6 +71,43 @@
 body {
   margin: 0;
   min-height: 100vh;
+}
+
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+/* Controls take the page's type instead of the browser's own. */
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+/* One focus ring for everything that can have one. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Read by a screen reader, not seen. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /*
@@ -66,14 +135,23 @@ body {
   padding: 4rem 1.5rem;
 }
 
+/* --- The corners --- */
+
 /*
  * The corner of the whole page, not of the centred column. The name is always here, over
  * whatever else is in the corner (the strip of a game page, and its menu), and never wider
  * than the screen: when its form opens it covers what is beside it instead of pushing it.
+ * Everything in the two top corners has the same line, so that their text sits on one baseline.
  */
-.top-right {
+.top-right,
+.game-top {
   position: absolute;
   top: 1rem;
+  font-size: var(--text-sm);
+  line-height: 2rem;
+}
+
+.top-right {
   right: 1.5rem;
   z-index: 30;
   max-width: calc(100% - 3rem);
@@ -85,51 +163,33 @@ body {
   gap: 0.5rem;
 }
 
-.name-button,
-.name-input {
-  font: inherit;
-  font-size: 0.9375rem;
-  color: var(--fg);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.25rem 0.875rem;
-}
-
+/* The name is text that can be changed, not a button to look at: dotted, like a field to fill in. */
 .name-button {
   max-width: 14rem;
+  padding: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--fg);
   cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 0.3em;
 }
 
 .name-button:hover:not(:disabled) {
-  border-color: var(--accent);
+  color: var(--accent);
+  text-decoration-color: var(--accent);
 }
 
 .name-button:disabled {
   color: var(--muted);
   cursor: default;
-}
-
-.name-save {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.name-input {
-  width: 11rem;
-}
-
-.name-button:focus-visible,
-.name-input:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  text-decoration: none;
 }
 
 .name-error {
-  font-size: 0.875rem;
   color: var(--accent);
 }
 
@@ -142,18 +202,9 @@ body {
   min-width: 0;
 }
 
-.name-input {
-  flex: 0 1 11rem;
-  min-width: 0;
-}
-
-form.name-control .name-button {
-  flex: none;
-}
-
 form.name-control {
   background: var(--bg);
-  border-radius: 999px;
+  border-radius: var(--radius);
   /* A ring of the page's colour around the form, and a shadow under it. Neither takes room. */
   box-shadow:
     0 0 0 0.25rem var(--bg),
@@ -167,18 +218,105 @@ form.name-control {
   }
 }
 
+/* --- Fields --- */
+
+.name-input,
+.invite-url {
+  padding: 0.25rem 0.625rem;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.name-input {
+  flex: 0 1 11rem;
+  width: 11rem;
+  min-width: 0;
+}
+
 /*
  * Safari on a phone zooms into an input whose text is smaller than 16px when it gets focus
  * (the name's form is focused as it opens, the invite link when it is pressed), and does not
  * zoom back out, which leaves the page too big for the screen. So no input on a touch screen
- * gets smaller text than that. In px: it is the size on the screen that counts. (The invite
- * link's input is dealt with after its own rule, which would win over this one.)
+ * gets smaller text than that. In px: it is the size on the screen that counts.
  */
 @media (pointer: coarse) {
-  .name-input {
+  .name-input,
+  .invite-url {
     font-size: 16px;
   }
 }
+
+/* --- Buttons --- */
+
+.button {
+  display: inline-block;
+  padding: 0.5rem 1.25rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--fg));
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* For the choice that isn't the point of the page, e.g. Cancel next to Create. */
+.button-quiet {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--line);
+}
+
+.button-quiet:hover:not(:disabled) {
+  color: var(--accent);
+  background: transparent;
+  border-color: var(--accent);
+}
+
+/* A quiet button that is a switch, and is on. */
+.button-quiet[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* For the corner, where the buttons sit among the lines of text. */
+.button-small {
+  padding: 0.125rem 0.75rem;
+  font-size: var(--text-sm);
+}
+
+/* In the name's form the buttons keep their size, and the input gives way. */
+form.name-control .button {
+  flex: none;
+}
+
+/* --- Plain text --- */
+
+.muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- The front page --- */
 
 .page-header {
   margin-bottom: 2.5rem;
@@ -186,14 +324,13 @@ form.name-control {
 
 .page-header h1 {
   margin: 0;
-  font-size: clamp(2.25rem, 6vw, 3.25rem);
+  font-size: var(--text-title);
   line-height: 1.1;
-  letter-spacing: -0.02em;
 }
 
 .page-header p {
   margin: 0.5rem 0 0;
-  font-size: 1.125rem;
+  font-size: var(--text-lg);
   color: var(--muted);
 }
 
@@ -205,7 +342,7 @@ form.name-control {
 .home {
   display: grid;
   grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr);
-  gap: 2.5rem;
+  gap: 3rem;
   align-items: start;
 }
 
@@ -217,17 +354,23 @@ form.name-control {
   overflow-y: auto;
 }
 
+/* The label over a list: small, and not in the display face. */
 .section-title {
   margin: 0 0 0.75rem;
-  font-size: 1.125rem;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
   line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 /* On a narrow screen the games to start come first, and the list below them. */
 @media (max-width: 44rem) {
   .home {
     grid-template-columns: minmax(0, 1fr);
-    gap: 2rem;
+    gap: 2.5rem;
   }
 
   .home-catalog {
@@ -243,46 +386,39 @@ form.name-control {
 .game-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
-  gap: 1.25rem;
+  gap: 2rem 1.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-/* A button that looks like a card: it opens the dialog for starting that game. */
+/*
+ * A button that opens the dialog for starting that game. It is set like an entry in a
+ * catalogue, under a heavy rule, and not as a box: the title is what you press.
+ */
 .game-card {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   width: 100%;
   height: 100%;
-  padding: 1.5rem;
-  font: inherit;
+  padding: 1rem 0 0;
   text-align: left;
-  color: inherit;
   cursor: pointer;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  transition:
-    border-color 0.15s,
-    transform 0.15s;
-}
-
-.game-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-
-.game-card:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  background: none;
+  border: 0;
+  border-top: 2px solid var(--fg);
 }
 
 .game-card-title {
-  font-size: 1.375rem;
-  font-weight: 700;
-  line-height: 1.2;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.game-card:hover .game-card-title {
+  color: var(--accent);
 }
 
 .game-card-text {
@@ -294,43 +430,209 @@ form.name-control {
   justify-content: space-between;
   gap: 1rem;
   margin-top: auto;
-  padding-top: 0.75rem;
-  font-size: 0.875rem;
+  padding-top: 0.5rem;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 
 .game-card-play {
   font-weight: 600;
   color: var(--accent);
+  transition: transform 0.15s;
+}
+
+.game-card:hover .game-card-play {
+  transform: translateX(0.25rem);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .game-card {
+  .game-card-play {
     transition: none;
   }
 
-  .game-card:hover {
+  .game-card:hover .game-card-play {
     transform: none;
   }
 }
 
-/* --- The game screen --- */
+/* The user's games: rows between hairlines. */
+.my-games {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.my-games li {
+  border-bottom: 1px solid var(--rule);
+}
+
+.my-game {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.75rem 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.my-game-name {
+  font-weight: 600;
+}
+
+.my-game:hover .my-game-name {
+  color: var(--accent);
+}
+
+.my-game-players {
+  color: var(--muted);
+}
+
+/* The state and the date, side by side: the state on the left, the date on the right. */
+.my-game-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  column-gap: 0.75rem;
+  font-size: var(--text-sm);
+}
+
+.my-game-meta time {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The state is a dot and a word: a full dot in the accent for a game being played, a hollow one
+ * for a game that waits for someone, and a grey one for a game that is over, which is not
+ * asking for anything.
+ */
+.my-game-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.my-game-state::before {
+  content: "";
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  background: currentColor;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.my-game-state-waiting::before {
+  background: transparent;
+}
+
+.my-game-state-done {
+  color: var(--muted);
+}
+
+/* --- The dialog --- */
+
+.modal {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 0;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.3);
+}
+
+.modal::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.modal-body {
+  padding: 1.5rem;
+}
+
+.modal-body p {
+  margin: 0 0 0.75rem;
+}
+
+.modal-title {
+  margin: 0 0 0.75rem;
+  font-size: var(--text-xl);
+  line-height: 1.15;
+}
+
+/*
+ * The choice of opponent in the new game dialog: radios in one list, between hairlines, with
+ * the picked one tinted. The options overlap by a border, so that the lines don't double.
+ */
+.choice {
+  min-width: 0;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  border: 0;
+}
+
+.choice-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.choice-option + .choice-option {
+  margin-top: -1px;
+}
+
+.choice-option:first-of-type {
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+
+.choice-option:last-of-type {
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+
+.choice-option:has(input:checked) {
+  z-index: 1;
+  background: var(--tint);
+  border-color: var(--accent);
+}
+
+.choice-option input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.choice-name {
+  font-weight: 600;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+/* --- The game page --- */
 
 /*
  * The strip along the top of a game page: the way back to the games, and the volume. It is
  * the top left corner of the whole page, where the name (`.top-right`) takes the other one,
- * so that it costs the page no height of its own. Its line is as tall as the name's button,
- * so that the two line up. The name is drawn over the strip, not beside it, where the two meet.
+ * so that it costs the page no height of its own. The name is drawn over the strip, not beside
+ * it, where the two meet.
  */
 .game-top {
-  position: absolute;
-  top: 1rem;
   left: 1.5rem;
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  font-size: 0.9375rem;
-  line-height: 1.75rem;
 }
 
 .crumbs {
@@ -375,11 +677,6 @@ form.name-control {
   color: var(--accent);
 }
 
-.options-toggle:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .options-panel {
   position: absolute;
   top: calc(100% + 0.25rem);
@@ -389,8 +686,8 @@ form.name-control {
   min-width: 13rem;
   padding: 0.75rem 1rem;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.2);
 }
 
@@ -409,82 +706,67 @@ form.name-control {
   cursor: pointer;
 }
 
-.volume-slider:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+/*
+ * The board fills the screen, and everything else on the page is as wide as the board.
+ *
+ * The board is as wide as the page, so the page is as wide as the board should be: the width
+ * at which its height (the board is 720 by 520, see `geometry.ts`) is what is left of the screen
+ * after everything above and below it (`--game-chrome`: the title, both player bars and the
+ * status under the board), plus the page's own padding. Never wider than the window, and not
+ * narrower than 40rem, so that a short window gets a board it can read and scrolls, as it
+ * always did, instead of a small one. Err on the high side: too much chrome leaves a little
+ * room, too little scrolls.
+ */
+.game-page {
+  --game-chrome: 17rem;
+  max-width: min(100%, max(40rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 3rem)));
+  /* Room for the strip along the top (the link back and the name), and not more. */
+  padding-top: 3.25rem;
+  padding-bottom: 1rem;
 }
 
-.muted {
-  color: var(--muted);
-  font-size: 0.9375rem;
-}
-
-.error {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.notice {
-  margin: 0 0 1rem;
-  padding: 0.5rem 0.875rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: 0.5rem;
-}
-
-.button {
-  font: inherit;
-  font-weight: 600;
-  color: #fffdf9;
-  background: var(--accent);
-  border: 0;
-  border-radius: 999px;
-  padding: 0.5rem 1.25rem;
-  cursor: pointer;
-}
-
-@media (prefers-color-scheme: dark) {
-  .button {
-    color: #16140f;
+/* Where the browser has them, the units that leave out the address bar of a phone. */
+@supports (height: 100dvh) {
+  .game-page {
+    max-width: min(100%, max(40rem, calc((100dvh - var(--game-chrome)) * 720 / 520 + 3rem)));
   }
 }
 
-/* For the choice that isn't the point of the page, e.g. Cancel next to Create. */
-.button-quiet {
-  color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--border);
+/* On a phone the board goes nearly to the edges. After the rule above, which sets the padding. */
+@media (max-width: 46rem) {
+  .game-page {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
 }
 
-.button-quiet:hover:not(:disabled) {
-  border-color: var(--accent);
+/* The name of the game, and on its right what the viewer is to it, if not a player. */
+.game-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 1rem;
+  margin: 0 0 0.75rem;
 }
 
-/* A quiet button that is a switch, and is on. */
-.button-quiet[aria-pressed="true"] {
-  color: var(--accent);
-  border-color: var(--accent);
-  font-weight: 700;
+.game-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.15;
 }
 
-.button:disabled {
-  opacity: 0.55;
-  cursor: default;
+.game-caption {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
 }
 
-.button:focus-visible,
-.invite-url:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
+/* The invitation and the join button: the point of the page until the second player is in. */
 .panel {
-  margin: 0 0 1.25rem;
-  padding: 1rem 1.25rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 1rem 0;
+  border-block: 1px solid var(--rule);
 }
 
 .panel p {
@@ -504,214 +786,138 @@ form.name-control {
 .invite-url {
   flex: 1 1 14rem;
   min-width: 0;
-  font: inherit;
-  font-size: 0.9375rem;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.375rem 0.75rem;
-}
-
-/* Not smaller than 16px on a touch screen, or Safari zooms in on it (see `.name-input`). */
-@media (pointer: coarse) {
-  .invite-url {
-    font-size: 16px;
-  }
-}
-
-.my-games {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.my-game {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  padding: 0.75rem 1rem;
-  color: inherit;
-  text-decoration: none;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-}
-
-.my-game:hover {
-  border-color: var(--accent);
-}
-
-.my-game-name {
-  font-weight: 700;
-}
-
-/* The state and the date, side by side: the state on the left, the date on the right. */
-.my-game-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: baseline;
-  column-gap: 0.75rem;
-}
-
-.my-game-state {
-  font-size: 0.9375rem;
-  color: var(--accent);
-}
-
-/* A game that is over is not asking for anything, so it is not in the accent colour. */
-.my-game-state-done {
-  color: var(--muted);
-}
-
-.my-game:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* --- The dialog --- */
-
-.modal {
-  width: min(28rem, calc(100vw - 2rem));
-  padding: 0;
-  color: var(--fg);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-}
-
-.modal::backdrop {
-  background: rgb(0 0 0 / 0.5);
-}
-
-.modal-body {
-  padding: 1.5rem;
-}
-
-.modal-body p {
-  margin: 0 0 0.75rem;
-}
-
-.modal-title {
-  margin: 0 0 0.75rem;
-  font-size: 1.375rem;
-  line-height: 1.2;
-}
-
-/* The choice of opponent in the new game dialog: two options that are cards, the picked one outlined. */
-.choice {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0 0 0.75rem;
-  padding: 0;
-  border: 0;
-}
-
-.choice-legend {
-  padding: 0;
-  margin-bottom: 0.5rem;
-  font-size: 0.9375rem;
-  color: var(--muted);
-}
-
-.choice-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  cursor: pointer;
-}
-
-.choice-option:has(input:checked) {
-  border-color: var(--accent);
-}
-
-.choice-option:has(input:focus-visible) {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.choice-option input {
-  margin: 0.25rem 0 0;
-  accent-color: var(--accent);
-}
-
-.choice-name {
-  display: block;
-  font-weight: 700;
-}
-
-.choice-text {
-  display: block;
-  font-size: 0.9375rem;
-  color: var(--muted);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  margin-top: 1.25rem;
 }
 
 /*
- * The board fills the screen, and everything else on the page is as wide as the board.
- *
- * The board is as wide as the page, so the page is as wide as the board should be: the width
- * at which its height (the board is 720 by 520, see `geometry.ts`) is what is left of the screen
- * after everything above and below it (`--game-chrome`: the title, both player bars, the
- * buttons and the lines of text), plus the page's own padding. Never wider than the window,
- * and not narrower than 40rem, so that a short window gets a board it can read and scrolls,
- * as it always did, instead of a small one.
+ * Where the game stands, under the board: a dot and a line for what is to be done now, a line
+ * under it for the last turn (or what went wrong, or that the connection is gone), and a
+ * warning when there is one. Under the board, not over it, so a line coming or going moves
+ * nothing the player is pressing. The band is tinted when the move is the viewer's.
  */
-.game-page {
-  --game-chrome: 18rem;
-  max-width: min(100%, max(40rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 3rem)));
-  /* Room for the strip along the top (the link back and the name), and not more. */
-  padding-top: 3.25rem;
-  padding-bottom: 1.5rem;
+.status-band {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-block: 1px solid var(--rule);
 }
 
-/* Where the browser has them, the units that leave out the address bar of a phone. */
-@supports (height: 100dvh) {
-  .game-page {
-    max-width: min(100%, max(40rem, calc((100dvh - var(--game-chrome)) * 720 / 520 + 3rem)));
-  }
+.status-actions {
+  margin-top: 0.5rem;
+  padding-left: 1.125rem;
 }
 
-/* On a phone the board goes nearly to the edges. After the rule above, which sets the padding. */
-@media (max-width: 46rem) {
-  .game-page {
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
-  }
+.status-band[data-turn="mine"] {
+  background: var(--tint);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--rule));
 }
 
-.game-title {
-  margin: 0 0 1rem;
-  font-size: clamp(1.75rem, 5vw, 2.5rem);
-  line-height: 1.1;
-  letter-spacing: -0.02em;
+.status-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-weight: 600;
 }
 
+/* The dot: hollow while the viewer waits, full when the move is theirs. */
+.status-main::before {
+  content: "";
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.status-band[data-turn="mine"] .status-main {
+  color: var(--accent);
+}
+
+.status-band[data-turn="mine"] .status-main::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Under the words of the line above, not under its dot. */
+.status-detail,
+.status-warning {
+  margin: 0;
+  padding-left: 1.125rem;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.status-detail-alert,
+.status-warning {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* The end of a game, in the place of the status under the board: who won, and the way out. */
+.result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  border-block: 2px solid var(--fg);
+}
+
+.result-kicker {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.result-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.result-won .result-title {
+  color: var(--accent);
+}
+
+.result-detail {
+  margin: 0;
+  color: var(--muted);
+}
+
+/*
+ * The two players: the viewer over the board, the opponent under it. The one to move is
+ * tinted, with a line in the accent on the edge that faces the board, as if the bar were
+ * joined to it. The line is there, transparent, on the other bar too, so that a turn passing
+ * moves nothing.
+ */
 .player-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.25rem 0.625rem;
-  margin: 0.5rem 0;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.5rem;
-  border: 1px solid transparent;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem;
+  border: 0 solid transparent;
+}
+
+.player-bar-above {
+  margin-bottom: 0.25rem;
+  border-bottom-width: 2px;
+}
+
+.player-bar-below {
+  margin-top: 0.25rem;
+  border-top-width: 2px;
 }
 
 .player-bar-active {
-  background: var(--card);
+  background: var(--tint);
   border-color: var(--accent);
 }
 
@@ -719,18 +925,28 @@ form.name-control {
   font-weight: 600;
 }
 
+.player-bar-active .player-name {
+  color: var(--accent);
+}
+
 .player-colour,
 .player-off {
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 
+/* The count of checkers borne off sits at the far end, in columns that line up. */
+.player-off {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .player-turn {
-  font-size: 0.8125rem;
-  font-weight: 700;
+  font-size: var(--text-sm);
+  font-weight: 600;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
 .swatch {
@@ -738,6 +954,13 @@ form.name-control {
   height: 1rem;
   border-radius: 50%;
   border: 2px solid var(--swatch-stroke);
+}
+
+/* The player to move has a ring around their checker. */
+.player-bar-active .swatch {
+  box-shadow:
+    0 0 0 2px var(--tint),
+    0 0 0 4px var(--accent);
 }
 
 .swatch-white {
@@ -751,20 +974,6 @@ form.name-control {
 .swatch-none {
   background: transparent;
   border-style: dashed;
-}
-
-.controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.25rem;
-  margin: 1rem 0;
-  min-height: 3rem;
-}
-
-.status {
-  margin: 0;
-  font-weight: 600;
 }
 
 .die-face {
@@ -1122,7 +1331,7 @@ form.name-control {
 
 .prose h2 {
   margin: 2rem 0 0.5rem;
-  font-size: 1.25rem;
+  font-size: var(--text-lg);
   line-height: 1.3;
 }
 
@@ -1155,7 +1364,7 @@ form.name-control {
   margin-top: auto;
   align-self: flex-end;
   padding: 0 1.5rem 0.5rem;
-  font-size: 0.9375rem;
+  font-size: var(--text-sm);
 }
 
 .site-footer a {

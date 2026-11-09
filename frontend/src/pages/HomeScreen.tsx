@@ -115,6 +115,12 @@ export function gameStateText(game: Pick<MyGameRow, "started" | "finished">): st
   return game.started ? "In progress" : "Waiting for an opponent";
 }
 
+/** The same three states as a word for the stylesheet, which draws each with its own dot. */
+function gameStateKind(game: Pick<MyGameRow, "started" | "finished">): "done" | "live" | "waiting" {
+  if (game.finished) return "done";
+  return game.started ? "live" : "waiting";
+}
+
 interface MyGamesProps {
   games: readonly GameInfo[];
   mine: readonly MyGameRow[];
@@ -153,7 +159,7 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
               <span className="my-game-players">{playersText(game)}</span>
               {/* Where the game stands and when it last changed share a row. */}
               <span className="my-game-meta">
-                <span className={game.finished ? "my-game-state my-game-state-done" : "my-game-state"}>
+                <span className={`my-game-state my-game-state-${gameStateKind(game)}`}>
                   {gameStateText(game)}
                 </span>
                 <time className="muted" dateTime={new Date(game.updatedAt).toISOString()}>
@@ -193,22 +199,14 @@ function NewGameForm({ request, info, onOpponent, onCreate, onClose }: NewGameFo
       {info && <p>{info.description}</p>}
       {info?.bot ? (
         <fieldset className="choice" disabled={creating}>
-          <legend className="choice-legend">{info.players}. Play against</legend>
+          <legend className="visually-hidden">Opponent</legend>
           <label className="choice-option">
             <input type="radio" name="opponent" checked={!bot} onChange={() => onOpponent(false)} />
-            <span>
-              <span className="choice-name">A friend</span>
-              <span className="choice-text">
-                You get a link to send. Anyone who has it can watch.
-              </span>
-            </span>
+            <span className="choice-name">Play vs a friend</span>
           </label>
           <label className="choice-option">
             <input type="radio" name="opponent" checked={bot} onChange={() => onOpponent(true)} />
-            <span>
-              <span className="choice-name">The bot</span>
-              <span className="choice-text">The game starts right away.</span>
-            </span>
+            <span className="choice-name">Play vs a bot</span>
           </label>
         </fieldset>
       ) : (
@@ -234,7 +232,7 @@ function NewGameForm({ request, info, onOpponent, onCreate, onClose }: NewGameFo
           aria-busy={creating}
           onClick={onCreate}
         >
-          {creating ? "Creating…" : bot ? "Start game" : "Create game"}
+          {creating ? "Creating…" : "Create game"}
         </button>
       </div>
     </>

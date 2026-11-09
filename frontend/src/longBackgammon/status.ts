@@ -55,14 +55,24 @@ export function turnText(snapshot: Snapshot, mySeat: Seat | null): string {
   return `Waiting for ${name} to move.`;
 }
 
-/** The result, once the game is over. */
-export function resultText(snapshot: Snapshot, mySeat: Seat | null): string {
+/** How a game ended, in two parts: who won, and what it was worth. */
+export interface Result {
+  /** "You won", "Ada won" or "Draw". */
+  title: string;
+  /** "1 point", "Mars: 2 points", or "" for a draw. */
+  detail: string;
+  /** The viewer is a player, and it was them. */
+  won: boolean;
+}
+
+/** The result, once the game is over; null while it is on. */
+export function resultOf(snapshot: Snapshot, mySeat: Seat | null): Result | null {
   const phase = snapshot.state?.phase;
-  if (phase?.type !== "over") return "";
-  if (phase.winner === null) return "The game is a draw.";
-  const name = nameOf(snapshot, phase.winner, mySeat);
-  const score = phase.points >= 2 ? `mars, ${phase.points} points` : `${phase.points} point`;
-  return `${name} won the game (${score}).`;
+  if (phase?.type !== "over") return null;
+  if (phase.winner === null) return { title: "Draw", detail: "", won: false };
+  const title = `${nameOf(snapshot, phase.winner, mySeat)} won`;
+  const detail = phase.points >= 2 ? `Mars: ${phase.points} points` : `${phase.points} point`;
+  return { title, detail, won: phase.winner === mySeat };
 }
 
 /** What the previous turn came to, or "" if no turn has been played. */

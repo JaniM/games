@@ -19,7 +19,7 @@ import {
   barNameOf,
   lastThrowText,
   lastTurnText,
-  resultText,
+  resultOf,
   turnText,
   viewerSeat,
 } from "./status";
@@ -56,7 +56,14 @@ export interface GameScreenProps {
 
 const HOME = "/";
 
-function Shell({ options, children }: { options?: React.ReactNode; children: React.ReactNode }) {
+interface ShellProps {
+  options?: React.ReactNode;
+  /** What the viewer is to the game, beside its title, if they are not a player. */
+  caption?: string;
+  children: React.ReactNode;
+}
+
+function Shell({ options, caption, children }: ShellProps) {
   return (
     <main className="page game-page">
       <div className="game-top">
@@ -65,7 +72,10 @@ function Shell({ options, children }: { options?: React.ReactNode; children: Rea
         </p>
         {options}
       </div>
-      <h1 className="game-title">Long backgammon</h1>
+      <header className="game-head">
+        <h1 className="game-title">Long backgammon</h1>
+        {caption && <p className="game-caption">{caption}</p>}
+      </header>
       {children}
     </main>
   );
@@ -129,12 +139,56 @@ export function GameScreen({
   const waiting = !isFull(snapshot);
 
   const lastThrow = state ? lastThrowText(state) : "";
-  const lastTurn = lastTurnText(snapshot, mySeat);
-  const result = resultText(snapshot, mySeat);
-  const turn = turnText(snapshot, mySeat);
+  const result = resultOf(snapshot, mySeat);
+  // Under the line about the turn. What has gone wrong comes before what has happened.
+  const alert = !connected ? "Connection lost. Reconnecting…" : view.error;
+  const aside =
+    lastTurnText(snapshot, mySeat) ||
+    (state ? "" : "Who plays White and moves first is decided when the second player joins.");
+
+  const status = result ? (
+    <section className={result.won ? "result result-won" : "result"} aria-label="Result">
+      <div>
+        <p className="result-kicker">Game over</p>
+        <p className="result-title" role="status">
+          {result.title}
+        </p>
+        {result.detail && <p className="result-detail">{result.detail}</p>}
+      </div>
+      <Link className="button" to={HOME}>
+        All games
+      </Link>
+    </section>
+  ) : (
+    <section className="status-band" aria-label="Turn" data-turn={myTurn ? "mine" : "wait"}>
+      <p className="status-main" role="status" aria-live="polite">
+        {turnText(snapshot, mySeat)}
+      </p>
+      {(alert || aside) && (
+        <p className={alert ? "status-detail status-detail-alert" : "status-detail"}>
+          {alert ? <span role="alert">{alert}</span> : aside}
+        </p>
+      )}
+      {lastThrow && <p className="status-warning">{lastThrow}</p>}
+      {showAutoplay && mySeat !== null && state && (
+        <div className="status-actions">
+          <button
+            className="button button-quiet button-small"
+            type="button"
+            aria-pressed={view.auto}
+            title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
+            onClick={() => onAutoplay(!view.auto)}
+          >
+            Auto-play
+          </button>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <Shell
+      caption={mySeat === null && userId !== null && !canJoin ? "You are watching this game." : undefined}
       options={
         <OptionsMenu>
           {/* Letting go of the slider plays a knock, so that the new level can be heard. */}
@@ -146,12 +200,6 @@ export function GameScreen({
         </OptionsMenu>
       }
     >
-      {!connected && (
-        <p className="notice" role="status">
-          Connection lost. Reconnecting…
-        </p>
-      )}
-
       {canJoin && (
         <section className="panel" aria-label="Join this game">
           <p>This game is waiting for a second player.</p>
@@ -167,16 +215,15 @@ export function GameScreen({
         </section>
       )}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
-      {mySeat === null && userId !== null && !canJoin && (
-        <p className="notice">You are watching this game.</p>
-      )}
 
+      {/* The viewer is on top: the board is turned to put their head in the top right corner. */}
       <PlayerBar
-        name={barNameOf(snapshot, opponent, mySeat)}
-        colour={state ? colourOf(opponent, state, viewer) : null}
-        off={state?.off[opponent] ?? 0}
-        toMove={state !== null && !over && state.turn === opponent}
-        empty={opponent >= snapshot.players.length}
+        edge="above"
+        name={barNameOf(snapshot, viewer, mySeat)}
+        colour={state ? colourOf(viewer, state, viewer) : null}
+        off={state?.off[viewer] ?? 0}
+        toMove={state !== null && !over && state.turn === viewer}
+        empty={viewer >= snapshot.players.length}
       />
       <div className="board-wrap">
         <Board
@@ -209,45 +256,22 @@ export function GameScreen({
         )}
       </div>
       <PlayerBar
-        name={barNameOf(snapshot, viewer, mySeat)}
-        colour={state ? colourOf(viewer, state, viewer) : null}
-        off={state?.off[viewer] ?? 0}
-        toMove={state !== null && !over && state.turn === viewer}
-        empty={viewer >= snapshot.players.length}
+        edge="below"
+        name={barNameOf(snapshot, opponent, mySeat)}
+        colour={state ? colourOf(opponent, state, viewer) : null}
+        off={state?.off[opponent] ?? 0}
+        toMove={state !== null && !over && state.turn === opponent}
+        empty={opponent >= snapshot.players.length}
       />
 
-      <section className="controls" aria-label="Turn">
-        {showAutoplay && mySeat !== null && state && !over && (
-          <button
-            className="button button-quiet"
-            type="button"
-            aria-pressed={view.auto}
-            title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
-            onClick={() => onAutoplay(!view.auto)}
-          >
-            Auto-play
-          </button>
-        )}
-        <p className="status" role="status" aria-live="polite">
-          {result || turn}
-        </p>
-      </section>
-
-      {view.error && (
-        <p className="error" role="alert">
-          {view.error}
-        </p>
-      )}
-      {lastThrow && <p className="notice">{lastThrow}</p>}
-      {lastTurn && <p className="muted">{lastTurn}</p>}
-      {!state && (
-        <p className="muted">Who plays White and moves first is decided when the second player joins.</p>
-      )}
+      {status}
     </Shell>
   );
 }
 
 interface PlayerBarProps {
+  /** Where the bar is: over the board or under it. The highlight is on the edge toward the board. */
+  edge: "above" | "below";
   name: string;
   /** Null before the game starts: nobody is White yet. */
   colour: Colour | null;
@@ -256,9 +280,9 @@ interface PlayerBarProps {
   empty: boolean;
 }
 
-function PlayerBar({ name, colour, off, toMove, empty }: PlayerBarProps) {
+function PlayerBar({ edge, name, colour, off, toMove, empty }: PlayerBarProps) {
   return (
-    <div className={toMove ? "player-bar player-bar-active" : "player-bar"}>
+    <div className={`player-bar player-bar-${edge}${toMove ? " player-bar-active" : ""}`}>
       <span className={`swatch swatch-${colour ?? "none"}`} aria-hidden="true" />
       <span className={empty ? "player-name muted" : "player-name"}>{name}</span>
       {colour && <span className="player-colour">{colour === "white" ? "White" : "Black"}</span>}

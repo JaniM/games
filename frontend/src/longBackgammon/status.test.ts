@@ -5,7 +5,7 @@ import {
   lastThrowText,
   lastTurnText,
   nameOf,
-  resultText,
+  resultOf,
   stepText,
   turnText,
   viewerSeat,
@@ -73,26 +73,26 @@ describe("turnText", () => {
   });
 });
 
-describe("resultText", () => {
+describe("resultOf", () => {
   const over = (winner: 0 | 1 | null, points: number) =>
     snap({ state: startingState({ phase: { type: "over", winner, points } }) });
 
-  it("is empty while the game is on", () => {
-    expect(resultText(snap(), 0)).toBe("");
+  it("is null while the game is on", () => {
+    expect(resultOf(snap(), 0)).toBeNull();
   });
 
   it("says who won and what it is worth", () => {
-    expect(resultText(over(0, 1), 0)).toBe("You won the game (1 point).");
-    expect(resultText(over(0, 1), 1)).toBe("Ada won the game (1 point).");
-    expect(resultText(over(1, 1), null)).toBe("Grace won the game (1 point).");
+    expect(resultOf(over(0, 1), 0)).toEqual({ title: "You won", detail: "1 point", won: true });
+    expect(resultOf(over(0, 1), 1)).toEqual({ title: "Ada won", detail: "1 point", won: false });
+    expect(resultOf(over(1, 1), null)).toEqual({ title: "Grace won", detail: "1 point", won: false });
   });
 
   it("calls a double win a mars", () => {
-    expect(resultText(over(1, 2), 1)).toBe("You won the game (mars, 2 points).");
+    expect(resultOf(over(1, 2), 1)).toEqual({ title: "You won", detail: "Mars: 2 points", won: true });
   });
 
   it("calls it a draw", () => {
-    expect(resultText(over(null, 0), 0)).toBe("The game is a draw.");
+    expect(resultOf(over(null, 0), 0)).toEqual({ title: "Draw", detail: "", won: false });
   });
 });
 

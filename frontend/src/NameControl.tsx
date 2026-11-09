@@ -40,10 +40,10 @@ export function NameControl() {
             if (event.key === "Escape") setDraft(null);
           }}
         />
-        <button className="name-button name-save" type="submit" disabled={!draft.trim()}>
+        <button className="button button-small" type="submit" disabled={!draft.trim()}>
           Save
         </button>
-        <button className="name-button" type="button" onClick={() => setDraft(null)}>
+        <button className="button button-quiet button-small" type="button" onClick={() => setDraft(null)}>
           Cancel
         </button>
       </form>
