@@ -18,6 +18,7 @@ import {
   gameProblem,
   joinFailed,
   joined,
+  sendQueued,
   snapshotReceived,
   submitAction,
 } from "./ops";
@@ -244,6 +245,42 @@ export const autoPlay = effect({
         },
         { rerunOn: ["auto", "busy", "connection", "snapshot"] },
       ),
+    ),
+});
+
+/**
+ * How long to wait after the answer to one step of a combined move before sending the next:
+ * long enough for the checker to land (`MOVE_MS` in `longBackgammon/cues.ts` is the length of
+ * its trip, and `--move-ms` in styles.css), so that each hop can be followed on the board.
+ */
+export const QUEUED_STEP_PAUSE_MS = 500;
+
+/**
+ * Sends the rest of a combined move, one step at a time. Each time a game has steps queued
+ * (see `submitMoves`) and is waiting for nothing, a task pauses so that the last hop can be
+ * followed, then sends the next step with `sendQueued`, whose answer starts the next pause.
+ *
+ * A task is dropped and made again when the queue, the wait for an answer or the connection
+ * changes, so it never sends into a game that has moved on. `sendQueued` checks the step against
+ * the position when it runs, and drops what is left if it no longer fits.
+ */
+export const continueMoves = effect({
+  inputs: [gameViews],
+  watch: (q, task) =>
+    q.each(
+      gameViews.all(),
+      (view) => {
+        if (view.queued.length === 0 || view.busy || view.connection !== "open") return;
+        task(
+          async (ctx) => {
+            await sleep(QUEUED_STEP_PAUSE_MS, ctx.signal);
+            if (ctx.signal.aborted) return;
+            ctx.run(sendQueued, { gameId: view.gameId });
+          },
+          { label: `next step of a move in ${view.gameId}` },
+        );
+      },
+      { rerunOn: ["queued", "busy", "connection"] },
     ),
 });
 

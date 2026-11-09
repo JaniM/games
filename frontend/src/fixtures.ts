@@ -23,20 +23,25 @@ export function startingState(overrides: Partial<LongBackgammonState> = {}): Lon
     lastThrow: false,
     phase: { type: "roll" },
     legal: [],
+    combos: [],
     lastTurn: null,
     ...overrides,
   };
 }
 
-/** The mover has rolled `dice` and has not played yet (`remaining` defaults to the dice). */
+/**
+ * The mover has rolled `dice` and has not played yet (`remaining` defaults to the dice).
+ * `combos` are the lines of two or more steps by one checker that the server lists.
+ */
 export function moving(
   dice: [number, number],
   legal: Step[],
   played: Step[] = [],
   remaining: number[] = dice[0] === dice[1] ? [dice[0], dice[0], dice[0], dice[0]] : [...dice],
-): Pick<LongBackgammonState, "phase" | "legal"> {
+  combos: Step[][] = [],
+): Pick<LongBackgammonState, "phase" | "legal" | "combos"> {
   const phase: Phase = { type: "move", dice, remaining, played };
-  return { phase, legal };
+  return { phase, legal, combos };
 }
 
 /** What a snapshot holds once the client has read it. */

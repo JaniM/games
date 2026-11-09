@@ -27,11 +27,13 @@ import {
 } from "./geometry";
 import {
   type Colour,
+  type Destination,
   type PointView,
   colourOf,
-  bearOffStep,
+  bearOffSteps,
   destinations,
   diceFaces,
+  diceWords,
   pointNumber,
   pointSlot,
   pressOutcome,
@@ -60,7 +62,8 @@ interface BoardProps {
   /** The viewer plays in this game, rather than watches it: only then is a result a win or a loss. */
   player: boolean;
   onSelect: (point: number | null) => void;
-  onMove: (step: Step) => void;
+  /** Play these steps, one after the other: one for a single die, more for a combined move. */
+  onMove: (steps: Step[]) => void;
   /** A sound goes with what just happened. The caller plays it, or not. */
   onCue: (cue: TimedCue) => void;
 }
@@ -115,13 +118,13 @@ export function BoardView({
   const picked = active ? selected : null;
   const sources = active ? sourcePoints(state) : new Set<number>();
   const ways = active && picked !== null ? destinations(state, picked) : [];
-  const targetDie = new Map<number, number>();
-  for (const way of ways) if (way.to !== "off") targetDie.set(way.to, way.die);
-  const bearOff = bearOffStep(picked, ways);
+  const targets = new Map<number, Destination>();
+  for (const way of ways) if (way.to !== "off") targets.set(way.to, way);
+  const bearOff = bearOffSteps(picked, ways);
 
   function press(on: "piece" | "background", point: number) {
     const outcome = pressOutcome(on, point, picked, ways, sources);
-    if (outcome.type === "move") onMove(outcome.step);
+    if (outcome.type === "move") onMove(outcome.steps);
     else if (outcome.type === "select") onSelect(outcome.point);
     else onSelect(null);
   }
@@ -152,7 +155,7 @@ export function BoardView({
           colours={colours}
           source={sources.has(point.index)}
           selected={point.index === picked}
-          dieHere={targetDie.get(point.index) ?? null}
+          target={targets.get(point.index) ?? null}
           arriving={move?.to.at === point.index ? move.to.count - 1 : null}
           onPress={press}
         />
@@ -214,15 +217,15 @@ interface PointProps {
   /** The mover may start a step here. */
   source: boolean;
   selected: boolean;
-  /** The die that would land here from the selected point, or null. */
-  dieHere: number | null;
+  /** How the selected checker would land here, with one die or several, or null. */
+  target: Destination | null;
   /** The slot of a checker still flying in, which is not drawn until it lands, or null. */
   arriving: number | null;
   /** A press on the point's pieces, or on the rest of it. See `pressOutcome`. */
   onPress: (on: "piece" | "background", point: number) => void;
 }
 
-function Point({ point, number, colours, source, selected, dieHere, arriving, onPress }: PointProps) {
+function Point({ point, number, colours, source, selected, target, arriving, onPress }: PointProps) {
   const { row, column } = pointSlot(point.index);
   const x = columnX(column);
   const top = row === "top";
@@ -239,8 +242,10 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
     onPress("background", point.index);
   };
   const background =
-    dieHere !== null
-      ? pressable(`Move to point ${number} with the ${dieHere}`, () => onPress("background", point.index))
+    target !== null
+      ? pressable(`Move to point ${number} with ${diceWords(target.steps)}`, () =>
+          onPress("background", point.index),
+        )
       : source
         ? { onClick: onBackground }
         : {};
@@ -248,7 +253,7 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
   const className = [
     "point",
     selected && "point-selected",
-    dieHere !== null && "point-target",
+    target !== null && "point-target",
     source && !selected && "point-source",
   ]
     .filter(Boolean)
@@ -256,7 +261,7 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
 
   return (
     <g className={className}>
-      <g className={source || dieHere !== null ? "point-bg point-bg-active" : "point-bg"} {...background}>
+      <g className={source || target !== null ? "point-bg point-bg-active" : "point-bg"} {...background}>
         <path
           className={`tri tri-${shade}`}
           d={`M${x},${base} L${x + POINT_WIDTH},${base} L${x + POINT_WIDTH / 2},${tip} Z`}
@@ -304,11 +309,16 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
           </text>
         )}
       </g>
-      {dieHere !== null && (
+      {target !== null && (
         // The marker of where the checker would land. It is drawn over the pieces (on a full
-        // stack it sits on the top one), and it moves the checker, like the background.
+        // stack it sits on the top one), and it moves the checker, like the background. It says
+        // the die; for a combined move (several dice by this checker, one after the other) it
+        // says them added up, is drawn with a solid line, and a tooltip spells them out.
         // biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only copy of the background button, which is the keyboard's
-        <g className="ghost" onClick={onBackground}>
+        <g className={target.steps.length > 1 ? "ghost ghost-combo" : "ghost"} onClick={onBackground}>
+          {target.steps.length > 1 && (
+            <title>{`${target.steps.map((step) => step.die).join(" + ")} = ${target.pips}`}</title>
+          )}
           {/* What catches the press: the drawn circle is only an outline, which a press in its
               middle passes through, to the piece below, and a piece only ever selects. On a full
               stack that piece is the top one, so the area covers all of it, its edge included. */}
@@ -330,7 +340,7 @@ function Point({ point, number, colours, source, selected, dieHere, arriving, on
             textAnchor="middle"
             dominantBaseline="central"
           >
-            {dieHere}
+            {target.pips}
           </text>
         </g>
       )}
@@ -356,7 +366,14 @@ function Tray({ top = false, count, colour, label, canBearOff = false, arriving,
   return (
     <g className="tray">
       <title>{`${label}: ${count}`}</title>
-      <rect className="tray-box" x={TRAY_X} y={y} width={TRAY_WIDTH} height={POINT_HEIGHT} rx="6" />
+      <rect
+        className={canBearOff ? "tray-box tray-box-active" : "tray-box"}
+        x={TRAY_X}
+        y={y}
+        width={TRAY_WIDTH}
+        height={POINT_HEIGHT}
+        rx="6"
+      />
       {Array.from({ length: count }, (_, i) => (
         <rect
           // biome-ignore lint/suspicious/noArrayIndexKey: the borne-off checkers are interchangeable, so a slab's position is its identity
@@ -378,15 +395,16 @@ function Tray({ top = false, count, colour, label, canBearOff = false, arriving,
         {`off · ${count}`}
       </text>
       {canBearOff && (
-        <g
-          className="bear-off"
-          transform={`translate(${TRAY_X + 8} ${y + 14})`}
-          {...pressable("Bear off", () => onBearOff?.())}
-        >
-          <rect width={TRAY_WIDTH - 16} height="36" rx="8" />
-          <text x={(TRAY_WIDTH - 16) / 2} y="18" textAnchor="middle" dominantBaseline="central">
-            Bear off
-          </text>
+        // The whole tray is the button, over its borne-off checkers too, so that it is as easy to
+        // hit as a point is; the label says what it does.
+        <g className="bear-off" {...pressable("Bear off", () => onBearOff?.())}>
+          <rect className="bear-off-hit" x={TRAY_X} y={y} width={TRAY_WIDTH} height={POINT_HEIGHT} rx="6" />
+          <g transform={`translate(${TRAY_X + 8} ${y + 14})`}>
+            <rect className="bear-off-label" width={TRAY_WIDTH - 16} height="36" rx="8" />
+            <text x={(TRAY_WIDTH - 16) / 2} y="18" textAnchor="middle" dominantBaseline="central">
+              Bear off
+            </text>
+          </g>
         </g>
       )}
     </g>

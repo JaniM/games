@@ -45,7 +45,8 @@ export interface GameScreenProps {
   /** Whether to offer auto-play at all. It is a development aid, so release builds leave it out. */
   showAutoplay: boolean;
   onSelect: (point: number | null) => void;
-  onMove: (step: Step) => void;
+  /** Plays steps one after the other: one for a single die, more for a combined move by one checker. */
+  onMove: (steps: Step[]) => void;
   /** How loud the sounds are, from 0 (silent) to 1. */
   volume: number;
   onVolume: (volume: number) => void;
@@ -120,7 +121,8 @@ export function GameScreen({
   const connected = view.connection === "open";
   const over = state?.phase.type === "over";
   const myTurn = state !== null && mySeat !== null && state.turn === mySeat && !over;
-  const canAct = myTurn && connected && !view.busy;
+  // Not while a step is on its way, nor between the steps of a combined move: it is one move.
+  const canAct = myTurn && connected && !view.busy && view.queued.length === 0;
   // Only a step of the turn in progress can be taken back: the one that ends the turn is final.
   const canUndo = canAct && state?.phase.type === "move" && state.phase.played.length > 0;
   const canJoin = userId !== null && mySeat === null && !isFull(snapshot);

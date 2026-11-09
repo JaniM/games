@@ -250,6 +250,60 @@ pub fn legal_steps(turn: &Turn, remaining: &[u8]) -> Vec<Step> {
     steps
 }
 
+/// Every way to play two or more of the dice still to play with one checker, one die after
+/// the other: the lines a client can offer as a single move.
+///
+/// A line is a list of steps, each starting where the one before it landed. Every step is
+/// legal in the position that the steps before it lead to, must-play rules included (it is one
+/// of [`legal_steps`] there), so the lines add no rule: a player could play each of them step
+/// by step. A line ends at a bear-off, since a checker that is off can't go on. Every length
+/// from two up is listed, so a double yields the two, three and four-step lines of a checker
+/// separately. The first steps are in the order of [`legal_steps`], and a line is followed by
+/// the lines that extend it.
+pub fn combos(turn: &Turn, remaining: &[u8]) -> Vec<Vec<Step>> {
+    let mut found = Vec::new();
+    for first in legal_steps(turn, remaining) {
+        let (next, rest) = after(turn, remaining, first);
+        if let Some(on) = point_after(first) {
+            extend(&next, &rest, on, &mut vec![first], &mut found);
+        }
+    }
+    found
+}
+
+/// Adds the lines that go on from `line`, which leaves the checker on `on`, in the position
+/// `turn` with the dice `remaining` that the line leads to.
+fn extend(turn: &Turn, remaining: &[u8], on: u8, line: &mut Vec<Step>, found: &mut Vec<Vec<Step>>) {
+    for step in legal_steps(turn, remaining) {
+        if step.from != on {
+            continue; // Another checker: not the same line.
+        }
+        line.push(step);
+        found.push(line.clone());
+        let (next, rest) = after(turn, remaining, step);
+        if let Some(on) = point_after(step) {
+            extend(&next, &rest, on, line, found);
+        }
+        line.pop();
+    }
+}
+
+/// The position and the dice left once `step`, which must be legal, is played.
+fn after(turn: &Turn, remaining: &[u8], step: Step) -> (Turn, Vec<u8>) {
+    let next = play(turn, step).expect("a legal step can be played");
+    let mut rest = remaining.to_vec();
+    if let Some(used) = rest.iter().position(|&die| die == step.die) {
+        rest.remove(used);
+    }
+    (next, rest)
+}
+
+/// The point the checker is on after `step`, or none if it has been borne off.
+fn point_after(step: Step) -> Option<u8> {
+    let to = step.from + step.die;
+    (to <= 24).then_some(to)
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -770,5 +824,158 @@ pub mod tests {
                 "{turn:?} with {dice:?}"
             );
         }
+    }
+
+    // --- Combined moves: one checker playing several dice in a row ---
+
+    #[test]
+    fn one_checker_can_play_both_dice_in_either_order() {
+        // 5-2 from the head: 1 to 3 to 8, or 1 to 6 to 8. (Then the head is used up.)
+        assert_eq!(
+            combos(&opening(1), &[5, 2]),
+            vec![vec![step(1, 2), step(3, 5)], vec![step(1, 5), step(6, 2)],]
+        );
+    }
+
+    #[test]
+    fn a_line_never_changes_checker() {
+        // Checkers on 5 and 9, a roll of 2-3. Playing the 2 with one and the 3 with the other
+        // is two moves, not a combined one.
+        let turn = turn(&[(5, 1), (9, 1)], &[]);
+
+        assert_eq!(
+            combos(&turn, &[2, 3]),
+            vec![
+                vec![step(5, 2), step(7, 3)],
+                vec![step(5, 3), step(8, 2)],
+                vec![step(9, 2), step(11, 3)],
+                vec![step(9, 3), step(12, 2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_double_gives_the_lines_of_two_three_and_four_steps() {
+        // Example 3: 1, 6, 11, 16, 21.
+        assert_eq!(
+            combos(&opening(1), &[5, 5, 5, 5]),
+            vec![
+                vec![step(1, 5), step(6, 5)],
+                vec![step(1, 5), step(6, 5), step(11, 5)],
+                vec![step(1, 5), step(6, 5), step(11, 5), step(16, 5)],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_stops_where_the_next_step_is_blocked() {
+        // Example 2: 1 to 5 to 9, and no further, since 13 is the opponent's head. The second
+        // head checker is another checker, so it is not part of the line.
+        assert_eq!(
+            combos(&opening(2), &[4, 4, 4, 4]),
+            vec![vec![step(1, 4), step(5, 4)]]
+        );
+    }
+
+    #[test]
+    fn there_is_no_line_when_only_one_die_can_be_played() {
+        // Example 6: 10 to 16 to 17 and 10 to 11 to 17 are both blocked.
+        let turn = turn(&[(10, 1)], &[(5, 1)]);
+
+        assert_eq!(legal_steps(&turn, &[6, 1]), vec![step(10, 6)]);
+        assert_eq!(combos(&turn, &[6, 1]), Vec::<Vec<Step>>::new());
+    }
+
+    #[test]
+    fn there_is_no_line_through_a_step_the_must_play_rules_forbid() {
+        // Checkers on 10 and 20, a roll of 3-1, the opponent holding own 14 and 21 (their 2
+        // and 9). The 3 from 10 is forbidden (it leaves no 1 to play), so no line goes through
+        // 13. After the 1 to 11, the 3 is blocked (14). The only line is the checker on 20
+        // playing both: 20 to 23 to 24.
+        let turn = turn(&[(10, 1), (20, 1)], &[(2, 1), (9, 1)]);
+
+        assert_eq!(legal_steps(&turn, &[3, 1]), vec![step(10, 1), step(20, 3)]);
+        assert_eq!(combos(&turn, &[3, 1]), vec![vec![step(20, 3), step(23, 1)]]);
+    }
+
+    #[test]
+    fn a_line_ends_at_a_bear_off() {
+        let turn = turn(&[(21, 1)], &[]);
+
+        assert_eq!(
+            combos(&turn, &[1, 3]),
+            vec![
+                vec![step(21, 1), step(22, 3)],
+                vec![step(21, 3), step(24, 1)],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_is_judged_by_the_prime_rule_at_every_step() {
+        // Example 5: points 14 to 18 are held, one extra checker is on 11, and the opponent is
+        // all on its head. A checker reaching 19 with 14 still held would make six in a row.
+        // The 3 to 14 and the 5 to 16 are fine on their own, but the second step of each line
+        // (14 to 19, 16 to 19) is the one that makes the block, so neither line is offered.
+        let turn = turn(
+            &[(11, 1), (14, 1), (15, 1), (16, 1), (17, 1), (18, 1)],
+            &[(1, 15)],
+        );
+        let firsts = legal_steps(&turn, &[3, 5]);
+        assert!(firsts.contains(&step(11, 3)) && firsts.contains(&step(11, 5)));
+        let first = play(&turn, step(11, 3)).unwrap();
+        assert_eq!(check(&first, step(14, 5)), Err(Illegal::Prime));
+        let first = play(&turn, step(11, 5)).unwrap();
+        assert_eq!(check(&first, step(16, 3)), Err(Illegal::Prime));
+
+        let lines = combos(&turn, &[3, 5]);
+        assert!(lines.iter().all(|line| line[0].from != 11), "{lines:?}");
+        // The other checkers have lines of their own, so the test is not an empty one.
+        assert!(!lines.is_empty());
+    }
+
+    /// The combined moves by their definition: take the lines of play that use as many dice as
+    /// can be (the must-play rules), and of those, every start of two or more steps in which
+    /// each step is made by the checker that made the one before. Plain and slow on purpose.
+    fn combos_by_definition(turn: &Turn, dice: &[u8]) -> Vec<Vec<Step>> {
+        let lines = all_lines(turn, dice);
+        let longest = lines.iter().map(Vec::len).max().unwrap();
+        let mut found = Vec::new();
+        for line in lines.iter().filter(|line| line.len() == longest) {
+            for length in 2..=line.len() {
+                let start = &line[..length];
+                if start
+                    .windows(2)
+                    .all(|pair| point_after(pair[0]) == Some(pair[1].from))
+                {
+                    found.push(start.to_vec());
+                }
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    #[test]
+    fn the_combined_moves_match_the_definition_on_random_positions() {
+        let mut rng = Lcg(11);
+        let mut with_lines = 0;
+        for _ in 0..400 {
+            let turn = random_turn(&mut rng);
+            let (a, b) = (1 + rng.next(6) as u8, 1 + rng.next(6) as u8);
+            let dice: Vec<u8> = if a == b { vec![a; 4] } else { vec![a, b] };
+
+            let mut got = combos(&turn, &dice);
+            got.sort();
+            let expected = combos_by_definition(&turn, &dice);
+            assert_eq!(got, expected, "{turn:?} with {dice:?}");
+            with_lines += usize::from(!expected.is_empty());
+        }
+        // Most random positions have lines to compare, or the test would prove little.
+        assert!(
+            with_lines > 200,
+            "only {with_lines} positions had a combined move"
+        );
     }
 }

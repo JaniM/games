@@ -83,10 +83,16 @@ export function colourOf(
   return seat === white ? "white" : "black";
 }
 
-/** A way to play one die with the selected checker. */
+/**
+ * A way to play the selected checker: with one die, or with several in a row (a combined
+ * move, which the server lists in `combos`).
+ */
 export interface Destination {
-  die: number;
+  /** What the marker says: the die, or the dice of a combined move added up. */
+  pips: number;
   to: Landing;
+  /** The steps that play it, in order. One for a single die; each starts where the last landed. */
+  steps: Step[];
 }
 
 /** The points the mover may start a step from. */
@@ -94,9 +100,12 @@ export function sourcePoints(state: LongBackgammonState): Set<number> {
   return new Set(state.legal.map((step) => step.from));
 }
 
+const sumOfDice = (steps: readonly Step[]) => steps.reduce((total, step) => total + step.die, 0);
+
 /**
- * The ways to play the checker on `from`, one per die. Two dice can reach the same
- * place only when bearing off, and then the player has to say which one to spend.
+ * The ways to play the checker on `from`: first one per die, smallest first, then the
+ * combined moves (see `combinedMoves`). Two single dice can reach the same place only when
+ * bearing off, and then the player has to say which one to spend.
  */
 export function destinations(state: LongBackgammonState, from: number): Destination[] {
   const seen = new Set<number>();
@@ -104,26 +113,74 @@ export function destinations(state: LongBackgammonState, from: number): Destinat
   for (const step of state.legal) {
     if (step.from !== from || seen.has(step.die)) continue;
     seen.add(step.die);
-    result.push({ die: step.die, to: landing(step) });
+    result.push({ pips: step.die, to: landing(step), steps: [step] });
   }
-  return result.sort((a, b) => a.die - b.die);
+  result.sort((a, b) => a.pips - b.pips);
+  return [...result, ...combinedMoves(state, from, result)];
 }
 
 /**
- * The step that bears the selected checker `picked` off, or null if no die does. When two
- * different dice could, it is the one with the larger die (D8 in the rules doc), so that the
- * player is never asked which: there is one button for it, and it shows no die.
+ * The ways to play the checker on `from` with several dice in a row, each as far as it
+ * goes: one per place it can end on. Dice played in either order can end in the same place
+ * (a 6 then a 3, or a 3 then a 6), through different points in between; the one the server
+ * lists first is used. A place that a single die reaches is left to that die, except for
+ * bearing off, which a die and several dice may both do (see `bearOffSteps`).
  */
-export function bearOffStep(picked: number | null, ways: readonly Destination[]): Step | null {
-  if (picked === null) return null;
-  const dice = ways.filter((way) => way.to === "off").map((way) => way.die);
-  return dice.length > 0 ? { from: picked, die: Math.max(...dice) } : null;
+function combinedMoves(
+  state: LongBackgammonState,
+  from: number,
+  singles: readonly Destination[],
+): Destination[] {
+  const taken = new Set<Landing>(singles.map((way) => way.to).filter((to) => to !== "off"));
+  const result: Destination[] = [];
+  for (const steps of state.combos) {
+    const last = steps.at(-1);
+    if (!last || steps[0]?.from !== from) continue;
+    const to = landing(last);
+    if (taken.has(to)) continue;
+    taken.add(to);
+    result.push({ pips: sumOfDice(steps), to, steps });
+  }
+  return result;
 }
+
+/**
+ * The steps that bear the selected checker `picked` off, or null if nothing does. A single die
+ * is preferred to several, since it keeps the other dice free. When two different dice could,
+ * it is the one with the larger die (D8 in the rules doc), so that the player is never asked
+ * which: there is one button for it, and it shows no die. If only several dice in a row can
+ * bear it off, those are played.
+ */
+export function bearOffSteps(picked: number | null, ways: readonly Destination[]): Step[] | null {
+  if (picked === null) return null;
+  const off = ways.filter((way) => way.to === "off");
+  const singles = off.filter((way) => way.steps.length === 1);
+  if (singles.length > 0) {
+    return singles.reduce((best, way) => (way.pips > best.pips ? way : best)).steps;
+  }
+  return off[0]?.steps ?? null;
+}
+
+/**
+ * The dice of a move in words, for a screen reader and a tooltip: "the 6", "the 6 and the 3"
+ * or, for the same die repeated, "two 5s".
+ */
+export function diceWords(steps: readonly Step[]): string {
+  const dice = steps.map((step) => step.die);
+  const [first] = dice;
+  if (dice.length > 1 && dice.every((die) => die === first)) {
+    return `${COUNTS[dice.length] ?? dice.length} ${first}s`;
+  }
+  return dice.map((die) => `the ${die}`).join(" and ");
+}
+
+const COUNTS: Record<number, string> = { 2: "two", 3: "three", 4: "four" };
 
 /** What pressing on a point does. */
 export type Press =
   | { type: "select"; point: number }
-  | { type: "move"; step: Step }
+  /** Play these steps, one after the other. */
+  | { type: "move"; steps: Step[] }
   | { type: "none" };
 
 /**
@@ -146,7 +203,7 @@ export function pressOutcome(
 ): Press {
   if (on === "background" && picked !== null) {
     const way = ways.find((w) => w.to === point);
-    if (way) return { type: "move", step: { from: picked, die: way.die } };
+    if (way) return { type: "move", steps: way.steps };
   }
   return sources.has(point) ? { type: "select", point } : { type: "none" };
 }

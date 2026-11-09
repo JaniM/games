@@ -51,6 +51,13 @@ export const stateSchema = z.object({
   phase: phaseSchema,
   /** Every single step `turn` may play now. Empty unless the phase is `move`. */
   legal: z.array(stepSchema),
+  /**
+   * The ways to play two or more dice with one checker in a row, so that they can be offered
+   * as one move. Each is a list of steps, each starting where the one before landed, and each
+   * legal in the position the steps before it lead to: playing them one at a time is allowed
+   * (the client sends them as separate `move` actions). Empty unless the phase is `move`.
+   */
+  combos: z.array(z.array(stepSchema)),
   /** The turn before this one, once there is one. `played` is empty if the player could not move. */
   lastTurn: z
     .object({

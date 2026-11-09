@@ -4,6 +4,7 @@ import { GAME_ID, board, moving, snapshotMessage, startingState } from "../../fi
 import { FakeWebSocket, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
 import { SESSION_ID, session, sessionState } from "../session";
 import { AUTOPLAY_PAUSE_MS } from "./autoplay";
+import { QUEUED_STEP_PAUSE_MS } from "./effects";
 import { game, gameActions, gameViews, joinRequests } from "./index";
 
 // A fresh db per test, from the same features the app uses.
@@ -805,6 +806,224 @@ describe("auto-play", () => {
     await pause(AUTOPLAY_PAUSE_MS * 3);
 
     expect(actionsOf(socket)).toEqual([]);
+  });
+});
+
+describe("a combined move", () => {
+  // Fake timers freeze the pause between the steps. `settle` waits on a timer, so these tests flush with `tick`.
+  const tick = () => vi.advanceTimersByTimeAsync(0);
+  const actionsOf = (socket: FakeWebSocket) =>
+    socket.sent.filter((m) => m.type === "action").map((m) => m.action);
+  const queued = (db: TestDb) => view(db)?.queued;
+
+  // A 3-6: the checker on 1 can play the 3 to 4 and then the 6 to 10.
+  const three = { from: 1, die: 3 };
+  const six = { from: 4, die: 6 };
+  const start = startingState({
+    ...moving([3, 6], [three, { from: 1, die: 6 }], [], [3, 6], [[three, six]]),
+  });
+  /** What the server sends once the 3 is played: the 6 is left, and the checker on 4 can play it. */
+  const afterThree = (players: string[], legal = [six]) =>
+    snapshotMessage({
+      revision: 2,
+      players,
+      state: startingState({ ...moving([3, 6], legal, [three], [6]) }),
+    });
+
+  /** A game in which this browser's user is seat 0 and to move, with the 3-6 above rolled. */
+  async function ready(state = start) {
+    vi.useFakeTimers();
+    const ctx = setup();
+    await tick();
+    await tick(); // the session registers as issued(1), so its user id is user-1
+    ctx.db.ops.game.openGame({ gameId: GAME_ID });
+    await tick();
+    const socket = FakeWebSocket.last;
+    socket.open();
+    const players = [issued(1).userId, "other"];
+    socket.receive(snapshotMessage({ players, state }));
+    await tick();
+    return { ...ctx, socket, players };
+  }
+  const play = async (db: TestDb, steps: { from: number; die: number }[]) => {
+    db.ops.game.submitMoves({ gameId: GAME_ID, steps });
+    await tick();
+  };
+  const pause = async (ms = QUEUED_STEP_PAUSE_MS) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    await tick();
+  };
+
+  it("sends the first step at once and keeps the rest back", async () => {
+    const { db, socket } = await ready();
+    db.ops.game.selectPoint({ gameId: GAME_ID, point: 1 });
+
+    await play(db, [three, six]);
+
+    expect(actionsOf(socket)).toEqual([{ type: "move", ...three }]);
+    expect(view(db)).toMatchObject({ busy: true, queued: [six], selected: null });
+  });
+
+  it("sends the next step only after the answer and a pause, so that the first hop can be followed", async () => {
+    const { db, socket, players } = await ready();
+    await play(db, [three, six]);
+
+    socket.receive(afterThree(players));
+    await tick();
+    expect(view(db)).toMatchObject({ busy: false, queued: [six] });
+    await pause(QUEUED_STEP_PAUSE_MS - 1);
+    expect(actionsOf(socket)).toHaveLength(1);
+
+    await pause(1);
+
+    expect(actionsOf(socket)).toEqual([
+      { type: "move", ...three },
+      { type: "move", ...six },
+    ]);
+    expect(view(db)).toMatchObject({ busy: true, queued: [] });
+  });
+
+  it("does not send the second step before the first is answered, however long it takes", async () => {
+    const { db, socket } = await ready();
+    await play(db, [three, six]);
+
+    await pause(QUEUED_STEP_PAUSE_MS * 10);
+
+    expect(actionsOf(socket)).toHaveLength(1);
+    expect(queued(db)).toEqual([six]);
+  });
+
+  it("starts nothing else in the middle: no pick, no roll, no other move", async () => {
+    const { db, socket, players } = await ready();
+    await play(db, [three, six]);
+    socket.receive(afterThree(players, [six, { from: 1, die: 6 }]));
+    await tick();
+
+    db.ops.game.selectPoint({ gameId: GAME_ID, point: 1 });
+    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "undo" } });
+    db.ops.game.submitMoves({ gameId: GAME_ID, steps: [{ from: 1, die: 6 }] });
+    await tick();
+
+    expect(view(db)).toMatchObject({ selected: null, queued: [six] });
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("keeps the checker selected where it lands, if the dice allow it to go on", async () => {
+    // A double: two 5s with the checker on 1 leave two more, and it can play on from 11.
+    const five = { from: 1, die: 5 };
+    const again = { from: 6, die: 5 };
+    const state = startingState({
+      ...moving([5, 5], [five], [], [5, 5, 5, 5], [[five, again]]),
+    });
+    const { db, socket, players } = await ready(state);
+    await play(db, [five, again]);
+
+    socket.receive(
+      snapshotMessage({
+        revision: 2,
+        players,
+        state: startingState({ ...moving([5, 5], [again, { from: 1, die: 5 }], [five], [5, 5, 5]) }),
+      }),
+    );
+    await tick();
+    await pause();
+    expect(actionsOf(socket).at(-1)).toEqual({ type: "move", ...again });
+
+    socket.receive(
+      snapshotMessage({
+        revision: 3,
+        players,
+        state: startingState({
+          ...moving([5, 5], [{ from: 11, die: 5 }], [five, again], [5, 5]),
+        }),
+      }),
+    );
+    await tick();
+
+    expect(view(db)).toMatchObject({ busy: false, queued: [], selected: 11 });
+  });
+
+  it("plays a single step like any other move, selecting the checker where it lands", async () => {
+    const { db, socket } = await ready();
+    db.ops.game.selectPoint({ gameId: GAME_ID, point: 1 });
+
+    await play(db, [three]);
+
+    expect(actionsOf(socket)).toEqual([{ type: "move", ...three }]);
+    expect(view(db)).toMatchObject({ busy: true, queued: [], selected: 4 });
+  });
+
+  it("drops the rest, and says why, when the server refuses a step", async () => {
+    const { db, socket } = await ready();
+    await play(db, [three, six]);
+
+    socket.receive({ type: "error", code: "rejected", message: "that move is blocked" });
+    await tick();
+    await pause(QUEUED_STEP_PAUSE_MS * 2);
+
+    expect(view(db)).toMatchObject({ busy: false, queued: [], error: "that move is blocked" });
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("drops the rest when the position is not the one it was planned in", async () => {
+    const { db, socket, players } = await ready();
+    await play(db, [three, six]);
+
+    // The answer does not list the 6 from 4: a second tab of the same player played on.
+    socket.receive(afterThree(players, [{ from: 1, die: 6 }]));
+    await tick();
+    await pause(QUEUED_STEP_PAUSE_MS * 2);
+
+    expect(queued(db)).toEqual([]);
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("drops the rest when it is no longer the user's turn", async () => {
+    const { db, socket, players } = await ready();
+    await play(db, [three, six]);
+
+    socket.receive(
+      snapshotMessage({ revision: 2, players, state: startingState({ turn: 1, legal: [six] }) }),
+    );
+    await tick();
+    await pause(QUEUED_STEP_PAUSE_MS * 2);
+
+    expect(queued(db)).toEqual([]);
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("drops the rest when the connection is lost, as an action meant for an old position must not play in a new one", async () => {
+    const { db, socket, players } = await ready();
+    await play(db, [three, six]);
+    socket.receive(afterThree(players));
+    await tick();
+
+    socket.serverClose(1006);
+    await tick();
+    await pause(QUEUED_STEP_PAUSE_MS * 2);
+
+    expect(view(db)).toMatchObject({ queued: [], busy: false });
+    expect(actionsOf(socket)).toHaveLength(1);
+  });
+
+  it("is ignored while an earlier action waits for its answer, or the connection is down", async () => {
+    const { db, socket } = await ready();
+    db.ops.game.submitAction({ gameId: GAME_ID, action: { type: "undo" } });
+    await tick();
+
+    await play(db, [three, six]);
+
+    expect(actionsOf(socket)).toEqual([{ type: "undo" }]);
+    expect(queued(db)).toEqual([]);
+  });
+
+  it("is ignored when there is nothing to play", async () => {
+    const { db, socket } = await ready();
+
+    await play(db, []);
+
+    expect(actionsOf(socket)).toEqual([]);
+    expect(view(db)?.busy).toBe(false);
   });
 });
 

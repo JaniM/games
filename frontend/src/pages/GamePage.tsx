@@ -9,6 +9,7 @@ import {
   selectPoint,
   setAutoplay,
   submitAction,
+  submitMoves,
 } from "../features/game";
 import { gamePath } from "../features/router";
 import { SESSION_ID, sessionState } from "../features/session";
@@ -27,6 +28,7 @@ export function GamePage({ gameId }: { gameId: string }) {
   const requestJoin = useOp(joinGame);
   const select = useOp(selectPoint);
   const submit = useOp(submitAction);
+  const submitMove = useOp(submitMoves);
   const autoplay = useOp(setAutoplay);
   const volume = useQuery(soundSettings.get(SOUND_ID))?.volume ?? DEFAULT_VOLUME;
   const changeVolume = useOp(setVolume);
@@ -54,7 +56,7 @@ export function GamePage({ gameId }: { gameId: string }) {
       // Only in development: `import.meta.env.DEV` is false in `vite build`, and the button is left out.
       showAutoplay={import.meta.env.DEV}
       onSelect={(point) => select({ gameId, point })}
-      onMove={(step) => submit({ gameId, action: { type: "move", from: step.from, die: step.die } })}
+      onMove={(steps) => submitMove({ gameId, steps })}
       volume={volume}
       onVolume={(level) => changeVolume({ volume: level })}
       onCue={(timed: TimedCue) => playCue(timed.cue, timed.afterMs, volume)}

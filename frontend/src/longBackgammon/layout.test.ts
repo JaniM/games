@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 import { board, moving, startingState } from "../fixtures";
 import { HEIGHT, WIDTH, hopVector, slotCentre } from "./geometry";
 import {
+  type Destination,
   colourOf,
   destinations,
   diceFaces,
+  diceWords,
   landing,
   otherIndex,
   pointNumber,
   pointSlot,
-  bearOffStep,
+  bearOffSteps,
   pressOutcome,
   sourcePoints,
   toViewerIndex,
@@ -154,8 +156,8 @@ describe("the ways to move", () => {
 
   it("lands on the point the die reaches", () => {
     expect(destinations(state, 1)).toEqual([
-      { die: 3, to: 4 },
-      { die: 6, to: 7 },
+      { pips: 3, to: 4, steps: [{ from: 1, die: 3 }] },
+      { pips: 6, to: 7, steps: [{ from: 1, die: 6 }] },
     ]);
   });
 
@@ -165,13 +167,131 @@ describe("the ways to move", () => {
     expect(landing({ from: 20, die: 6 })).toBe("off");
     expect(landing({ from: 20, die: 4 })).toBe(24);
     expect(destinations(state, 20)).toEqual([
-      { die: 5, to: "off" },
-      { die: 6, to: "off" },
+      { pips: 5, to: "off", steps: [{ from: 20, die: 5 }] },
+      { pips: 6, to: "off", steps: [{ from: 20, die: 6 }] },
     ]);
   });
 
   it("offers nothing from a point with no legal step", () => {
     expect(destinations(state, 5)).toEqual([]);
+  });
+});
+
+describe("the combined moves", () => {
+  // A 6-3 with the checker on 1 and another on 9. The server lists the lines of one checker.
+  const state = startingState({
+    ...moving(
+      [6, 3],
+      [
+        { from: 1, die: 3 },
+        { from: 1, die: 6 },
+        { from: 9, die: 3 },
+      ],
+      [],
+      [6, 3],
+      [
+        [{ from: 1, die: 3 }, { from: 4, die: 6 }],
+        [{ from: 1, die: 6 }, { from: 7, die: 3 }],
+        [{ from: 9, die: 3 }, { from: 12, die: 6 }],
+      ],
+    ),
+  });
+
+  it("add a way to the end of both dice, after the single ones", () => {
+    const ways = destinations(state, 1);
+
+    expect(ways.map((way) => [way.pips, way.to])).toEqual([
+      [3, 4],
+      [6, 7],
+      [9, 10],
+    ]);
+    expect(ways[2]?.steps).toEqual([
+      { from: 1, die: 3 },
+      { from: 4, die: 6 },
+    ]);
+  });
+
+  it("are offered only for the selected checker", () => {
+    expect(destinations(state, 9).map((way) => [way.pips, way.to])).toEqual([
+      [3, 12],
+      [9, 18],
+    ]);
+  });
+
+  it("are one way to a place that two orders of the dice both reach", () => {
+    // 1 to 4 to 10, and 1 to 7 to 10: one marker, played the way the server lists first.
+    const ways = destinations(state, 1).filter((way) => way.to === 10);
+
+    expect(ways).toHaveLength(1);
+    expect(ways[0]?.steps[0]).toEqual({ from: 1, die: 3 });
+  });
+
+  it("give a double a way for each length, marked by all the dice added up", () => {
+    const double = startingState({
+      ...moving(
+        [5, 5],
+        [{ from: 1, die: 5 }],
+        [],
+        [5, 5, 5, 5],
+        [
+          [{ from: 1, die: 5 }, { from: 6, die: 5 }],
+          [{ from: 1, die: 5 }, { from: 6, die: 5 }, { from: 11, die: 5 }],
+          [{ from: 1, die: 5 }, { from: 6, die: 5 }, { from: 11, die: 5 }, { from: 16, die: 5 }],
+        ],
+      ),
+    });
+
+    expect(destinations(double, 1).map((way) => [way.pips, way.to, way.steps.length])).toEqual([
+      [5, 6, 1],
+      [10, 11, 2],
+      [15, 16, 3],
+      [20, 21, 4],
+    ]);
+  });
+
+  it("can end in a bear-off, next to a single die that bears off", () => {
+    // On 21 with a 1 and a 4: the 4 bears off at once; the 1 and then the 4 does it too.
+    const home = startingState({
+      ...moving(
+        [4, 1],
+        [{ from: 21, die: 1 }, { from: 21, die: 4 }],
+        [],
+        [4, 1],
+        [[{ from: 21, die: 1 }, { from: 22, die: 4 }]],
+      ),
+    });
+
+    expect(destinations(home, 21).map((way) => [way.pips, way.to])).toEqual([
+      [1, 22],
+      [4, "off"],
+      [5, "off"],
+    ]);
+  });
+
+  it("are left out when the server lists none, as before the first roll or with one die left", () => {
+    const one = startingState({ ...moving([6, 3], [{ from: 1, die: 3 }], [{ from: 9, die: 6 }], [3]) });
+
+    expect(destinations(one, 1).map((way) => way.pips)).toEqual([3]);
+  });
+});
+
+describe("diceWords", () => {
+  it("names one die, or two different ones", () => {
+    expect(diceWords([{ from: 1, die: 6 }])).toBe("the 6");
+    expect(diceWords([{ from: 1, die: 6 }, { from: 7, die: 3 }])).toBe("the 6 and the 3");
+  });
+
+  it("counts the same die repeated", () => {
+    expect(diceWords([{ from: 1, die: 5 }, { from: 6, die: 5 }])).toBe("two 5s");
+    expect(diceWords([{ from: 1, die: 5 }, { from: 6, die: 5 }, { from: 11, die: 5 }])).toBe("three 5s");
+    expect(
+      diceWords([
+        { from: 1, die: 5 },
+        { from: 6, die: 5 },
+        { from: 11, die: 5 },
+        { from: 16, die: 5 },
+      ]),
+    ).toBe("four 5s");
   });
 });
 
@@ -228,39 +348,73 @@ describe("hopVector", () => {
   });
 });
 
-describe("bearOffStep", () => {
-  it("bears off with the only die that can", () => {
-    const ways = [{ die: 3, to: 5 }, { die: 5, to: "off" as const }];
+/** A way to play the checker on `from` with the given dice, as `destinations` builds it. */
+function way(from: number, dice: number[], to: number | "off"): Destination {
+  const steps = [];
+  let at = from;
+  for (const die of dice) {
+    steps.push({ from: at, die });
+    at += die;
+  }
+  return { pips: dice.reduce((a, b) => a + b, 0), to, steps };
+}
 
-    expect(bearOffStep(20, ways)).toEqual({ from: 20, die: 5 });
+describe("bearOffSteps", () => {
+  it("bears off with the only die that can", () => {
+    const ways = [way(20, [3], 23), way(20, [5], "off")];
+
+    expect(bearOffSteps(20, ways)).toEqual([{ from: 20, die: 5 }]);
   });
 
   it("uses the larger die when two different dice can", () => {
-    const ways = [{ die: 5, to: "off" as const }, { die: 6, to: "off" as const }];
+    const ways = [way(20, [5], "off"), way(20, [6], "off")];
 
-    expect(bearOffStep(20, ways)).toEqual({ from: 20, die: 6 });
-    expect(bearOffStep(20, [...ways].reverse())).toEqual({ from: 20, die: 6 });
+    expect(bearOffSteps(20, ways)).toEqual([{ from: 20, die: 6 }]);
+    expect(bearOffSteps(20, [...ways].reverse())).toEqual([{ from: 20, die: 6 }]);
+  });
+
+  it("prefers a single die to several, which would spend more of the roll", () => {
+    const ways = [way(21, [1], 22), way(21, [4], "off"), way(21, [1, 4], "off")];
+
+    expect(bearOffSteps(21, ways)).toEqual([{ from: 21, die: 4 }]);
+  });
+
+  it("plays several dice when only they bear the checker off", () => {
+    // On 19 with two 3s: the first lands on 22, and the second bears off from there.
+    const ways = [way(19, [3], 22), way(19, [3, 3], "off")];
+
+    expect(bearOffSteps(19, ways)).toEqual([
+      { from: 19, die: 3 },
+      { from: 22, die: 3 },
+    ]);
   });
 
   it("is nothing when no die bears the checker off, or nothing is selected", () => {
-    expect(bearOffStep(20, [{ die: 3, to: 23 }])).toBeNull();
-    expect(bearOffStep(20, [])).toBeNull();
-    expect(bearOffStep(null, [{ die: 5, to: "off" }])).toBeNull();
+    expect(bearOffSteps(20, [way(20, [3], 23)])).toBeNull();
+    expect(bearOffSteps(20, [])).toBeNull();
+    expect(bearOffSteps(null, [way(20, [5], "off")])).toBeNull();
   });
 });
 
 describe("pressOutcome", () => {
-  // The checker on 1 may play a 3 (to 4) or a 6 (to 7); another checker on 4 may also move.
-  const ways = [
-    { die: 3, to: 4 },
-    { die: 6, to: 7 },
-  ];
+  // The checker on 1 may play a 3 (to 4), a 6 (to 7), or both (to 10); another checker on 4 may also move.
+  const ways = [way(1, [3], 4), way(1, [6], 7), way(1, [3, 6], 10)];
   const sources = new Set([1, 4]);
 
   it("moves the selected checker when the background of a landing place is pressed", () => {
     expect(pressOutcome("background", 7, 1, ways, sources)).toEqual({
       type: "move",
-      step: { from: 1, die: 6 },
+      steps: [{ from: 1, die: 6 }],
+    });
+  });
+
+  it("plays all the steps of a combined move from the one press", () => {
+    expect(pressOutcome("background", 10, 1, ways, sources)).toEqual({
+      type: "move",
+      steps: [
+        { from: 1, die: 3 },
+        { from: 4, die: 6 },
+      ],
     });
   });
 
@@ -270,13 +424,13 @@ describe("pressOutcome", () => {
     // The background of the very same point is what moves.
     expect(pressOutcome("background", 4, 1, ways, sources)).toEqual({
       type: "move",
-      step: { from: 1, die: 3 },
+      steps: [{ from: 1, die: 3 }],
     });
   });
 
   it("selects when the background of a point that is no landing place has movable checkers", () => {
     expect(pressOutcome("background", 1, null, [], sources)).toEqual({ type: "select", point: 1 });
-    expect(pressOutcome("background", 4, 1, [{ die: 6, to: 7 }], sources)).toEqual({
+    expect(pressOutcome("background", 4, 1, [way(1, [6], 7)], sources)).toEqual({
       type: "select",
       point: 4,
     });

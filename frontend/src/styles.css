@@ -877,6 +877,13 @@ form.name-control {
   stroke-opacity: 0.25;
 }
 
+/* The selected checker can be borne off: the whole tray is where to press, and shows it. */
+.tray-box-active {
+  stroke: var(--accent);
+  stroke-opacity: 1;
+  stroke-width: 3;
+}
+
 .point-bg-active,
 .point-pieces-active,
 .ghost,
@@ -908,6 +915,16 @@ form.name-control {
   pointer-events: none;
 }
 
+/*
+ * A combined move (several dice by one checker) is a solid, tinted disc where a single die is a
+ * dashed outline, so the two read as different things when both show on the same board.
+ */
+.ghost-combo .ghost-mark {
+  fill: var(--accent);
+  fill-opacity: 0.3;
+  stroke-dasharray: none;
+}
+
 /* Transparent, not none: an unpainted shape doesn't receive presses. */
 .ghost-hit {
   fill: transparent;
@@ -923,8 +940,13 @@ form.name-control {
   pointer-events: none;
 }
 
-.bear-off rect {
+.bear-off-label {
   fill: var(--accent);
+}
+
+/* Transparent, not none: an unpainted shape doesn't receive presses. */
+.bear-off-hit {
+  fill: transparent;
 }
 
 .bear-off text {

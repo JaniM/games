@@ -1,7 +1,7 @@
 import { table } from "millpond";
 import { z } from "zod";
 import { randomId } from "../../randomId";
-import { actionSchema, snapshotSchema } from "./schemas";
+import { actionSchema, snapshotSchema, stepSchema } from "./schemas";
 
 /**
  * A game this browser has open: one row per game page, inserted when the page opens
@@ -27,6 +27,12 @@ export const gameViews = table(
     busy: z.boolean(),
     /** The point (the mover's own index) whose destinations are showing, or null. */
     selected: z.number().int().nullable(),
+    /**
+     * The steps of a combined move still to send: the first went out with the move, and each
+     * of these goes after the answer to the one before (the `continueMoves` effect). While
+     * there are any, the user is in the middle of one move and can't start another.
+     */
+    queued: z.array(stepSchema),
     /** Auto-play is on: the `autoPlay` effect plays this user's turns. */
     auto: z.boolean(),
   }),

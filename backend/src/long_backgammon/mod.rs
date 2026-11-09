@@ -23,7 +23,7 @@
 //!   "points": [[15, 0, …, 0], [15, 0, …, 0]], "off": [0, 0],
 //!   "turn": 0, "turns": [0, 0], "lastThrow": false,
 //!   "phase": { "type": "roll" },
-//!   "legal": [],
+//!   "legal": [], "combos": [],
 //!   "lastTurn": null }
 //! ```
 //!
@@ -40,6 +40,14 @@
 //! to `from + die`, or off the board from 25 on. `legal` lists exactly the steps `turn` may
 //! play now, with the must-play rules applied. It is empty unless the phase is `move`, and
 //! is worked out again whenever a state is read, so it never needs an upgrade.
+//!
+//! `combos` lists the ways to play two or more dice with one checker in a row, so that a
+//! client can offer them as a single move: each is a list of steps (`[{ "from": 1, "die": 2 },
+//! { "from": 3, "die": 5 }]`), each starting where the one before landed. It adds no rule.
+//! Every step of a combo is one of `legal` in the position the steps before it lead to, and
+//! the client plays them as separate `move` actions, so the other player still sees each
+//! step. A combo of a double has a line for each length, from two to four steps. Like
+//! `legal`, it is derived, empty unless the phase is `move`, and worked out again when read.
 //!
 //! A turn ends by itself when it has no legal step left. That includes the moment of the roll,
 //! when nothing can be played. `lastTurn` then says what the turn that just ended was (empty
@@ -127,14 +135,18 @@ struct Position {
 
 /// A [`Position`] with the steps that are legal in it. This is what is stored and sent.
 ///
-/// `legal` is derived. It is written out for clients, and read back by working it out again
-/// from the position, so that a stored game follows the rules of the server that loads it.
+/// `legal` and `combos` are derived. They are written out for clients, and read back by
+/// working them out again from the position, so that a stored game follows the rules of the
+/// server that loads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "Position")]
 pub struct State {
     #[serde(flatten)]
     position: Position,
     legal: Vec<Step>,
+    /// The ways to play two or more dice with one checker, one after the other (see
+    /// [`rules::combos`]). Empty when `legal` is.
+    combos: Vec<Vec<Step>>,
 }
 
 impl TryFrom<Position> for State {
@@ -148,8 +160,18 @@ impl TryFrom<Position> for State {
         let legal = position.legal();
         if legal.is_empty() {
             position.end_turn(); // Does nothing unless a turn is in progress.
+            return Ok(Self {
+                position,
+                legal,
+                combos: Vec::new(),
+            });
         }
-        Ok(Self { position, legal })
+        let combos = position.combos();
+        Ok(Self {
+            position,
+            legal,
+            combos,
+        })
     }
 }
 
@@ -301,6 +323,19 @@ impl Position {
                 remaining,
                 played,
             } => rules::legal_steps(&self.turn_view(*dice, played), remaining),
+            Phase::Roll | Phase::Over { .. } => Vec::new(),
+        }
+    }
+
+    /// The ways to play two or more of the dice left with one checker, if the player to move
+    /// has dice to play.
+    fn combos(&self) -> Vec<Vec<Step>> {
+        match &self.phase {
+            Phase::Move {
+                dice,
+                remaining,
+                played,
+            } => rules::combos(&self.turn_view(*dice, played), remaining),
             Phase::Roll | Phase::Over { .. } => Vec::new(),
         }
     }
@@ -1178,6 +1213,10 @@ mod tests {
                 "lastThrow": false,
                 "phase": { "type": "move", "dice": [5, 2], "remaining": [5, 2], "played": [] },
                 "legal": [{ "from": 1, "die": 2 }, { "from": 1, "die": 5 }],
+                "combos": [
+                    [{ "from": 1, "die": 2 }, { "from": 3, "die": 5 }],
+                    [{ "from": 1, "die": 5 }, { "from": 6, "die": 2 }],
+                ],
                 "lastTurn": null,
             })
         );
@@ -1221,6 +1260,53 @@ mod tests {
         let read: State = serde_json::from_value(json).unwrap();
 
         assert_eq!(read.legal, vec![step(1, 2), step(1, 5)]);
+    }
+
+    #[test]
+    fn the_combined_moves_are_worked_out_again_when_a_state_is_read() {
+        let game = rolled(&fresh(0), 0, [5, 2]);
+        let mut json: Value = serde_json::to_value(&game).unwrap();
+        json["combos"] = json!([[{ "from": 24, "die": 6 }, { "from": 24, "die": 6 }]]);
+
+        let read: State = serde_json::from_value(json).unwrap();
+
+        assert_eq!(read.combos, game.combos);
+        assert_eq!(read.combos.len(), 2);
+    }
+
+    #[test]
+    fn there_are_no_combined_moves_outside_a_turn_in_progress() {
+        assert_eq!(fresh(0).combos, Vec::<Vec<Step>>::new());
+
+        // A roll with nothing to play ends the turn at once: own 15 and 16 are the opponent's
+        // 3 and 4, so the checkers on 10 can play neither the 5 nor the 6.
+        let stuck = position(
+            &[(10, 15)],
+            &[(23, 3), (24, 3), (1, 3), (2, 2), (3, 2), (4, 2)],
+            [0, 0],
+        );
+        let game = rolled(&state(stuck), 0, [6, 5]);
+        assert_eq!(game.position.phase, Phase::Roll);
+        assert_eq!(game.combos, Vec::<Vec<Step>>::new());
+    }
+
+    #[test]
+    fn a_combined_move_can_be_played_as_separate_moves_whatever_the_roll() {
+        // The client plays a combo by sending its steps one at a time, so each step must be
+        // legal when its turn comes, in the state the steps before it left.
+        for a in 1..=6 {
+            for b in a..=6 {
+                let game = rolled(&fresh(0), 0, [a, b]);
+                for line in &game.combos {
+                    assert!(line.len() >= 2, "{line:?}");
+                    let mut now = game.clone();
+                    for &Step { from, die } in line {
+                        assert!(now.legal.contains(&step(from, die)), "{a}-{b}: {line:?}");
+                        now = play(&now, 0, from, die).expect("the step is accepted");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

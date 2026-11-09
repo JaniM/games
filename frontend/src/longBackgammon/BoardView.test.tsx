@@ -175,6 +175,112 @@ describe("the landing marker", () => {
   });
 });
 
+/** The board as the mover sees it, with the checker on point `selected` picked up. */
+function drawPicked(state: LongBackgammonState, selected: number | null) {
+  return renderToString(
+    <BoardView
+      state={state}
+      revision={7}
+      viewer={0}
+      selected={selected}
+      interactive
+      motion={null}
+      rolls={0}
+      onSelect={noop}
+      onMove={noop}
+    />,
+  );
+}
+
+describe("the markers of a combined move", () => {
+  // A 3-6 with the checker on 1 picked. Playing both dice with it is 1 to 4 to 10 or 1 to 7 to 10.
+  const state = startingState({
+    points: [board({ 1: 14, 20: 1 }), board({ 1: 15 })],
+    ...moving(
+      [3, 6],
+      [
+        { from: 1, die: 3 },
+        { from: 1, die: 6 },
+      ],
+      [],
+      [3, 6],
+      [
+        [
+          { from: 1, die: 3 },
+          { from: 4, die: 6 },
+        ],
+        [
+          { from: 1, die: 6 },
+          { from: 7, die: 3 },
+        ],
+      ],
+    ),
+  });
+
+  it("show the single dice and the combined move at once", () => {
+    const html = drawPicked(state, 1);
+
+    expect(count(html, 'class="ghost"')).toBe(2);
+    expect(count(html, 'class="ghost ghost-combo"')).toBe(1);
+  });
+
+  it("say the dice added up, and spell them out in a tooltip", () => {
+    const html = drawPicked(state, 1);
+
+    const combo = html.slice(html.indexOf('class="ghost ghost-combo"'));
+    expect(combo).toContain("<title>3 + 6 = 9</title>");
+    expect(combo.slice(0, combo.indexOf("</g>"))).toContain(">9</text>");
+    // A single die's marker has no tooltip.
+    expect(html.slice(html.indexOf('class="ghost"'), html.indexOf('class="ghost ghost-combo"'))).not.toContain(
+      "<title>",
+    );
+  });
+
+  it("make the point a button that names both dice", () => {
+    // Point 10 of the mover is point 15 on the board (25 - 10, as White).
+    expect(drawPicked(state, 1)).toContain('aria-label="Move to point 15 with the 3 and the 6"');
+  });
+
+  it("show nothing for a checker that has no combined move", () => {
+    const html = drawPicked(startingState({ ...state, combos: [] }), 1);
+
+    expect(count(html, "ghost-combo")).toBe(0);
+    expect(count(html, 'class="ghost"')).toBe(2);
+  });
+});
+
+describe("the tray as a bear-off button", () => {
+  // Everything is home. The checker on 20 can be borne off with the 5.
+  const home = startingState({
+    points: [board({ 20: 1, 22: 14 }), board({ 1: 15 })],
+    ...moving([5, 2], [{ from: 20, die: 5 }, { from: 22, die: 2 }]),
+  });
+
+  it("covers the whole tray, not only the label, when the picked checker can be borne off", () => {
+    const html = drawPicked(home, 20);
+
+    // The viewer's tray is bottom right: x = 628, y = 492 - 170, 80 by 170.
+    expect(html).toMatch(/<g class="bear-off"[^>]*aria-label="Bear off"/);
+    expect(html).toContain('<rect class="bear-off-hit" x="628" y="322" width="80" height="170"');
+    // The hit area is inside the one button, with the label.
+    const button = html.slice(html.indexOf('class="bear-off"'));
+    expect(button.indexOf("bear-off-hit")).toBeLessThan(button.indexOf("bear-off-label"));
+    expect(count(html, 'aria-label="Bear off"')).toBe(1);
+  });
+
+  it("lights the tray up, to show where to press", () => {
+    expect(count(drawPicked(home, 20), 'class="tray-box tray-box-active"')).toBe(1);
+  });
+
+  it("is only the tray the picked checker can go to, and only while one is picked", () => {
+    for (const html of [drawPicked(home, null), drawPicked(home, 22)]) {
+      // The checker on 22 cannot be borne off with a 5 or a 2 here, and none is picked at all.
+      expect(html).not.toContain("bear-off");
+      expect(html).not.toContain("tray-box-active");
+    }
+  });
+});
+
 describe("the dice", () => {
   it("lie still on a board that opened mid-game", () => {
     const html = draw(stepped, null, 0);

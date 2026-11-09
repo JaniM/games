@@ -28,6 +28,7 @@ function viewOf(overrides: Partial<GameViewRow> = {}): GameViewRow {
     error: null,
     busy: false,
     selected: null,
+    queued: [],
     auto: false,
     ...overrides,
   };
@@ -255,6 +256,22 @@ describe("a game with both players", () => {
     expect(html.slice(html.indexOf('aria-label="Turn"'))).not.toContain("Undo");
     // The roll button comes before the first step and is not there now.
     expect(html).not.toContain("Roll dice");
+  });
+
+  it("offers nothing to press between the steps of a combined move, which is one move", () => {
+    const three = { from: 1, die: 3 };
+    const six = { from: 4, die: 6 };
+    const state = startingState(moving([3, 6], [six], [three], [6]));
+
+    const between = render(ADA, viewOf({ snapshot: snapshotOf({ state }), queued: [six] }));
+    expect(between).not.toContain("Undo");
+    expect(between).not.toContain("Move a checker from");
+    expect(between).not.toContain("Roll dice");
+
+    // The same position with nothing queued is the mover's to play.
+    const idle = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
+    expect(idle).toContain("Undo");
+    expect(idle).toContain("Move a checker from");
   });
 
   it("offers no undo before the first step, before the roll, or while a step is on its way", () => {
