@@ -1,4 +1,5 @@
 import type { Frame, LongBackgammonState, Position, Snapshot } from "./schemas";
+import { seatOf } from "./selectors";
 
 // Reviewing a game: stepping through the positions it has been in. The server keeps every
 // position (`GET /api/games/{id}/history`), the client keeps them as frames, and a game that
@@ -16,6 +17,20 @@ export function asFrame(revision: number, state: Position): Frame {
 /** Whether anything has been played yet: a roll, or a finished turn. Before it there is nothing to step through. */
 export function hasMoves(state: LongBackgammonState): boolean {
   return state.phase.type !== "roll" || state.lastTurn !== null;
+}
+
+/**
+ * Whether the review of a game is always there, and can't be closed: a game that is over, and a
+ * game that `userId` is only watching. Both have nothing else under the board that the review
+ * would be in the way of: a player of a game in progress has the turn to play, and opens the
+ * review when they want to look back. Not before anything has been played, and not for a user
+ * who isn't known yet, who would be taken for a watcher.
+ */
+export function reviewAlwaysOn(snapshot: Pick<Snapshot, "players" | "state">, userId: string | null): boolean {
+  const { state } = snapshot;
+  if (state === null || !hasMoves(state)) return false;
+  if (state.phase.type === "over") return true;
+  return userId !== null && seatOf(snapshot, userId) === null;
 }
 
 /** Whether `after` is `before` with the last step of the turn taken back (the `undo` action). */

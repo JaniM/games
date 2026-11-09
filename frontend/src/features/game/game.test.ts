@@ -1437,6 +1437,130 @@ describe("reviewing a game", () => {
     return socket;
   }
 
+  describe("keeping the review of a game that always has one", () => {
+    const keepFor = (db: TestDb, userId: string | null) => db.ops.game.keepReview({ gameId: GAME_ID, userId });
+    // The players of the fixtures' snapshots are user-a and user-b. The session's user is neither.
+    const WATCHER = "user-1";
+
+    it("opens the review for a user who only watches a game that has been played in", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      await connected(db, { revision: 3, state: afterSix });
+
+      keepFor(db, WATCHER);
+      expect(review(db)).toMatchObject({ load: "loading", frames: [], at: null });
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(1);
+      expect(review(db)).toMatchObject({ load: "ready", through: 3, at: null });
+      expect(revisions(db)).toEqual([1, 2, 3]);
+    });
+
+    // One db to a test: the sockets of a game are kept by its id, for the whole process.
+    it.each(["user-a", "user-b", WATCHER])("opens it for %s, a player or a watcher of a game that is over", async (userId) => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [9, over]));
+      await connected(db, { revision: 9, state: over });
+
+      keepFor(db, userId);
+
+      expect(review(db)).toMatchObject({ load: "loading" });
+    });
+
+    it("leaves a game in progress to its players, who open the review when they want to look back", async () => {
+      const { db } = setup();
+      await connected(db, { revision: 3, state: afterSix });
+
+      keepFor(db, "user-a");
+      keepFor(db, "user-b");
+
+      expect(review(db)).toBeUndefined();
+    });
+
+    it("waits until something has been played: before it there is nothing to step through", async () => {
+      const { db } = setup();
+      await connected(db, { revision: 1, state: startingState() });
+
+      keepFor(db, WATCHER);
+
+      expect(review(db)).toBeUndefined();
+    });
+
+    it("opens it as soon as the first move is made", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      const socket = await connected(db, { revision: 1, state: startingState() });
+      keepFor(db, WATCHER);
+      expect(review(db)).toBeUndefined();
+
+      socket.receive(snapshotMessage({ revision: 2, state: rolled }));
+      await settle();
+      keepFor(db, WATCHER);
+
+      expect(review(db)).toMatchObject({ load: "loading" });
+    });
+
+    it("does not take a user who is not known yet for a watcher", async () => {
+      const { db } = setup();
+      await connected(db, { revision: 3, state: afterSix });
+
+      keepFor(db, null);
+
+      expect(review(db)).toBeUndefined();
+    });
+
+    it("does nothing without a game on the page", async () => {
+      const { db } = setup();
+
+      keepFor(db, WATCHER);
+
+      expect(review(db)).toBeUndefined();
+    });
+
+    it("leaves a review that is open as it is, with what it has loaded and where the user is in it", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      await connected(db, { revision: 3, state: afterSix });
+      keepFor(db, WATCHER);
+      await settle();
+      db.ops.game.showFrame({ gameId: GAME_ID, index: 1 });
+
+      keepFor(db, WATCHER);
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(1);
+      expect(review(db)).toMatchObject({ load: "ready", at: 1 });
+    });
+
+    it("opens it again if it was closed: the page calls this whenever the review is gone", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      await connected(db, { revision: 3, state: afterSix });
+      keepFor(db, WATCHER);
+      await settle();
+      db.ops.game.closeReview({ gameId: GAME_ID });
+
+      keepFor(db, WATCHER);
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2, 3]);
+    });
+
+    it("follows the game a watcher is watching: the next move is one more frame", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      const socket = await connected(db, { revision: 3, state: afterSix });
+      keepFor(db, WATCHER);
+      await settle();
+
+      socket.receive(snapshotMessage({ revision: 4, state: turnOver }));
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2, 3, 4]);
+      expect(review(db)?.at).toBeNull();
+    });
+  });
+
   describe("opening", () => {
     it("asks the server for the positions, with the user's token, and keeps them as frames", async () => {
       const { db, server, fetchMock } = setup();

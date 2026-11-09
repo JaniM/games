@@ -11,6 +11,7 @@ import {
   type reviews,
   hasMoves,
   isFull,
+  reviewAlwaysOn,
   seatOf,
   shownIndex,
 } from "../features/game";
@@ -159,10 +160,14 @@ export function GameScreen({
   const frame = review && shown !== null ? review.frames[shown] : undefined;
   const board = frame?.state ?? state;
   const canReview = state !== null && hasMoves(state);
+  // A game that is over, and one the user only watches, is always in review: there is nothing to open.
+  const reviewAlways = reviewAlwaysOn(snapshot, userId);
   // Only a step of the turn in progress can be taken back: the one that ends the turn is final.
   const canUndo = canAct && state?.phase.type === "move" && state.phase.played.length > 0;
   // Any time in a game that is on, even when it is not their turn.
   const canForfeit = mySeat !== null && state !== null && !over;
+  // Offered while a game is on and its review is not always there: a player looks back when they want to.
+  const canReviewMoves = canReview && !reviewAlways;
   const canJoin = userId !== null && mySeat === null && !isFull(snapshot);
   const waiting = !isFull(snapshot);
 
@@ -177,8 +182,11 @@ export function GameScreen({
   const answering = rematchRequest?.state === "sending";
   const rematchProblem = rematchRequest?.state === "failed" ? rematchRequest.error : null;
 
-  // Takes the place of the status or the result under the board, while the user steps through the game.
-  const reviewPanel = review ? (
+  // Takes the place of the status under the board, while the user steps through the game, and goes
+  // above the result of a game that is over, whose rematch is still wanted. A review nobody opened,
+  // of a game with no positions kept, has nothing to show.
+  const nothingToStep = review?.load === "ready" && review.frames.length === 0;
+  const reviewPanel = review && !(reviewAlways && nothingToStep) ? (
     <ReviewPanel
       loading={review.load === "loading"}
       error={review.load === "failed" ? review.error : null}
@@ -190,7 +198,7 @@ export function GameScreen({
       onShow={onShowFrame}
       onStep={onStepFrame}
       onRetry={onRetryReview}
-      onClose={onCloseReview}
+      onClose={reviewAlways ? null : onCloseReview}
     />
   ) : null;
 
@@ -251,9 +259,6 @@ export function GameScreen({
             Go to the rematch
           </Link>
         )}
-        <button className="button button-quiet" type="button" onClick={onReview}>
-          Review game
-        </button>
         {/* The way out is the main button only when there is nothing else to do. */}
         <Link className={rematch.stage === "closed" ? "button" : "button button-quiet"} to={HOME}>
           All games
@@ -271,9 +276,9 @@ export function GameScreen({
         </p>
       )}
       {lastThrow && <p className="status-warning">{lastThrow}</p>}
-      {(canReview || canForfeit || (showAutoplay && mySeat !== null && state)) && (
+      {(canReviewMoves || canForfeit || (showAutoplay && mySeat !== null && state)) && (
         <div className="status-actions">
-          {canReview && (
+          {canReviewMoves && (
             <button className="button button-quiet button-small" type="button" onClick={onReview}>
               Review moves
             </button>
@@ -367,7 +372,8 @@ export function GameScreen({
         empty={opponent >= snapshot.players.length}
       />
 
-      {reviewPanel ?? status}
+      {reviewPanel}
+      {over || !reviewPanel ? status : null}
     </Shell>
   );
 }

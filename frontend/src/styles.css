@@ -995,8 +995,7 @@ form.name-control .button {
   border-block: 2px solid var(--fg);
 }
 
-.result-kicker,
-.review-kicker {
+.result-kicker {
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -1041,14 +1040,11 @@ form.name-control .button {
 }
 
 /*
- * Stepping through a game, in the place of the status or the result under the board. It is set
- * like the result, under a heavy rule: the page is not the game now but a look back at it. The
- * accent is left to the game, which is where the player has something to do.
+ * Stepping through a game, under the board: only the bar, with no rules around it. The accent is
+ * left to the game, which is where the player has something to do.
  */
 .review {
   margin: 0.75rem 0 0;
-  padding: 0.5rem 0.75rem 0.75rem;
-  border-block: 2px solid var(--fg);
 }
 
 .review-title {
@@ -1067,10 +1063,6 @@ form.name-control .button {
   color: var(--accent);
 }
 
-/* Under the bar, with the same gap as the bar has under the title. */
-.review-controls + .review-detail {
-  margin-top: 0.75rem;
-}
 
 /* The buttons, the slider and where it stands. The slider takes what the buttons leave, and wraps under them on a narrow screen. */
 .review-controls {

@@ -788,22 +788,29 @@ describe("reviewing a game", () => {
   const panel = (html: string) => plain(html).slice(plain(html).indexOf('aria-label="Review"'));
 
   describe("starting", () => {
-    it("is offered at the end of a game, to a player and to a spectator", () => {
+    it("is not offered at the end of a game, to anyone: the review is always there", () => {
       const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
 
       for (const userId of [ADA, GRACE, STRANGER]) {
-        expect(render(userId, finished)).toMatch(/<button[^>]*class="button button-quiet"[^>]*>Review game</);
+        const html = render(userId, finished);
+
+        expect(html).not.toContain("Review game");
+        expect(html).not.toContain("Review moves");
       }
     });
 
-    it("is offered in the status of a game in progress, to a player and to a spectator", () => {
-      for (const userId of [ADA, GRACE, STRANGER]) {
+    it("is offered in the status of a game in progress, to a player", () => {
+      for (const userId of [ADA, GRACE]) {
         const html = render(userId, live);
 
         expect(html).toMatch(/<button[^>]*>Review moves</);
         expect(html).not.toContain("Review game");
         expect(html).not.toContain('aria-label="Review"');
       }
+    });
+
+    it("is not offered to a spectator of a game in progress: the review is always there", () => {
+      expect(render(STRANGER, live)).not.toContain("Review moves");
     });
 
     it("is not offered before anything has been played: there is nothing to step through", () => {
@@ -816,16 +823,70 @@ describe("reviewing a game", () => {
   });
 
   describe("on the board", () => {
-    it("takes the place of the status, or of the result", () => {
+    it("takes the place of the status of a game in progress", () => {
       const html = render(ADA, live, { review: reviewOf() });
 
       expect(html).toContain('aria-label="Review"');
       expect(html).not.toContain('aria-label="Turn"');
       expect(html).not.toContain("Review moves");
+    });
+
+    it("goes above the result of a game that is over, which keeps the rematch", () => {
       const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
-      const afterwards = render(ADA, finished, { review: reviewOf({ frames: [asFrame(9, over)] }) });
-      expect(afterwards).toContain('aria-label="Review"');
-      expect(afterwards).not.toContain('aria-label="Result"');
+
+      const html = render(ADA, finished, { review: reviewOf({ frames: [asFrame(9, over)] }) });
+
+      expect(html).toContain('aria-label="Review"');
+      expect(html).toContain('aria-label="Result"');
+      expect(html.indexOf('aria-label="Review"')).toBeLessThan(html.indexOf('aria-label="Result"'));
+      expect(html).toContain("Rematch");
+    });
+
+    it("can't be closed when it is always there: for a game that is over, and for a watcher", () => {
+      const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
+      const frames = [asFrame(1, startingState()), asFrame(9, over)];
+
+      for (const userId of [ADA, GRACE, STRANGER]) {
+        expect(render(userId, finished, { review: reviewOf({ frames }) })).not.toContain("Close review");
+      }
+      expect(render(STRANGER, live, { review: reviewOf() })).not.toContain("Close review");
+    });
+
+    it("has no foot where there is nothing to say in it: a finished game has no turn, and no way back", () => {
+      const finished = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
+      const frames = [asFrame(1, startingState()), asFrame(9, over)];
+
+      expect(render(ADA, finished, { review: reviewOf({ frames }) })).not.toContain("review-foot");
+    });
+
+    it("still says what the game is waiting for, to a watcher of a game in progress", () => {
+      const html = panel(render(STRANGER, live, { review: reviewOf() }));
+
+      expect(html).toContain("In the game: Waiting for Grace to roll.");
+      expect(html).not.toContain("Close review");
+    });
+
+    it("shows the bar while the positions of a game that is always reviewed are on their way", () => {
+      const loading = reviewOf({ load: "loading", frames: [], through: -1 });
+
+      expect(panel(render(STRANGER, live, { review: loading }))).toContain("Loading the moves…");
+    });
+
+    it("shows nothing for a game that is always reviewed and has no positions kept: the result is enough", () => {
+      const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
+
+      const html = render(ADA, finished, { review: reviewOf({ frames: [], through: -1 }) });
+
+      expect(html).not.toContain('aria-label="Review"');
+      expect(html).not.toContain("Nothing was kept of this game.");
+      expect(html).toContain('aria-label="Result"');
+    });
+
+    it("shows no title of its own: only the bar, with what led to each position kept for a screen reader", () => {
+      const html = render(ADA, live, { review: reviewOf({ at: 1 }) });
+
+      expect(html).not.toContain("review-kicker");
+      expect(html).toMatch(/<p class="review-title visually-hidden"[^>]*>You rolled 6-3</);
     });
 
     it("shows the newest position when the review opens, which is the game as it stands", () => {
@@ -900,15 +961,13 @@ describe("reviewing a game", () => {
       expect(html).toContain("Game over. You won, 1 point.");
     });
 
-    it("puts the result under the bar and not over it, so that the bar stays put as the user steps", () => {
+    it("does not show the result in the review, but keeps it for a screen reader", () => {
       const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
       const frames = [asFrame(1, startingState()), asFrame(9, over)];
 
-      const html = panel(render(ADA, ended, { review: reviewOf({ frames }) }));
+      const html = plain(render(ADA, ended, { review: reviewOf({ frames }) }));
 
-      expect(html.indexOf("You played 1→off")).toBeLessThan(html.indexOf("review-controls"));
-      expect(html.indexOf("review-controls")).toBeLessThan(html.indexOf("Game over. You won, 1 point."));
-      expect(html.indexOf("Game over. You won, 1 point.")).toBeLessThan(html.indexOf("review-foot"));
+      expect(html).toContain('<p class="review-detail visually-hidden">Game over. You won, 1 point.</p>');
     });
   });
 

@@ -9,6 +9,7 @@ import {
   gameViews,
   joinGame,
   joinRequests,
+  keepReview,
   openGame,
   openReview,
   rematchRequests,
@@ -41,6 +42,7 @@ export function GamePage({ gameId }: { gameId: string }) {
   const requestRematch = useOp(askRematch);
   const declineOffer = useOp(declineRematch);
   const startReview = useOp(openReview);
+  const keepReviewOn = useOp(keepReview);
   const endReview = useOp(closeReview);
   const askAgain = useOp(retryReview);
   const showPosition = useOp(showFrame);
@@ -54,6 +56,17 @@ export function GamePage({ gameId }: { gameId: string }) {
 
   // A browser lets a page make sound only after it has been used: be ready for the first press.
   useEffect(unlockOnGesture, []);
+
+  // A game that is over, and one the user only watches, is always in review: open it for them,
+  // and again when it changes (it ended, it had its first move) or the review is gone. It is cheap
+  // and does nothing for a game that isn't one of those.
+  const revision = view?.snapshot?.revision;
+  const reviewing = review !== undefined;
+  const userId = session?.userId ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are what the call is for, though it reads them from the db.
+  useEffect(() => {
+    keepReviewOn({ gameId, userId });
+  }, [keepReviewOn, gameId, userId, revision, reviewing]);
 
   // Open the game while this page shows it, and close it (and its socket) on the way out.
   // `useOp` gives the same function until the db changes, so this runs once per game id.

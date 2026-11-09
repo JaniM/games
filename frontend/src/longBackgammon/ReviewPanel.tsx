@@ -22,7 +22,8 @@ export interface ReviewPanelProps {
   /** Shows the position this many places on: 1 for the next, -1 for the one before. */
   onStep: (by: number) => void;
   onRetry: () => void;
-  onClose: () => void;
+  /** Goes back to the game. Null where the review can't be closed, because it is always there. */
+  onClose: (() => void) | null;
 }
 
 /** Whether a key press belongs to a field the user is typing in, or to a slider that handles arrows itself. */
@@ -36,9 +37,9 @@ function isForField(target: EventTarget | null): boolean {
 }
 
 /**
- * Stepping through a game, in the place of the status under the board: what led to the position
- * on show, the buttons and the slider to move through the game, what else is worth knowing about
- * the position (under them: that the game is over, and how it ended), and the way back to it. The arrow
+ * Stepping through a game, under the board: the buttons and the slider to move through the game,
+ * and the way back to it where there is one. What led to the position on show, and how the game
+ * ended, are for a screen reader only. The arrow
  * keys step, and Home and End go to the ends.
  */
 export function ReviewPanel({
@@ -73,9 +74,10 @@ export function ReviewPanel({
 
   return (
     <section className="review" aria-label="Review">
-      <p className="review-kicker">Review</p>
+      {/* What led to the position, and how the game ended, are not shown: the board says it. A screen
+          reader still gets them as the user steps. */}
       {text ? (
-        <p className="review-title" role="status" aria-live="polite">
+        <p className="review-title visually-hidden" role="status" aria-live="polite">
           {text.title}
         </p>
       ) : loading ? (
@@ -87,6 +89,7 @@ export function ReviewPanel({
           Nothing was kept of this game.
         </p>
       ) : null}
+      {text?.detail && <p className="review-detail visually-hidden">{text.detail}</p>}
       {error && (
         <p className="review-detail review-error" role="alert">
           {error}
@@ -123,24 +126,26 @@ export function ReviewPanel({
           </span>
         </div>
       )}
-      {/* Under the bar, so that the bar stays where it is as the user steps, whether a position has more to say or not. */}
-      {text?.detail && <p className="review-detail">{text.detail}</p>}
       {partial && index !== null && (
         <p className="review-detail">What was played before this position was not kept.</p>
       )}
-      <div className="review-foot">
-        <p className="review-live">{live}</p>
-        <div className="review-actions">
-          {error !== null && (
-            <button className="button button-quiet button-small" type="button" onClick={onRetry}>
-              Try again
-            </button>
-          )}
-          <button className="button button-quiet button-small" type="button" onClick={onClose}>
-            Close review
-          </button>
+      {(live !== "" || error !== null || onClose !== null) && (
+        <div className="review-foot">
+          <p className="review-live">{live}</p>
+          <div className="review-actions">
+            {error !== null && (
+              <button className="button button-quiet button-small" type="button" onClick={onRetry}>
+                Try again
+              </button>
+            )}
+            {onClose !== null && (
+              <button className="button button-quiet button-small" type="button" onClick={onClose}>
+                Close review
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }

@@ -8,6 +8,7 @@ import {
   framesOf,
   hasMoves,
   moveForKey,
+  reviewAlwaysOn,
   shownIndex,
 } from "./review";
 import type { Frame } from "./schemas";
@@ -270,5 +271,36 @@ describe("moveForKey", () => {
     expect(moveForKey("ArrowDown")).toBeNull();
     expect(moveForKey(" ")).toBeNull();
     expect(moveForKey("a")).toBeNull();
+  });
+});
+
+describe("reviewAlwaysOn", () => {
+  const players = ["user-a", "user-b"];
+  const snapshot = (state: ReturnType<typeof startingState> | null) => ({ players, state });
+
+  it("is on for a game that is over, for a player and for a watcher", () => {
+    for (const userId of ["user-a", "user-b", "someone-else"]) {
+      expect(reviewAlwaysOn(snapshot(over), userId)).toBe(true);
+    }
+  });
+
+  it("is on for a user who only watches a game that has been played in", () => {
+    expect(reviewAlwaysOn(snapshot(turnOver), "someone-else")).toBe(true);
+    expect(reviewAlwaysOn(snapshot(rolled), "someone-else")).toBe(true);
+  });
+
+  it("is off for the players of a game in progress", () => {
+    expect(reviewAlwaysOn(snapshot(turnOver), "user-a")).toBe(false);
+    expect(reviewAlwaysOn(snapshot(turnOver), "user-b")).toBe(false);
+  });
+
+  it("is off before anything has been played, and before the game has started", () => {
+    expect(reviewAlwaysOn(snapshot(start), "someone-else")).toBe(false);
+    expect(reviewAlwaysOn(snapshot(null), "someone-else")).toBe(false);
+  });
+
+  it("is off for a user who is not known yet, who would otherwise pass for a watcher", () => {
+    expect(reviewAlwaysOn(snapshot(turnOver), null)).toBe(false);
+    expect(reviewAlwaysOn(snapshot(over), null)).toBe(true);
   });
 });

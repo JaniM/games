@@ -23,6 +23,7 @@ import {
   joinFailed,
   joinGame,
   joined,
+  keepReview,
   openGame,
   openReview,
   rematchFailed,
@@ -66,6 +67,7 @@ export const game = feature({
     rematchSent,
     rematchFailed,
     openReview,
+    keepReview,
     closeReview,
     reviewLoaded,
     reviewFailed,
@@ -94,6 +96,7 @@ export {
   forfeitGame,
   joinGame,
   openGame,
+  keepReview,
   openReview,
   retryReview,
   selectPoint,
@@ -103,7 +106,7 @@ export {
   submitAction,
   submitMoves,
 } from "./ops";
-export { hasMoves, moveForKey, shownIndex } from "./review";
+export { hasMoves, moveForKey, reviewAlwaysOn, shownIndex } from "./review";
 export type { ReviewMove } from "./review";
 export { isFull, landing, seatOf } from "./selectors";
 export type { Landing } from "./selectors";

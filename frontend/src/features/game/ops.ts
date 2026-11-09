@@ -1,6 +1,6 @@
 import { type Tx, op } from "millpond";
 import { SESSION_ID, sessionState } from "../session";
-import { atFor, extend, framesOf, shownIndex } from "./review";
+import { atFor, extend, framesOf, reviewAlwaysOn, shownIndex } from "./review";
 import type { Action, Frame, Snapshot, Step } from "./schemas";
 import { landing, seatOf } from "./selectors";
 import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
@@ -342,6 +342,17 @@ export const openReview = op((tx, args: { gameId: string }) => {
   if (!tx.read(gameViews.get(args.gameId))?.snapshot?.state) return;
   if (tx.read(reviews.get(args.gameId))) return;
   tx.insert(reviews, { gameId: args.gameId, load: "loading", error: null, frames: [], through: -1, at: null });
+});
+
+/**
+ * Opens the review of a game that always has one (see `reviewAlwaysOn`), if it isn't open. Any
+ * other game is left as it is. The page calls it whenever the game or the user changes, so a
+ * game that has just ended, or has just had its first move, gets its review, and a watcher gets
+ * one as soon as the game is there. `userId` is who is looking, null while that isn't known.
+ */
+export const keepReview = op((tx, args: { gameId: string; userId: string | null }) => {
+  const snapshot = tx.read(gameViews.get(args.gameId))?.snapshot;
+  if (snapshot && reviewAlwaysOn(snapshot, args.userId)) tx.run(openReview, { gameId: args.gameId });
 });
 
 /** Ends the review: the board goes back to the game as it is now. */
