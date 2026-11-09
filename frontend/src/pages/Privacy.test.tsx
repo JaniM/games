@@ -19,6 +19,13 @@ function render(element: React.ReactNode) {
   return renderToString(<DbProvider db={db}>{element}</DbProvider>);
 }
 
+const ACME = {
+  name: "Acme Ltd",
+  email: "help@acme.test",
+  url: "https://games.acme.test/",
+  address: ["1 High Street", "Leeds LS1 1AA", "England"],
+};
+
 /** The page as text and tags. Server rendering marks where one piece of text ends and the next begins, which a reader doesn't see. */
 const privacy = (props: PrivacyProps = {}) =>
   render(<Privacy {...props} />).replaceAll("<!-- -->", "");
@@ -114,7 +121,7 @@ describe("the privacy policy", () => {
     expect(html).toContain("the IP address it came from");
   });
 
-  it("explains only what is collected: it has no section, or claim, about what is not", () => {
+  it("makes no promise about analytics, cookies or recording, which the site can't keep for whoever hosts it", () => {
     const html = privacy();
 
     expect(html).not.toContain("does not collect");
@@ -144,32 +151,44 @@ describe("the privacy policy", () => {
     expect(html).toContain("<strong>You can delete your user</strong> from the same menu");
   });
 
-  it("names the company that runs the site and where to write to it", () => {
+  it("names the company that runs the site, where it is, and where to write to it", () => {
     const html = privacy();
 
-    expect(html).toContain("<h2>Who runs the site</h2>");
-    expect(html).toContain("Seequ Oy runs this site.");
+    expect(html).toContain("This Privacy Notice for Seequ Oy (“we,” “us,” or “our”)");
+    expect(html).toContain("Visit our website at https://games.seequ.dev/ or any website of ours");
     expect(html).toContain('<a href="mailto:support@seequ.dev">support@seequ.dev</a>');
   });
 
-  it("names the operator wherever it says who keeps and can read the data", () => {
-    const html = privacy({ operator: { name: "Acme Ltd", email: "help@acme.test" } });
+  it("gives the postal address, one line to each", () => {
+    expect(privacy()).toContain("Seequ Oy<br/>PL 14<br/>Oulu 90571<br/>Finland");
+  });
 
-    expect(html).toContain("Acme Ltd runs this site.");
+  it("names the operator wherever it says who can read the data", () => {
+    const html = privacy({ operator: ACME });
+
     expect(html).toContain("Acme Ltd, which runs the site, can read everything the server keeps.");
-    expect(html).toContain("or until Acme Ltd deletes them");
-    expect(html).not.toContain("Seequ");
+  });
+
+  it("takes everything it says about who runs the site from the operator", () => {
+    const html = privacy({ operator: ACME });
+
+    expect(html).toContain("This Privacy Notice for Acme Ltd");
+    expect(html).toContain("Visit our website at https://games.acme.test/");
+    expect(html).toContain("Acme Ltd<br/>1 High Street<br/>Leeds LS1 1AA<br/>England");
+    expect(html).not.toMatch(/Seequ|seequ|Oulu/);
   });
 
   it("sends a request to delete games to the operator's address, with the links to them", () => {
-    const html = privacy({ operator: { name: "Acme Ltd", email: "help@acme.test" } });
+    const html = privacy({ operator: ACME });
 
     expect(html).toContain("To have your games deleted, write to");
     expect(html).toContain('href="mailto:help@acme.test"');
     expect(html).toContain("with the links to them");
-    // Three times, each time as a link and as text: where the page says who runs the site, where
-    // it says how to take a public game out of the list, and where it says how to ask for deletion.
-    expect(html.match(/help@acme\.test/g)).toHaveLength(6);
+    expect(html).not.toContain("support@seequ.dev");
+  });
+
+  it("says when it was last updated", () => {
+    expect(privacy()).toContain("Last updated November 9, 2026");
   });
 
   it("says that a game can only be opened with its link", () => {
@@ -178,6 +197,132 @@ describe("the privacy policy", () => {
 
   it("links back to the games", () => {
     expect(privacy()).toContain('href="/"');
+  });
+});
+
+describe("the privacy policy's structure", () => {
+  const sections = [
+    "1. What information do we collect?",
+    "2. How do we process your information?",
+    "3. What legal bases do we rely on to process your personal information?",
+    "4. When and with whom do we share your personal information?",
+    "5. How long do we keep your information?",
+    "6. How do we keep your information safe?",
+    "7. What are your privacy rights?",
+    "8. Controls for Do-Not-Track features",
+    "9. Do United States residents have specific privacy rights?",
+    "10. Do we make updates to this notice?",
+    "11. How can you contact us about this notice?",
+    "12. How can you review, update, or delete the data we collect from you?",
+  ];
+
+  it("has the twelve numbered sections of the notice, in order", () => {
+    const html = privacy();
+
+    const headings = [...html.matchAll(/<h2 id="[^"]+">([^<]+)<\/h2>/g)].map((match) => match[1]);
+    expect(headings.filter((heading) => /^\d/.test(heading ?? ""))).toEqual(sections);
+  });
+
+  it("opens with a summary of the key points and a table of contents that lists every section", () => {
+    const html = privacy();
+
+    expect(html).toContain("<h2>Summary of key points</h2>");
+    expect(html).toContain('<h2 id="contents">Table of contents</h2>');
+    const contents = html.slice(html.indexOf('<h2 id="contents">'), html.indexOf('<h2 id="information">'));
+    const titles = [...contents.matchAll(/<li><a href="#[^"]+">([^<]+)<\/a><\/li>/g)].map((match) => match[1]);
+    expect(titles).toEqual(sections.map((section) => section.replace(/^\d+\. /, "")));
+  });
+
+  it("links only to places on the page that exist", () => {
+    const html = privacy();
+
+    const targets = new Set([...html.matchAll(/ id="([^"]+)"/g)].map((match) => match[1]));
+    const links = [...html.matchAll(/href="#([^"]+)"/g)].map((match) => match[1] ?? "");
+    // At least the table of contents.
+    expect(links.length).toBeGreaterThan(sections.length);
+    for (const link of links) expect(targets, `#${link}`).toContain(link);
+  });
+
+  it("links to the notice's own sections from its summary and from where one section refers to another", () => {
+    const html = privacy();
+
+    expect(html).toContain('<a href="#information">personal information you disclose to us</a>');
+    expect(html).toContain('<a href="#withdrawing-consent">withdrawing your consent</a>');
+    expect(html).toContain('<a href="#rights">section 7</a>');
+  });
+
+  it("sums up, in short, each of the sections the template does that for", () => {
+    const html = privacy();
+
+    // Sections 1 to 7, 9 and 10.
+    expect(html.match(/<strong>In short:<\/strong>/g)).toHaveLength(9);
+  });
+
+  it("says it processes no sensitive information and takes none from third parties", () => {
+    const html = privacy();
+
+    expect(html).toContain("We do not process sensitive personal information.");
+    expect(html).toContain("We do not collect any information from third parties.");
+  });
+
+  it("keeps the template's legal sections: GDPR bases, Canada, a UK complaint, do-not-track, US states", () => {
+    const html = privacy();
+
+    expect(html).toContain("If you are located in the EU or UK, this section applies to you.");
+    expect(html).toContain("If you are located in Canada, this section applies to you.");
+    expect(html).toContain("We will acknowledge your complaint within 30 days of receiving it.");
+    expect(html).toContain("Information Commissioner’s Office, Wycliffe House");
+    expect(html).toContain("we do not currently respond to DNT browser signals");
+    expect(html).toContain("California “Shine The Light” law");
+    expect(html).toContain("Oregon, Rhode Island, Tennessee, Texas, Utah, or Virginia");
+  });
+
+  it("says the notice was updated by changing its date, which is the one at the top", () => {
+    expect(privacy()).toContain("an updated “Last updated” date at the top of this Privacy Notice");
+  });
+
+  it("lists a username, a password and a display name as what a person gives", () => {
+    const html = privacy();
+
+    expect(html).toContain("<li>usernames</li><li>passwords</li><li>display names</li>");
+  });
+
+  describe("the categories of personal information", () => {
+    /** The table as `[category, collected]`, in order. */
+    function table(html: string): [string, string][] {
+      return [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th><td>[^<]*<\/td><td>([^<]+)<\/td><\/tr>/g)].map(
+        (match) => [match[1] ?? "", match[2] ?? ""],
+      );
+    }
+
+    it("has the twelve categories, A to L", () => {
+      const rows = table(privacy());
+
+      expect(rows.map(([name]) => name.slice(0, 2))).toEqual(
+        ["A.", "B.", "C.", "D.", "E.", "F.", "G.", "H.", "I.", "J.", "K.", "L."],
+      );
+    });
+
+    // What the site keeps is a username, an id and tokens (and, in a host's logs, an IP address),
+    // and the games people play. Anything else in the table is a No.
+    it("says yes to identifiers and to network activity, which the site keeps, and no to the rest", () => {
+      const rows = table(privacy());
+
+      expect(rows.filter(([, collected]) => collected === "Yes").map(([name]) => name)).toEqual([
+        "A. Identifiers",
+        "F. Internet or other similar network activity",
+      ]);
+      expect(rows.filter(([, collected]) => collected === "No")).toHaveLength(10);
+    });
+
+    it("says what the two yeses are", () => {
+      const html = privacy();
+
+      expect(html).toContain(
+        "Identifiers here are your username, your user id and access token, and the IP address in a host’s access logs.",
+      );
+      expect(html).toContain("Network activity is the games you play and your moves in them.");
+    });
   });
 });
 
