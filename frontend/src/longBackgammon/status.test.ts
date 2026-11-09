@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { Rematch } from "../features/game";
 import { moving, snapshotOf, startingState } from "../fixtures";
 import {
   barNameOf,
   lastThrowText,
   lastTurnText,
   nameOf,
+  rematchStage,
   resultOf,
   stepText,
   turnText,
@@ -142,5 +144,63 @@ describe("lastThrowText", () => {
     expect(lastThrowText(startingState())).toBe("");
     const over = startingState({ lastThrow: true, phase: { type: "over", winner: 0, points: 1 } });
     expect(lastThrowText(over)).toBe("");
+  });
+});
+
+describe("rematchStage", () => {
+  const over = { type: "over", winner: 0, points: 1 } as const;
+  const rematchOf = (rematch: Rematch | null) => snap({ state: startingState({ phase: over }), rematch });
+
+  it("lets a player ask when nobody has", () => {
+    expect(rematchStage(rematchOf(null), 0)).toEqual({ stage: "ask", line: "" });
+    expect(rematchStage(rematchOf(null), 1)).toEqual({ stage: "ask", line: "" });
+  });
+
+  it("tells the one who asked that the other has not answered, and can be waited out or taken back", () => {
+    expect(rematchStage(rematchOf({ type: "offered", by: 0 }), 0)).toEqual({
+      stage: "waiting",
+      line: "Waiting for Grace to accept the rematch…",
+    });
+  });
+
+  it("asks the other player to answer, by name", () => {
+    expect(rematchStage(rematchOf({ type: "offered", by: 0 }), 1)).toEqual({
+      stage: "answer",
+      line: "Ada wants a rematch.",
+    });
+    expect(rematchStage(rematchOf({ type: "offered", by: 1 }), 0)).toEqual({
+      stage: "answer",
+      line: "Grace wants a rematch.",
+    });
+  });
+
+  it("falls back to 'Player N' for an opponent without a name", () => {
+    const snapshot = { ...rematchOf({ type: "offered", by: 1 }), playerNames: ["Ada", null] };
+
+    expect(rematchStage(snapshot, 0).line).toBe("Player 2 wants a rematch.");
+  });
+
+  it("tells the one who was turned down, and says nothing to the one who said no", () => {
+    const declined = rematchOf({ type: "declined", by: 0 });
+
+    expect(rematchStage(declined, 0)).toEqual({ stage: "ask", line: "Grace declined the rematch." });
+    expect(rematchStage(declined, 1)).toEqual({ stage: "ask", line: "" });
+  });
+
+  it("points everyone, spectators too, at the new game once it exists", () => {
+    const started = rematchOf({ type: "accepted", gameId: "nextgame234" });
+
+    for (const seat of [0, 1, null] as const) {
+      expect(rematchStage(started, seat)).toEqual({
+        stage: "started",
+        line: "The rematch has started.",
+        gameId: "nextgame234",
+      });
+    }
+  });
+
+  it("offers a spectator nothing to press", () => {
+    expect(rematchStage(rematchOf(null), null)).toEqual({ stage: "closed", line: "" });
+    expect(rematchStage(rematchOf({ type: "offered", by: 0 }), null)).toEqual({ stage: "closed", line: "" });
   });
 });

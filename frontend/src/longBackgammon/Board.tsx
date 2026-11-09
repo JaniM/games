@@ -45,7 +45,8 @@ import { useMotion } from "./useMotion";
 
 // The board is an SVG in its own units (see `geometry`), scaled to the width of the page.
 // The viewer's head is top right and their home bottom right, whoever the viewer is (see
-// `pointSlot`). The numbers on the points are the same for both players (see `pointNumber`).
+// `pointSlot`). The points are numbered the same for both players (see `pointNumber`), but the
+// numbers are not drawn: they name a point to a screen reader and in the text of a turn.
 
 type MoveMotion = Extract<Motion, { type: "move" }>;
 
@@ -139,7 +140,16 @@ export function BoardView({
       aria-label="Board"
       onClick={() => picked !== null && onSelect(null)}
     >
-      <rect className="board-frame" x="0" y="0" width={WIDTH} height={HEIGHT} rx="12" />
+      <rect className="board-frame" x="0" y="0" width={WIDTH} height={HEIGHT} rx="4" />
+      {/* A fine line inside the edge, as on a made board. */}
+      <rect
+        className="board-inlay"
+        x="6"
+        y="6"
+        width={WIDTH - 12}
+        height={HEIGHT - 12}
+        rx="2"
+      />
       <rect
         className="board-bar"
         x={MARGIN + 6 * POINT_WIDTH}
@@ -260,7 +270,7 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
     .join(" ");
 
   return (
-    <g className={className}>
+    <g className={className} data-point={number}>
       <g className={source || target !== null ? "point-bg point-bg-active" : "point-bg"} {...background}>
         <path
           className={`tri tri-${shade}`}
@@ -275,14 +285,6 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
           height={POINT_HEIGHT}
         />
       </g>
-      <text
-        className="point-number"
-        x={x + POINT_WIDTH / 2}
-        y={top ? TOP - 10 : BOTTOM + 20}
-        textAnchor="middle"
-      >
-        {number}
-      </text>
       <g
         className={source ? "point-pieces point-pieces-active" : "point-pieces"}
         {...(source ? pressable(`Move a checker from point ${number}`, () => onPress("piece", point.index)) : {})}
@@ -372,7 +374,7 @@ function Tray({ top = false, count, colour, label, canBearOff = false, arriving,
         y={y}
         width={TRAY_WIDTH}
         height={POINT_HEIGHT}
-        rx="6"
+        rx="4"
       />
       {Array.from({ length: count }, (_, i) => (
         <rect
@@ -386,21 +388,13 @@ function Tray({ top = false, count, colour, label, canBearOff = false, arriving,
           rx="3"
         />
       ))}
-      <text
-        className="point-number"
-        x={TRAY_X + TRAY_WIDTH / 2}
-        y={top ? TOP - 10 : BOTTOM + 20}
-        textAnchor="middle"
-      >
-        {`off · ${count}`}
-      </text>
       {canBearOff && (
         // The whole tray is the button, over its borne-off checkers too, so that it is as easy to
         // hit as a point is; the label says what it does.
         <g className="bear-off" {...pressable("Bear off", () => onBearOff?.())}>
-          <rect className="bear-off-hit" x={TRAY_X} y={y} width={TRAY_WIDTH} height={POINT_HEIGHT} rx="6" />
+          <rect className="bear-off-hit" x={TRAY_X} y={y} width={TRAY_WIDTH} height={POINT_HEIGHT} rx="4" />
           <g transform={`translate(${TRAY_X + 8} ${y + 14})`}>
-            <rect className="bear-off-label" width={TRAY_WIDTH - 16} height="36" rx="8" />
+            <rect className="bear-off-label" width={TRAY_WIDTH - 16} height="36" rx="4" />
             <text x={(TRAY_WIDTH - 16) / 2} y="18" textAnchor="middle" dominantBaseline="central">
               Bear off
             </text>

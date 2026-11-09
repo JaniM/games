@@ -35,6 +35,12 @@ export const gameViews = table(
     queued: z.array(stepSchema),
     /** Auto-play is on: the `autoPlay` effect plays this user's turns. */
     auto: z.boolean(),
+    /**
+     * The id of the rematch that started while this page was open, which the `followRematch`
+     * effect moves the browser to. A rematch that had started before the page opened is not
+     * followed: whoever opens an old game is looking at it.
+     */
+    rematchStarted: z.string().nullable(),
   }),
   { key: "gameId", indexes: { byAuto: ["auto"] } },
 );
@@ -58,6 +64,23 @@ export const joinRequests = table(
   z.object({
     gameId: z.string(),
     state: z.enum(["joining", "failed"]),
+    error: z.string().nullable(),
+  }),
+  { key: "gameId", indexes: { byState: ["state"] } },
+);
+
+/**
+ * A player's answer about the rematch of a finished game, on its way to the server: `ask` asks
+ * for one, or says yes to the other player's ask; `decline` takes back one's own ask, or says
+ * no to the other's. `sending` is what the `rematchRequest` effect picks up; `failed` keeps the
+ * reason. A request that went through deletes the row: what it did shows up in the next
+ * snapshot, like any other change.
+ */
+export const rematchRequests = table(
+  z.object({
+    gameId: z.string(),
+    answer: z.enum(["ask", "decline"]),
+    state: z.enum(["sending", "failed"]),
     error: z.string().nullable(),
   }),
   { key: "gameId", indexes: { byState: ["state"] } },

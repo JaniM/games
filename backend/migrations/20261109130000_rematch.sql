@@ -1,0 +1,11 @@
+-- The rematch of a finished game: one player asks to play again, and the other answers.
+-- Null until somebody asks. The JSON is the one clients see in a game's snapshot (see
+-- `src/rematch.rs`):
+--
+--   {"type": "offered",  "by": <seat that asked>}
+--   {"type": "declined", "by": <seat whose offer was refused>}
+--   {"type": "accepted", "gameId": "<the new game>"}
+--
+-- A rematch is a new game with the same players, so `accepted` is the end of it: the old
+-- game keeps pointing at the game that followed.
+ALTER TABLE games ADD COLUMN rematch jsonb;

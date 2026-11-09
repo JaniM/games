@@ -1,11 +1,14 @@
 import { useOp, useQuery } from "millpond/react";
 import { useEffect } from "react";
 import {
+  askRematch,
   closeGame,
+  declineRematch,
   gameViews,
   joinGame,
   joinRequests,
   openGame,
+  rematchRequests,
   selectPoint,
   setAutoplay,
   submitAction,
@@ -22,10 +25,13 @@ import { playCue, unlockOnGesture } from "../longBackgammon/sounds";
 export function GamePage({ gameId }: { gameId: string }) {
   const view = useQuery(gameViews.get(gameId));
   const join = useQuery(joinRequests.get(gameId));
+  const rematch = useQuery(rematchRequests.get(gameId));
   const session = useQuery(sessionState.get(SESSION_ID));
   const open = useOp(openGame);
   const close = useOp(closeGame);
   const requestJoin = useOp(joinGame);
+  const requestRematch = useOp(askRematch);
+  const declineOffer = useOp(declineRematch);
   const select = useOp(selectPoint);
   const submit = useOp(submitAction);
   const submitMove = useOp(submitMoves);
@@ -48,8 +54,11 @@ export function GamePage({ gameId }: { gameId: string }) {
       view={view}
       userId={session?.userId ?? null}
       join={join}
+      rematchRequest={rematch}
       inviteUrl={`${location.origin}${gamePath(gameId)}`}
       onJoin={() => requestJoin({ gameId })}
+      onRematch={() => requestRematch({ gameId })}
+      onDeclineRematch={() => declineOffer({ gameId })}
       onRoll={() => submit({ gameId, action: { type: "roll" } })}
       onUndo={() => submit({ gameId, action: { type: "undo" } })}
       onAutoplay={(on) => autoplay({ gameId, on })}

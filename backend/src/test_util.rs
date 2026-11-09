@@ -126,6 +126,35 @@ impl TestApp {
             .await
     }
 
+    /// A `quick` game between two new users, played to its end. Returns its id and the two
+    /// users, (user id, token) by seat. Nobody is connected to it when this returns.
+    pub async fn finished_quick_game(&self) -> (String, [(String, String); 2]) {
+        let first = self.register_user().await;
+        let second = self.register_user().await;
+        let game_id = self.create_game(&first.1, "quick").await;
+        self.join_game(&second.1, &game_id).await;
+        let server = self.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &first.1).await;
+        client.next().await;
+        client.act(json!({})).await;
+        assert_eq!(client.next().await["state"], json!({ "over": true }));
+        (game_id, [first, second])
+    }
+
+    /// Asks for a rematch of a game as the token's user. Returns the reply as it is.
+    pub async fn ask_rematch(&self, token: &str, game_id: &str) -> Reply {
+        let uri = format!("/api/games/{game_id}/rematch");
+        self.send(Method::POST, &uri, Some(&bearer(token)), None)
+            .await
+    }
+
+    /// Takes back an ask for a rematch, or turns one down, as the token's user.
+    pub async fn decline_rematch(&self, token: &str, game_id: &str) -> Reply {
+        let uri = format!("/api/games/{game_id}/rematch");
+        self.send(Method::DELETE, &uri, Some(&bearer(token)), None)
+            .await
+    }
+
     /// Serves the app on a free loopback port, for tests that need a real connection.
     /// The server stops when the returned value is dropped.
     pub async fn serve(&self) -> Server {
@@ -356,6 +385,36 @@ impl Game for TallyV2 {
             }
             other => Err(StateError::new(format!("no upgrade from version {other}"))),
         }
+    }
+}
+
+/// Two players, and over as soon as either acts: for testing what happens to a finished game.
+/// It has a bot, which never plays.
+pub struct Quick;
+
+#[derive(Serialize, Deserialize)]
+pub struct QuickState {
+    pub over: bool,
+}
+
+impl Game for Quick {
+    const KIND: &'static str = "quick";
+    const PLAYERS: usize = 2;
+    const STATE_VERSION: u32 = 1;
+    const BOT: bool = true;
+    type State = QuickState;
+    type Action = Value;
+
+    fn start() -> QuickState {
+        QuickState { over: false }
+    }
+
+    fn is_over(state: &QuickState) -> bool {
+        state.over
+    }
+
+    fn apply(_: &QuickState, _: usize, _: Value) -> Result<QuickState, Rejection> {
+        Ok(QuickState { over: true })
     }
 }
 

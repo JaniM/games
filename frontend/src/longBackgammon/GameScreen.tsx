@@ -8,9 +8,11 @@ import {
   type Step,
   type gameViews,
   type joinRequests,
+  type rematchRequests,
   isFull,
   seatOf,
 } from "../features/game";
+import { gamePath } from "../features/router";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
@@ -19,6 +21,7 @@ import {
   barNameOf,
   lastThrowText,
   lastTurnText,
+  rematchStage,
   resultOf,
   turnText,
   viewerSeat,
@@ -27,6 +30,7 @@ import { VolumeControl } from "./VolumeControl";
 
 export type GameViewRow = RowOf<typeof gameViews>;
 export type JoinRequestRow = RowOf<typeof joinRequests>;
+export type RematchRequestRow = RowOf<typeof rematchRequests>;
 
 export interface GameScreenProps {
   /** The game page's row, or undefined for the moment before the page has opened it. */
@@ -34,9 +38,15 @@ export interface GameScreenProps {
   /** Who the browser is, or null while the session is being set up. */
   userId: string | null;
   join: JoinRequestRow | undefined;
+  /** An answer about the rematch that is on its way, or has failed; undefined if there is none. */
+  rematchRequest: RematchRequestRow | undefined;
   /** The link to give to the opponent. It is also how anyone else can watch. */
   inviteUrl: string;
   onJoin: () => void;
+  /** Asks for a rematch of the finished game, or says yes to the other player's ask. */
+  onRematch: () => void;
+  /** Takes back one's own ask for a rematch, or says no to the other player's. */
+  onDeclineRematch: () => void;
   onRoll: () => void;
   /** Takes back the last step of the turn in progress. */
   onUndo: () => void;
@@ -89,8 +99,11 @@ export function GameScreen({
   view,
   userId,
   join,
+  rematchRequest,
   inviteUrl,
   onJoin,
+  onRematch,
+  onDeclineRematch,
   onRoll,
   onUndo,
   onAutoplay,
@@ -146,6 +159,11 @@ export function GameScreen({
     lastTurnText(snapshot, mySeat) ||
     (state ? "" : "Who plays White and moves first is decided when the second player joins.");
 
+  const rematch = rematchStage(snapshot, mySeat);
+  // A player's own rematch answer has gone out and the other's is not back. It shows as a snapshot.
+  const answering = rematchRequest?.state === "sending";
+  const rematchProblem = rematchRequest?.state === "failed" ? rematchRequest.error : null;
+
   const status = result ? (
     <section className={result.won ? "result result-won" : "result"} aria-label="Result">
       <div>
@@ -154,10 +172,60 @@ export function GameScreen({
           {result.title}
         </p>
         {result.detail && <p className="result-detail">{result.detail}</p>}
+        {/* Always there, so that a screen reader hears it when the other player answers. */}
+        <p
+          className={rematch.stage === "answer" ? "result-rematch result-rematch-due" : "result-rematch"}
+          role="status"
+        >
+          {rematch.line}
+        </p>
+        {rematchProblem && (
+          <p className="result-rematch result-rematch-due" role="alert">
+            {rematchProblem}
+          </p>
+        )}
       </div>
-      <Link className="button" to={HOME}>
-        All games
-      </Link>
+      <div className="result-actions">
+        {rematch.stage === "ask" && (
+          <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
+            Rematch
+          </button>
+        )}
+        {rematch.stage === "answer" && (
+          <>
+            <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
+              Accept
+            </button>
+            <button
+              className="button button-quiet"
+              type="button"
+              disabled={!connected || answering}
+              onClick={onDeclineRematch}
+            >
+              Decline
+            </button>
+          </>
+        )}
+        {rematch.stage === "waiting" && (
+          <button
+            className="button button-quiet"
+            type="button"
+            disabled={!connected || answering}
+            onClick={onDeclineRematch}
+          >
+            Cancel
+          </button>
+        )}
+        {rematch.stage === "started" && (
+          <Link className="button" to={gamePath(rematch.gameId)}>
+            Go to the rematch
+          </Link>
+        )}
+        {/* The way out is the main button only when there is nothing else to do. */}
+        <Link className={rematch.stage === "closed" ? "button" : "button button-quiet"} to={HOME}>
+          All games
+        </Link>
+      </div>
     </section>
   ) : (
     <section className="status-band" aria-label="Turn" data-turn={myTurn ? "mine" : "wait"}>

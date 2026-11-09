@@ -16,13 +16,20 @@
 //!
 //! ```json
 //! { "type": "snapshot", "gameId": "…", "kind": "…", "revision": 3, "stateVersion": 1,
-//!   "players": ["<user id of seat 0>", "…"], "playerNames": ["Ada", null], "state": { … } }
+//!   "players": ["<user id of seat 0>", "…"], "playerNames": ["Ada", null], "state": { … },
+//!   "rematch": null }
 //! ```
 //!
 //! `state` is whatever the game defines, and is null until every seat is taken.
 //! `playerNames` is parallel to `players` and null for a player who has no name. A player
 //! who changes their name is published at once, as a snapshot with the same `revision` as
 //! before (the game did not change), so replace what you have unless `revision` is lower.
+//!
+//! `rematch` is null until a player of the finished game asks to play it again (over HTTP,
+//! see `lobby`). Then it is `{ "type": "offered", "by": <seat> }` until the other player
+//! answers, and after that `{ "type": "declined", "by": <seat> }`, or
+//! `{ "type": "accepted", "gameId": "…" }` for the new game, which has the same players.
+//! Each step is a new `revision`.
 //!
 //! **Anyone with a token who knows the game's id may connect and watch.** The client's own
 //! seat is its index in `players`; a client that isn't in `players` is a spectator and
@@ -293,7 +300,7 @@ mod tests {
     use super::*;
     use crate::{
         game::Games,
-        test_util::{Client, Tally, TestApp, bearer},
+        test_util::{Client, Quick, Tally, TestApp, bearer},
     };
 
     /// Changes the name of the token's user.
@@ -751,5 +758,42 @@ mod tests {
         assert!(bot_turns >= 2, "the bot played only {bot_turns} turns");
         assert_eq!(snapshot["players"][1], crate::bot::BOT_USER.to_string());
         assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_reaches_the_other_player_as_a_snapshot_on_the_socket_they_have(
+        pool: PgPool,
+    ) {
+        let app = TestApp::new(pool, Games::default().with::<Quick>());
+        let (game_id, [(_, ada), (_, grace)]) = app.finished_quick_game().await;
+        let server = app.serve().await;
+        let mut ada_socket = Client::sign_in(&server, &game_id, &ada).await;
+        let mut grace_socket = Client::sign_in(&server, &game_id, &grace).await;
+        // Over, and nobody has asked yet.
+        assert_eq!(ada_socket.next().await["rematch"], json!(null));
+        grace_socket.next().await;
+
+        app.ask_rematch(&ada, &game_id).await;
+
+        for socket in [&mut ada_socket, &mut grace_socket] {
+            let seen = socket.next().await;
+            assert_eq!(seen["type"], "snapshot");
+            assert_eq!(seen["rematch"], json!({ "type": "offered", "by": 0 }));
+            assert_eq!(seen["state"], json!({ "over": true }));
+        }
+        let reply = app.ask_rematch(&grace, &game_id).await;
+        let next = reply.json["rematch"]["gameId"].as_str().unwrap().to_owned();
+        for socket in [&mut ada_socket, &mut grace_socket] {
+            let seen = socket.next().await;
+            assert_eq!(
+                seen["rematch"],
+                json!({ "type": "accepted", "gameId": next })
+            );
+        }
+        // Both go on to the new game, where it is about to begin.
+        let mut following = Client::sign_in(&server, &next, &ada).await;
+        let seen = following.next().await;
+        assert_eq!(seen["state"], json!({ "over": false }));
+        assert_eq!(seen["rematch"], json!(null));
     }
 }

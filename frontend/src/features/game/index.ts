@@ -1,16 +1,28 @@
 import { feature } from "millpond";
-import { autoPlay, connectGame, continueMoves, joinGameRequest, sendActions } from "./effects";
+import {
+  autoPlay,
+  connectGame,
+  continueMoves,
+  followRematch,
+  joinGameRequest,
+  rematchRequest,
+  sendActions,
+} from "./effects";
 import {
   actionDropped,
   actionRefused,
   actionSent,
+  askRematch,
   closeGame,
   connectionChanged,
+  declineRematch,
   gameProblem,
   joinFailed,
   joinGame,
   joined,
   openGame,
+  rematchFailed,
+  rematchSent,
   selectPoint,
   sendQueued,
   setAutoplay,
@@ -18,10 +30,10 @@ import {
   submitAction,
   submitMoves,
 } from "./ops";
-import { gameActions, gameViews, joinRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
 
 export const game = feature({
-  tables: { gameViews, gameActions, joinRequests },
+  tables: { gameViews, gameActions, joinRequests, rematchRequests },
   ops: {
     openGame,
     closeGame,
@@ -39,13 +51,27 @@ export const game = feature({
     joinGame,
     joined,
     joinFailed,
+    askRematch,
+    declineRematch,
+    rematchSent,
+    rematchFailed,
   },
-  effects: { connectGame, sendActions, joinGameRequest, autoPlay, continueMoves },
+  effects: {
+    connectGame,
+    sendActions,
+    joinGameRequest,
+    autoPlay,
+    continueMoves,
+    rematchRequest,
+    followRematch,
+  },
 });
 
 // Components import definitions by value; they never need the assembled db.
 export {
+  askRematch,
   closeGame,
+  declineRematch,
   joinGame,
   openGame,
   selectPoint,
@@ -59,8 +85,9 @@ export type {
   Action,
   LongBackgammonState,
   Phase,
+  Rematch,
   Seat,
   Snapshot,
   Step,
 } from "./schemas";
-export { gameActions, gameViews, joinRequests } from "./tables";
+export { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";

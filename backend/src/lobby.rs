@@ -1,4 +1,4 @@
-//! Creating, joining and listing games over HTTP. Playing happens on the game's
+//! Creating, joining, listing and replaying games over HTTP. Playing happens on the game's
 //! WebSocket (see `socket`).
 //!
 //! A game's id is its invite: whoever has it can join while a seat is free, and can watch
@@ -17,6 +17,7 @@ use crate::{
     auth::AuthUser,
     error::ApiError,
     game_id::GameId,
+    rematch::Rematch,
     room::{RoomError, Rooms},
 };
 
@@ -71,6 +72,47 @@ pub async fn join_game(
 ) -> Result<Json<Seat>, ApiError> {
     let seat = rooms.join(&game_id, user).await.map_err(api_error)?;
     Ok(Json(Seat { game_id, seat }))
+}
+
+/// Where a game's rematch stands, as `POST` and `DELETE /api/games/{id}/rematch` answer.
+/// The same value is in the game's snapshots, which is how the other player finds out.
+#[derive(Serialize)]
+pub struct RematchReply {
+    rematch: Option<Rematch>,
+}
+
+/// `POST /api/games/{id}/rematch`: a player of a finished game asks to play it again. If the
+/// other player has asked already, this is the answer yes. Either way, once both want it the
+/// new game exists, with the same players in the same seats, and the reply names it:
+/// `{ "rematch": { "type": "accepted", "gameId": "…" } }`. Against the computer that is
+/// at once. Otherwise the reply is the offer, `{ "type": "offered", "by": <seat> }`, which the
+/// other player sees in their snapshot. Asking again changes nothing.
+///
+/// Answers 403 to someone who isn't a player in the game, 404 for an unknown game, 409 while
+/// the game is not over and 422 for a game that isn't for two players.
+pub async fn ask_rematch(
+    AuthUser(user): AuthUser,
+    State(rooms): State<Rooms>,
+    Path(game_id): Path<GameId>,
+) -> Result<Json<RematchReply>, ApiError> {
+    let rematch = rooms.ask_rematch(&game_id, user).await.map_err(api_error)?;
+    Ok(Json(RematchReply { rematch }))
+}
+
+/// `DELETE /api/games/{id}/rematch`: a player takes back their own ask, which leaves no
+/// rematch, or turns down the other player's, which leaves
+/// `{ "type": "declined", "by": <seat of the one who asked> }`. With nothing to take back or
+/// turn down it changes nothing. The same errors as asking.
+pub async fn decline_rematch(
+    AuthUser(user): AuthUser,
+    State(rooms): State<Rooms>,
+    Path(game_id): Path<GameId>,
+) -> Result<Json<RematchReply>, ApiError> {
+    let rematch = rooms
+        .decline_rematch(&game_id, user)
+        .await
+        .map_err(api_error)?;
+    Ok(Json(RematchReply { rematch }))
 }
 
 #[derive(Serialize)]
@@ -165,12 +207,13 @@ fn api_error(err: RoomError) -> ApiError {
         RoomError::NotFound => ApiError::NotFound,
         RoomError::Full => ApiError::Conflict("the game is full"),
         RoomError::NoBot => ApiError::Invalid("this game has no computer opponent"),
-        // Creating and joining don't produce the others. If one shows up, it is our bug.
-        RoomError::NotAPlayer
-        | RoomError::NotStarted
-        | RoomError::Rejected(_)
-        | RoomError::Internal
-        | RoomError::Gone => ApiError::Internal,
+        RoomError::NotAPlayer => ApiError::Forbidden("you are not a player in this game"),
+        RoomError::NotOver => ApiError::Conflict("the game is not over yet"),
+        RoomError::NoRematch => ApiError::Invalid("this game has no rematch"),
+        // Creating, joining and the rematch don't produce the others. If one shows up, it is our bug.
+        RoomError::NotStarted | RoomError::Rejected(_) | RoomError::Internal | RoomError::Gone => {
+            ApiError::Internal
+        }
     }
 }
 
@@ -184,11 +227,17 @@ mod tests {
     use crate::{
         bot::BOT_USER,
         game,
-        test_util::{Solo, Tally, TestApp, bearer},
+        test_util::{Client, Quick, Solo, Tally, TestApp, bearer},
     };
 
     fn app(pool: PgPool) -> TestApp {
-        TestApp::new(pool, game::Games::default().with::<Tally>().with::<Solo>())
+        TestApp::new(
+            pool,
+            game::Games::default()
+                .with::<Tally>()
+                .with::<Solo>()
+                .with::<Quick>(),
+        )
     }
 
     /// What the database holds for a game: revision, state version, state, players by seat.
@@ -675,5 +724,139 @@ mod tests {
                 .await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         }
+    }
+
+    // --- The rematch ---
+
+    #[sqlx::test]
+    async fn asking_offers_a_rematch_and_the_other_players_yes_makes_the_new_game(pool: PgPool) {
+        let app = app(pool.clone());
+        let (game_id, [(ada_id, ada), (grace_id, grace)]) = app.finished_quick_game().await;
+
+        let offer = app.ask_rematch(&ada, &game_id).await;
+        let answer = app.ask_rematch(&grace, &game_id).await;
+
+        assert_eq!(offer.status, StatusCode::OK);
+        assert_eq!(
+            offer.json,
+            json!({ "rematch": { "type": "offered", "by": 0 } })
+        );
+        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(answer.json["rematch"]["type"], "accepted");
+        // The new game is a fresh one with both players in the seats they had...
+        let next = answer.json["rematch"]["gameId"].as_str().unwrap();
+        assert_ne!(next, game_id);
+        assert_eq!(
+            stored(&pool, next).await,
+            (0, 1, Some(json!({ "over": false })), vec![ada_id, grace_id])
+        );
+        // ...and in both their lists, under the one they just played.
+        for token in [&ada, &grace] {
+            let games = list(&app, token).await;
+            let games = games.as_array().unwrap();
+            let listed = |id: &str| games.iter().find(|g| g["gameId"] == id).cloned();
+            assert_eq!(listed(next).unwrap()["started"], true);
+            assert_eq!(listed(next).unwrap()["finished"], false);
+            assert_eq!(listed(&game_id).unwrap()["finished"], true);
+        }
+    }
+
+    #[sqlx::test]
+    async fn turning_down_or_taking_back_a_rematch_says_what_is_left(pool: PgPool) {
+        let app = app(pool.clone());
+        let (game_id, [(_, ada), (_, grace)]) = app.finished_quick_game().await;
+        app.ask_rematch(&ada, &game_id).await;
+
+        let turned_down = app.decline_rematch(&grace, &game_id).await;
+        app.ask_rematch(&ada, &game_id).await;
+        let taken_back = app.decline_rematch(&ada, &game_id).await;
+
+        assert_eq!(turned_down.status, StatusCode::OK);
+        assert_eq!(
+            turned_down.json,
+            json!({ "rematch": { "type": "declined", "by": 0 } })
+        );
+        assert_eq!(taken_back.status, StatusCode::OK);
+        assert_eq!(taken_back.json, json!({ "rematch": null }));
+    }
+
+    #[sqlx::test]
+    async fn the_bot_always_agrees_to_a_rematch(pool: PgPool) {
+        let app = app(pool.clone());
+        let (user_id, token) = app.register_user().await;
+        let game_id = app.create_bot_game(&token, "quick").await.json["gameId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let server = app.serve().await;
+        let mut client = Client::sign_in(&server, &game_id, &token).await;
+        client.next().await;
+        client.act(json!({})).await;
+        client.next().await;
+
+        let reply = app.ask_rematch(&token, &game_id).await;
+
+        assert_eq!(reply.status, StatusCode::OK);
+        let next = reply.json["rematch"]["gameId"].as_str().unwrap();
+        let (_, _, state, players) = stored(&pool, next).await;
+        assert_eq!(state, Some(json!({ "over": false })));
+        assert_eq!(players, vec![user_id, BOT_USER.to_string()]);
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_is_still_on_cannot_be_replayed(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, ada) = app.register_user().await;
+        let (_, grace) = app.register_user().await;
+        let game_id = app.create_game(&ada, "quick").await;
+        app.join_game(&grace, &game_id).await;
+
+        for reply in [
+            app.ask_rematch(&ada, &game_id).await,
+            app.decline_rematch(&ada, &game_id).await,
+        ] {
+            assert_eq!(reply.status, StatusCode::CONFLICT);
+        }
+        let games: i64 = sqlx::query_scalar("SELECT count(*) FROM games")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(games, 1);
+    }
+
+    #[sqlx::test]
+    async fn only_a_player_of_the_game_can_ask_for_a_rematch(pool: PgPool) {
+        let app = app(pool);
+        let (game_id, _) = app.finished_quick_game().await;
+        let (_, outsider) = app.register_user().await;
+
+        for reply in [
+            app.ask_rematch(&outsider, &game_id).await,
+            app.decline_rematch(&outsider, &game_id).await,
+        ] {
+            assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_needs_a_known_token_and_a_known_game(pool: PgPool) {
+        let app = app(pool);
+        let (game_id, [(_, ada), _]) = app.finished_quick_game().await;
+
+        for method in [Method::POST, Method::DELETE] {
+            for authorization in [None, Some("Bearer unknown")] {
+                let reply = app
+                    .send(
+                        method.clone(),
+                        &format!("/api/games/{game_id}/rematch"),
+                        authorization,
+                        None,
+                    )
+                    .await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            }
+        }
+        let unknown = app.ask_rematch(&ada, "nosuchgame22").await;
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
     }
 }

@@ -51,6 +51,7 @@ export function snapshotOf(overrides: Partial<Snapshot> = {}): Snapshot {
     players: ["user-a", "user-b"],
     playerNames: ["Ada", "Grace"],
     state: startingState(),
+    rematch: null,
     ...overrides,
   };
 }

@@ -2,24 +2,28 @@ import { createDb } from "millpond";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GAME_ID, board, moving, snapshotMessage, startingState } from "../../fixtures";
 import { FakeWebSocket, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
+import { LOCATION_ID, locationState, router } from "../router";
 import { SESSION_ID, session, sessionState } from "../session";
 import { AUTOPLAY_PAUSE_MS } from "./autoplay";
 import { QUEUED_STEP_PAUSE_MS } from "./effects";
-import { game, gameActions, gameViews, joinRequests } from "./index";
+import { game, gameActions, gameViews, joinRequests, rematchRequests } from "./index";
 
 // A fresh db per test, from the same features the app uses.
 const dbs: { dispose(): void }[] = [];
 function setup() {
   const server = fakeServer();
+  const fetchMock = vi.fn(server.fetchImpl);
+  const pushState = vi.fn();
   FakeWebSocket.reset();
-  vi.stubGlobal("fetch", vi.fn(server.fetchImpl));
+  vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("localStorage", fakeStorage());
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("location", { protocol: "http:", host: "games.test" });
-  const db = createDb({ features: { session, game } });
+  vi.stubGlobal("history", { pushState });
+  const db = createDb({ features: { session, game, router } });
   dbs.push(db);
   db.ops.session.startSession({ stored: null });
-  return { db, server };
+  return { db, server, fetchMock, pushState };
 }
 type TestDb = ReturnType<typeof setup>["db"];
 
@@ -1077,5 +1081,289 @@ describe("joining", () => {
     db.ops.game.closeGame({ gameId: GAME_ID });
 
     expect(db.read(joinRequests.get(GAME_ID))).toBeUndefined();
+  });
+});
+
+describe("a rematch", () => {
+  const ME = issued(1).userId;
+  const NEXT = gameIdOf(2);
+  const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+
+  /** The message for a finished game that the user played in, as the server sends it. */
+  const finished = (overrides: Record<string, unknown> = {}) => ({
+    revision: 4,
+    players: [ME, "user-b"],
+    playerNames: ["Ada", "Grace"],
+    state: over,
+    ...overrides,
+  });
+  const offered = { type: "offered", by: 0 };
+  const accepted = { type: "accepted", gameId: NEXT };
+
+  /** The requests made about rematches, as "METHOD path". */
+  const rematchCalls = (fetchMock: ReturnType<typeof setup>["fetchMock"]) =>
+    fetchMock.mock.calls
+      .map(([input, init]) => `${init?.method ?? "GET"} ${String(input)}`)
+      .filter((call) => call.endsWith("/rematch"));
+  const request = (db: TestDb) => db.read(rematchRequests.get(GAME_ID));
+  const finishedGame = (server: ReturnType<typeof setup>["server"], players = [ME, "user-b"]) =>
+    server.addGame({ id: GAME_ID, kind: "long-backgammon", players, finished: true });
+
+  describe("in a snapshot", () => {
+    it("is kept with the rest of the game", async () => {
+      const { db } = setup();
+
+      await connected(db, finished({ rematch: offered }));
+
+      expect(view(db)?.snapshot?.rematch).toEqual(offered);
+    });
+
+    it("is none for a server from before rematches, which leaves it out", async () => {
+      const { db } = setup();
+      db.ops.game.openGame({ gameId: GAME_ID });
+      await settle();
+      FakeWebSocket.last.open();
+      const { rematch: _, ...old } = snapshotMessage(finished());
+
+      FakeWebSocket.last.receive(old);
+      await settle();
+
+      expect(view(db)).toMatchObject({ problem: null, snapshot: { rematch: null } });
+    });
+  });
+
+  describe("asking", () => {
+    it("is a POST, and the request is gone once the server has taken it", async () => {
+      const { db, server, fetchMock } = setup();
+      finishedGame(server);
+      await connected(db, finished());
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      expect(request(db)).toMatchObject({ answer: "ask", state: "sending" });
+      await settle();
+
+      expect(rematchCalls(fetchMock)).toEqual([`POST /api/games/${GAME_ID}/rematch`]);
+      expect(request(db)).toBeUndefined();
+    });
+
+    it("is one request, however many times the button is pressed", async () => {
+      const { db, server, fetchMock } = setup();
+      finishedGame(server);
+      await connected(db, finished());
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      db.ops.game.declineRematch({ gameId: GAME_ID });
+      await settle();
+
+      expect(rematchCalls(fetchMock)).toEqual([`POST /api/games/${GAME_ID}/rematch`]);
+    });
+
+    it("changes nothing in the game until the server says so in a snapshot", async () => {
+      const { db, server } = setup();
+      finishedGame(server);
+      await connected(db, finished());
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+
+      expect(view(db)?.snapshot?.rematch).toBeNull();
+    });
+  });
+
+  describe("declining", () => {
+    it("is a DELETE, for taking back one's own ask or turning down the other's", async () => {
+      const { db, server, fetchMock } = setup();
+      finishedGame(server);
+      await connected(db, finished({ rematch: offered }));
+
+      db.ops.game.declineRematch({ gameId: GAME_ID });
+      expect(request(db)).toMatchObject({ answer: "decline", state: "sending" });
+      await settle();
+
+      expect(rematchCalls(fetchMock)).toEqual([`DELETE /api/games/${GAME_ID}/rematch`]);
+      expect(request(db)).toBeUndefined();
+    });
+  });
+
+  describe("when the server refuses", () => {
+    it("says the game is not over, and can be tried again", async () => {
+      const { db, server } = setup();
+      server.addGame({ id: GAME_ID, kind: "long-backgammon", players: [ME, "user-b"] });
+      await connected(db, finished());
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+      expect(request(db)).toMatchObject({ state: "failed", error: "The game is not over yet." });
+
+      const stored = server.games.get(GAME_ID);
+      if (stored) stored.finished = true;
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+      expect(request(db)).toBeUndefined();
+    });
+
+    it("says only the players can ask, to someone who is watching", async () => {
+      const { db, server } = setup();
+      finishedGame(server, ["user-a", "user-b"]);
+      await connected(db, finished({ players: ["user-a", "user-b"] }));
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+
+      expect(request(db)).toMatchObject({
+        state: "failed",
+        error: "Only the players of this game can do that.",
+      });
+    });
+
+    it("says the game is gone", async () => {
+      const { db } = setup();
+      await connected(db, finished());
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+
+      expect(request(db)).toMatchObject({
+        state: "failed",
+        error: "This game does not exist any more.",
+      });
+    });
+
+    it("does not show a network error in the browser's words", async () => {
+      const { db, server, fetchMock } = setup();
+      finishedGame(server);
+      await connected(db, finished());
+      fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+
+      expect(request(db)).toMatchObject({
+        state: "failed",
+        error: "Something went wrong on the server. Try again.",
+      });
+    });
+
+    it("forgets the failure when the game moves on, since it was about the game as it was", async () => {
+      const { db } = setup();
+      const socket = await connected(db, finished());
+      db.ops.game.askRematch({ gameId: GAME_ID });
+      await settle();
+      expect(request(db)).toMatchObject({ state: "failed" });
+
+      socket.receive(snapshotMessage(finished({ revision: 5, rematch: { type: "offered", by: 1 } })));
+      await settle();
+
+      expect(request(db)).toBeUndefined();
+    });
+
+    it("keeps a request that is still on its way when the game moves on", async () => {
+      const { db, server } = setup();
+      finishedGame(server);
+      const socket = await connected(db, finished());
+      db.ops.game.askRematch({ gameId: GAME_ID });
+
+      socket.receive(snapshotMessage(finished({ revision: 5, rematch: { type: "offered", by: 1 } })));
+
+      expect(request(db)).toMatchObject({ state: "sending" });
+    });
+  });
+
+  it("is dropped, request and all, with the page", async () => {
+    const { db } = setup();
+    db.ops.game.openGame({ gameId: GAME_ID });
+    db.ops.game.askRematch({ gameId: GAME_ID });
+
+    db.ops.game.closeGame({ gameId: GAME_ID });
+
+    expect(request(db)).toBeUndefined();
+  });
+
+  describe("starting", () => {
+    const path = (db: TestDb) => db.read(locationState.get(LOCATION_ID))?.path;
+
+    it("takes a player to the new game when the page sees it start", async () => {
+      const { db, pushState } = setup();
+      const socket = await connected(db, finished({ rematch: offered }));
+      expect(pushState).not.toHaveBeenCalled();
+
+      socket.receive(snapshotMessage(finished({ revision: 5, rematch: accepted })));
+      await settle();
+
+      expect(view(db)?.rematchStarted).toBe(NEXT);
+      expect(pushState).toHaveBeenCalledWith(null, "", `/games/${NEXT}`);
+      expect(path(db)).toBe(`/games/${NEXT}`);
+    });
+
+    it("does so at once against the computer, which accepts without an offer in between", async () => {
+      const { db, pushState } = setup();
+      const socket = await connected(db, finished());
+
+      // Against the computer there is no offer in between.
+      socket.receive(snapshotMessage(finished({ revision: 5, rematch: accepted })));
+      await settle();
+
+      expect(pushState).toHaveBeenCalledWith(null, "", `/games/${NEXT}`);
+    });
+
+    it("does so after a gap of several changes too, as when the connection was down", async () => {
+      const { db, pushState } = setup();
+      const socket = await connected(db, finished({ rematch: offered }));
+
+      socket.receive(snapshotMessage(finished({ revision: 9, rematch: accepted })));
+      await settle();
+
+      expect(pushState).toHaveBeenCalledWith(null, "", `/games/${NEXT}`);
+    });
+
+    it("goes once, however many times the server repeats itself", async () => {
+      const { db, pushState } = setup();
+      const socket = await connected(db, finished({ rematch: offered }));
+
+      for (const playerNames of [["Ada", "Grace"], ["Ada", "Grace Hopper"], ["Ada", "Grace"]]) {
+        socket.receive(snapshotMessage(finished({ revision: 5, rematch: accepted, playerNames })));
+        await settle();
+      }
+
+      expect(pushState).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves alone a page that opens on a rematch that has begun already", async () => {
+      const { db, pushState } = setup();
+
+      await connected(db, finished({ rematch: accepted }));
+
+      expect(view(db)?.rematchStarted).toBeNull();
+      expect(pushState).not.toHaveBeenCalled();
+    });
+
+    it("leaves a spectator where they are", async () => {
+      const { db, pushState } = setup();
+      const watching = { players: ["user-a", "user-b"] };
+      const socket = await connected(db, finished({ ...watching, rematch: offered }));
+
+      socket.receive(snapshotMessage(finished({ ...watching, revision: 5, rematch: accepted })));
+      await settle();
+
+      expect(view(db)?.rematchStarted).toBeNull();
+      expect(pushState).not.toHaveBeenCalled();
+    });
+
+    it("does not follow an offer, a refusal or a withdrawn ask", async () => {
+      const { db, pushState } = setup();
+      const socket = await connected(db, finished());
+
+      for (const [revision, rematch] of [
+        [5, offered],
+        [6, { type: "declined", by: 0 }],
+        [7, null],
+      ] as const) {
+        socket.receive(snapshotMessage(finished({ revision, rematch })));
+        await settle();
+      }
+
+      expect(pushState).not.toHaveBeenCalled();
+    });
   });
 });

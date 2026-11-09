@@ -2,7 +2,7 @@ import { type Tx, op } from "millpond";
 import { SESSION_ID, sessionState } from "../session";
 import type { Action, Snapshot, Step } from "./schemas";
 import { landing, seatOf } from "./selectors";
-import { gameActions, gameViews, joinRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
 
 /** Marks a game page as open. The `connectGame` effect then connects. Does nothing if it is already open. */
 export const openGame = op((tx, args: { gameId: string }) => {
@@ -17,6 +17,7 @@ export const openGame = op((tx, args: { gameId: string }) => {
     selected: null,
     queued: [],
     auto: false,
+    rematchStarted: null,
   });
 });
 
@@ -26,6 +27,7 @@ export const closeGame = op((tx, args: { gameId: string }) => {
     tx.delete(gameActions, action.id);
   }
   if (tx.read(joinRequests.get(args.gameId))) tx.delete(joinRequests, args.gameId);
+  if (tx.read(rematchRequests.get(args.gameId))) tx.delete(rematchRequests, args.gameId);
   if (tx.read(gameViews.get(args.gameId))) tx.delete(gameViews, args.gameId);
 });
 
@@ -55,6 +57,11 @@ export const connectionChanged = op(
  * can be played in this position, and are dropped if it can't: the position is not the one
  * the move was planned in.
  *
+ * A player who sees the rematch start moves on to it (`rematchStarted`). That is only for a
+ * player, and only for the snapshot in which it starts, after others the page held: a rematch
+ * that was already going when the page opened is there to follow, not to be taken to. A
+ * snapshot also ends a failure to answer about the rematch, which was about the one before.
+ *
  * One of the same revision is the same position with new labels, because a player changed
  * their name, or the same snapshot again after a reconnect. It replaces the old one and
  * leaves what the player is in the middle of alone.
@@ -70,6 +77,14 @@ export const snapshotReceived = op((tx, args: { gameId: string; snapshot: Snapsh
   }
   const userId = tx.read(sessionState.get(SESSION_ID))?.userId ?? null;
   const [next] = view.queued;
+  const rematch = args.snapshot.rematch;
+  const started =
+    held && held.rematch?.type !== "accepted" && rematch?.type === "accepted" && seatOf(args.snapshot, userId) !== null
+      ? rematch.gameId
+      : null;
+  if (tx.read(rematchRequests.get(args.gameId))?.state === "failed") {
+    tx.delete(rematchRequests, args.gameId);
+  }
   tx.update(gameViews, args.gameId, {
     connection: "open",
     snapshot: args.snapshot,
@@ -78,6 +93,7 @@ export const snapshotReceived = op((tx, args: { gameId: string; snapshot: Snapsh
     busy: false,
     selected: startable(args.snapshot, userId, view.selected),
     queued: next && playable(args.snapshot, userId, next) ? view.queued : [],
+    rematchStarted: started ?? view.rematchStarted,
   });
 });
 
@@ -245,4 +261,34 @@ export const joined = op((tx, args: { gameId: string }) => {
 export const joinFailed = op((tx, args: { gameId: string; error: string }) => {
   if (!tx.read(joinRequests.get(args.gameId))) return;
   tx.update(joinRequests, args.gameId, { state: "failed", error: args.error });
+});
+
+/**
+ * Asks the `rematchRequest` effect to ask for a rematch of the finished game: or, if the
+ * other player has asked already, to say yes. Ignored while a request for this game is on its
+ * way, so that pressing twice asks once. The server decides whether it is allowed.
+ */
+export const askRematch = op((tx, args: { gameId: string }) => {
+  if (tx.read(rematchRequests.get(args.gameId))?.state === "sending") return;
+  tx.upsert(rematchRequests, { gameId: args.gameId, answer: "ask", state: "sending", error: null });
+});
+
+/**
+ * Asks the `rematchRequest` effect to take back the player's own ask for a rematch, or to say
+ * no to the other player's. Ignored while a request for this game is on its way.
+ */
+export const declineRematch = op((tx, args: { gameId: string }) => {
+  if (tx.read(rematchRequests.get(args.gameId))?.state === "sending") return;
+  tx.upsert(rematchRequests, { gameId: args.gameId, answer: "decline", state: "sending", error: null });
+});
+
+/** Records an answer the server took. What it did arrives in the next snapshot. */
+export const rematchSent = op((tx, args: { gameId: string }) => {
+  if (tx.read(rematchRequests.get(args.gameId))) tx.delete(rematchRequests, args.gameId);
+});
+
+/** Records an answer that did not work, with the reason for the player. */
+export const rematchFailed = op((tx, args: { gameId: string; error: string }) => {
+  if (!tx.read(rematchRequests.get(args.gameId))) return;
+  tx.update(rematchRequests, args.gameId, { state: "failed", error: args.error });
 });

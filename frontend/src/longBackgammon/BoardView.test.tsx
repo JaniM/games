@@ -281,6 +281,21 @@ describe("the tray as a bear-off button", () => {
   });
 });
 
+describe("the numbers", () => {
+  it("are not drawn on the points or the trays", () => {
+    const html = draw(stepped, null);
+
+    expect(html).not.toContain("point-number");
+    expect(html).not.toContain("off ·");
+    // The only text left on the board is the count on a stack too tall to count by eye.
+    expect(count(html, "<text")).toBe(count(html, '<text class="checker-count'));
+  });
+
+  it("still name each point, to a screen reader, on the points that can be played", () => {
+    expect(drawPicked(stepped, 7)).toContain('aria-label="Move a checker from point');
+  });
+});
+
 describe("the dice", () => {
   it("lie still on a board that opened mid-game", () => {
     const html = draw(stepped, null, 0);

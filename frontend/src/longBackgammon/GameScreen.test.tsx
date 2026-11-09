@@ -2,6 +2,7 @@ import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Snapshot } from "../features/game";
 import { GAME_ID, board, moving, snapshotOf, startingState } from "../fixtures";
 import { router } from "../features/router";
 import { GameScreen, type GameScreenProps, type GameViewRow } from "./GameScreen";
@@ -30,6 +31,7 @@ function viewOf(overrides: Partial<GameViewRow> = {}): GameViewRow {
     selected: null,
     queued: [],
     auto: false,
+    rematchStarted: null,
     ...overrides,
   };
 }
@@ -44,8 +46,11 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         view={view}
         userId={userId}
         join={undefined}
+        rematchRequest={undefined}
         inviteUrl={URL}
         onJoin={noop}
+        onRematch={noop}
+        onDeclineRematch={noop}
         onRoll={noop}
         onUndo={noop}
         onAutoplay={noop}
@@ -401,6 +406,14 @@ describe("a game with both players", () => {
     expect(html).toContain('class="result result-won"');
     expect(html).toContain(">You won<");
     expect(html).toContain(">Mars: 2 points<");
+    // Another game is what a player is offered; the way out is there, but quieter.
+    expect(html).toMatch(/<a[^>]*class="button button-quiet"[^>]*href="\/"[^>]*>All games</);
+  });
+
+  it("makes the way back the main button for someone who is only watching", () => {
+    const state = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+    const html = render(STRANGER, viewOf({ snapshot: snapshotOf({ state }) }));
+
     expect(html).toMatch(/<a[^>]*class="button"[^>]*href="\/"[^>]*>All games</);
   });
 
@@ -468,15 +481,21 @@ describe("a game that cannot be shown", () => {
 });
 
 describe("the view from each side", () => {
-  /** The points that have checkers on them, by the number printed on them, with how many are drawn. */
-  const occupied = (html: string) => {
-    const found: Record<string, number> = {};
+  /** The points, by their number (nothing is printed on the board, but each point carries it), with their markup. */
+  const pointsOf = (html: string) =>
     // A point's own group is class "point" or "point point-source" and so on; its parts are
     // "point-bg" and "point-pieces", which are not points.
-    for (const chunk of html.split(/<g class="point(?=[" ])/).slice(1)) {
-      const label = /class="point-number"[^>]*>(\d+)</.exec(chunk)?.[1];
+    html
+      .split(/<g class="point(?=[" ])/)
+      .slice(1)
+      .map((chunk) => ({ number: /data-point="(\d+)"/.exec(chunk)?.[1], chunk }));
+
+  /** The points that have checkers on them, by number, with how many are drawn. */
+  const occupied = (html: string) => {
+    const found: Record<string, number> = {};
+    for (const { number, chunk } of pointsOf(html)) {
       const drawn = chunk.split('<circle class="checker ').length - 1;
-      if (label && drawn > 0) found[label] = drawn;
+      if (number && drawn > 0) found[number] = drawn;
     }
     return found;
   };
@@ -498,8 +517,10 @@ describe("the view from each side", () => {
   });
 
   it("still draws each player's own head in the top right", () => {
-    // The labels agree but the board is turned: your head is where you expect it.
-    const topRight = (html: string) => /<g class="point[^"]*"[^>]*>(?:(?!<g class="point)[\s\S])*?x="592" y="18"[^>]*>(\d+)</.exec(html)?.[1];
+    // The numbers agree but the board is turned: your head is where you expect it. The point in
+    // the top right corner is the one whose triangle has its base from x = 568 along the top.
+    const topRight = (html: string) =>
+      pointsOf(html).find(({ chunk }) => chunk.includes('d="M568,28 '))?.number;
 
     expect(topRight(render(GRACE, view))).toBe("24"); // White
     expect(topRight(render(ADA, view))).toBe("12"); // Black
@@ -550,5 +571,105 @@ describe("the strip along the top", () => {
 
   it("calls the slider's left end Off", () => {
     expect(render(ADA, view, { volume: 0 })).toContain('aria-valuetext="Off"');
+  });
+});
+
+describe("the rematch of a finished game", () => {
+  const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
+  const finished = (rematch: Snapshot["rematch"] = null, overrides: Partial<GameViewRow> = {}) =>
+    viewOf({ snapshot: snapshotOf({ state: over, rematch }), ...overrides });
+  const buttons = (html: string) =>
+    [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+  /** The result block, which is where all of it is. */
+  const resultOnly = (html: string) => html.slice(html.indexOf('aria-label="Result"'));
+
+  it("offers a player the rematch beside the way back", () => {
+    const html = resultOnly(render(ADA, finished()));
+
+    expect(buttons(html)).toEqual(["Rematch"]);
+    expect(html).toMatch(/<button[^>]*class="button"[^>]*>Rematch</);
+    expect(html).not.toMatch(/<button[^>]*disabled/);
+  });
+
+  it("offers a spectator nothing to press but the way back", () => {
+    const html = resultOnly(render(STRANGER, finished()));
+
+    expect(buttons(html)).toEqual([]);
+    expect(html).toContain("All games");
+  });
+
+  it("offers nothing before the game is over", () => {
+    const html = render(ADA, viewOf());
+
+    expect(html).not.toContain("Rematch");
+    expect(html).not.toContain("result-rematch");
+  });
+
+  it("tells the one who asked to wait, and lets them take it back", () => {
+    const html = resultOnly(render(ADA, finished({ type: "offered", by: 0 })));
+
+    expect(html).toContain("Waiting for Grace to accept the rematch…");
+    expect(buttons(html)).toEqual(["Cancel"]);
+    expect(html).not.toContain("result-rematch-due");
+  });
+
+  it("asks the other player for an answer, in the accent because it is theirs to give", () => {
+    const html = resultOnly(render(GRACE, finished({ type: "offered", by: 0 })));
+
+    expect(html).toMatch(/class="result-rematch result-rematch-due"[^>]*>Ada wants a rematch\./);
+    expect(buttons(html)).toEqual(["Accept", "Decline"]);
+    expect(html).toMatch(/<button[^>]*class="button"[^>]*>Accept</);
+    expect(html).toMatch(/<button[^>]*class="button button-quiet"[^>]*>Decline</);
+  });
+
+  it("tells the one who was turned down, and lets them ask again", () => {
+    const html = resultOnly(render(ADA, finished({ type: "declined", by: 0 })));
+
+    expect(html).toContain("Grace declined the rematch.");
+    expect(buttons(html)).toEqual(["Rematch"]);
+  });
+
+  it("says nothing to the one who turned the offer down, who can still ask", () => {
+    const html = resultOnly(render(GRACE, finished({ type: "declined", by: 0 })));
+
+    expect(html).not.toContain("declined");
+    expect(buttons(html)).toEqual(["Rematch"]);
+  });
+
+  it("links everyone, spectators too, to the new game once it exists", () => {
+    for (const userId of [ADA, GRACE, STRANGER]) {
+      const html = resultOnly(render(userId, finished({ type: "accepted", gameId: "nextgame234" })));
+
+      expect(html).toContain("The rematch has started.");
+      expect(html).toMatch(/<a[^>]*class="button"[^>]*href="\/games\/nextgame234"[^>]*>Go to the rematch</);
+      expect(buttons(html)).toEqual([]);
+    }
+  });
+
+  it("holds the buttons back while an answer is on its way, so that pressing twice answers once", () => {
+    const sending = { gameId: GAME_ID, answer: "ask", state: "sending", error: null } as const;
+
+    const asking = resultOnly(render(ADA, finished(), { rematchRequest: sending }));
+    const answering = resultOnly(render(GRACE, finished({ type: "offered", by: 0 }), { rematchRequest: sending }));
+
+    expect(asking).toMatch(/<button[^>]*disabled[^>]*>Rematch</);
+    expect(answering).toMatch(/<button[^>]*disabled[^>]*>Accept</);
+    expect(answering).toMatch(/<button[^>]*disabled[^>]*>Decline</);
+  });
+
+  it("holds the buttons back while the connection is down, as the join button is", () => {
+    const html = resultOnly(render(ADA, finished(null, { connection: "reconnecting" })));
+
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Rematch</);
+  });
+
+  it("says why an answer failed, as an alert", () => {
+    const failed = { gameId: GAME_ID, answer: "ask", state: "failed", error: "The game is not over yet." } as const;
+
+    const html = resultOnly(render(ADA, finished(), { rematchRequest: failed }));
+
+    expect(html).toMatch(/role="alert">The game is not over yet\./);
+    // And it can be tried again.
+    expect(html).not.toMatch(/<button[^>]*disabled/);
   });
 });

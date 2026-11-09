@@ -20,6 +20,7 @@ mod game_id;
 mod lobby;
 mod long_backgammon;
 mod profile;
+mod rematch;
 mod room;
 mod socket;
 #[cfg(test)]
@@ -97,6 +98,10 @@ fn app(state: AppState) -> Router {
             get(lobby::list_games).post(lobby::create_game),
         )
         .route("/api/games/{id}/join", post(lobby::join_game))
+        .route(
+            "/api/games/{id}/rematch",
+            post(lobby::ask_rematch).delete(lobby::decline_rematch),
+        )
         .route("/api/games/{id}/ws", get(socket::connect))
         .with_state(state)
 }

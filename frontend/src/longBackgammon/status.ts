@@ -75,6 +75,42 @@ export function resultOf(snapshot: Snapshot, mySeat: Seat | null): Result | null
   return { title, detail, won: phase.winner === mySeat };
 }
 
+/**
+ * What the viewer can do about the rematch of a finished game, and what to tell them:
+ *
+ * - `closed`: nothing. They only watch, and there is no rematch yet.
+ * - `ask`: they can ask for one. `line` says so if their last ask was turned down.
+ * - `waiting`: they have asked, and the other player has not answered. They can take it back.
+ * - `answer`: the other player has asked. They can say yes or no.
+ * - `started`: the new game exists. Anyone can go there.
+ */
+export type RematchStage =
+  | { stage: "closed"; line: "" }
+  | { stage: "ask"; line: string }
+  | { stage: "waiting"; line: string }
+  | { stage: "answer"; line: string }
+  | { stage: "started"; line: string; gameId: string };
+
+/** Where the rematch stands for the viewer. Only meaningful once the game is over. */
+export function rematchStage(snapshot: Snapshot, mySeat: Seat | null): RematchStage {
+  const rematch = snapshot.rematch;
+  if (rematch?.type === "accepted") {
+    return { stage: "started", line: "The rematch has started.", gameId: rematch.gameId };
+  }
+  if (mySeat === null || snapshot.players.length < 2) return { stage: "closed", line: "" };
+
+  const other = (1 - mySeat) as Seat;
+  const name = nameOf(snapshot, other, mySeat);
+  if (rematch?.type === "offered") {
+    return rematch.by === mySeat
+      ? { stage: "waiting", line: `Waiting for ${name} to accept the rematch…` }
+      : { stage: "answer", line: `${name} wants a rematch.` };
+  }
+  // A `declined` is news only to the one who was turned down. The one who said no knows.
+  const turnedDown = rematch?.type === "declined" && rematch.by === mySeat;
+  return { stage: "ask", line: turnedDown ? `${name} declined the rematch.` : "" };
+}
+
 /** What the previous turn came to, or "" if no turn has been played. */
 export function lastTurnText(snapshot: Snapshot, mySeat: Seat | null): string {
   const last = snapshot.state?.lastTurn;

@@ -890,6 +890,24 @@ form.name-control .button {
   color: var(--muted);
 }
 
+/* Where the rematch stands. Empty, and so no height, when there is nothing to say. */
+.result-rematch {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* The other player has asked, or something went wrong: the accent is for what is the viewer's to do. */
+.result-rematch-due {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 /*
  * The two players: the viewer over the board, the opponent under it. The one to move is
  * tinted, with a line in the accent on the edge that faces the board, as if the bar were
@@ -1035,6 +1053,13 @@ form.name-control .button {
   fill: var(--board-bar);
 }
 
+.board-inlay {
+  fill: none;
+  stroke: var(--board-text);
+  stroke-opacity: 0.18;
+  pointer-events: none;
+}
+
 .tri-a {
   fill: var(--tri-a);
 }
@@ -1045,13 +1070,6 @@ form.name-control .button {
 
 .hit {
   fill: transparent;
-}
-
-.point-number {
-  fill: var(--board-text);
-  font-size: 14px;
-  opacity: 0.85;
-  pointer-events: none;
 }
 
 .checker-white {

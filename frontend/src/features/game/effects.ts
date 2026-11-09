@@ -1,5 +1,6 @@
 import { effect } from "millpond";
 import type { TaskContext } from "millpond";
+import { gamePath, pathChanged, pushPath } from "../router";
 import { SESSION_ID, apiFetch, sessionState, tokenRejected } from "../session";
 
 import {
@@ -18,6 +19,8 @@ import {
   gameProblem,
   joinFailed,
   joined,
+  rematchFailed,
+  rematchSent,
   sendQueued,
   snapshotReceived,
   submitAction,
@@ -31,7 +34,7 @@ import {
   stateSchema,
 } from "./schemas";
 import { registerSocket, socketOf, unregisterSocket } from "./sockets";
-import { gameActions, gameViews, joinRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
 
 const NEWER_VERSION = "This game needs a newer version of the site. Reload the page to get it.";
 const OTHER_GAME = "This link is for a different kind of game than this page can show.";
@@ -162,7 +165,7 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
     ctx.run(gameProblem, { gameId, problem: OTHER_GAME });
     return false;
   }
-  const { revision, stateVersion, players, playerNames, state } = incoming.data;
+  const { revision, stateVersion, players, playerNames, state, rematch } = incoming.data;
   const parsed = state === null ? { success: true as const, data: null } : stateSchema.safeParse(state);
   if (stateVersion !== STATE_VERSION || !parsed.success) {
     ctx.run(gameProblem, { gameId, problem: NEWER_VERSION });
@@ -170,7 +173,7 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
   }
   ctx.run(snapshotReceived, {
     gameId,
-    snapshot: { revision, players, playerNames, state: parsed.data },
+    snapshot: { revision, players, playerNames, state: parsed.data, rematch: rematch ?? null },
   });
   return true;
 }
@@ -316,5 +319,82 @@ export const joinGameRequest = effect({
           { label: `POST /api/games/${request.gameId}/join` },
         ),
       ),
+    ),
+});
+
+/**
+ * Sends the player's answer about the rematch while a request is `sending`: a POST to ask (or
+ * say yes), a DELETE to take back an ask (or say no). It nests in the ready session, so a request
+ * that meets a 401 stays `sending` and is sent again with the new token. What the answer did
+ * comes back to both players as a snapshot, so a request that went through only has to go away.
+ */
+export const rematchRequest = effect({
+  inputs: [sessionState, rematchRequests],
+  watch: (q, task) =>
+    q.each(sessionState.byState.stateEq("ready"), () =>
+      q.each(rematchRequests.byState.stateEq("sending"), (request) => {
+        const method = request.answer === "ask" ? "POST" : "DELETE";
+        return task(
+          async (ctx) => {
+            const { gameId } = request;
+            try {
+              const res = await apiFetch(ctx, `/api/games/${gameId}/rematch`, {
+                method,
+                signal: ctx.signal,
+              });
+              if (res.status === 401) return;
+              if (res.ok) ctx.run(rematchSent, { gameId });
+              else ctx.run(rematchFailed, { gameId, error: rematchErrorText(res.status) });
+            } catch {
+              // A network failure has no words of its own that a player could use.
+              if (!ctx.signal.aborted) ctx.run(rematchFailed, { gameId, error: GENERIC_ERROR });
+            }
+          },
+          { label: `${method} /api/games/${request.gameId}/rematch` },
+        );
+      }),
+    ),
+});
+
+/** What the server's refusal of a rematch request means to a player. */
+function rematchErrorText(status: number): string {
+  switch (status) {
+    case 403:
+      return "Only the players of this game can do that.";
+    case 404:
+      return "This game does not exist any more.";
+    case 409:
+      return "The game is not over yet.";
+    default:
+      return GENERIC_ERROR;
+  }
+}
+
+/**
+ * Takes the browser to the rematch when a game page sees it start (`rematchStarted`): both
+ * players, the one who asked and the one who said yes, end up in the new game without a click.
+ * The page that was showing the old game goes away with the move, and with it the view.
+ *
+ * It runs once for each new rematch: `rerunOn` keeps the snapshots that follow from starting
+ * it again.
+ */
+export const followRematch = effect({
+  inputs: [gameViews],
+  watch: (q, task) =>
+    q.each(
+      gameViews.all(),
+      (view) => {
+        const { rematchStarted } = view;
+        if (rematchStarted === null) return;
+        task(
+          async (ctx) => {
+            const path = gamePath(rematchStarted);
+            pushPath(path);
+            ctx.run(pathChanged, { path });
+          },
+          { label: `go to the rematch ${rematchStarted}` },
+        );
+      },
+      { rerunOn: ["rematchStarted"] },
     ),
 });

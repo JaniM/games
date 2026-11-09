@@ -36,8 +36,9 @@ export interface FakeGame {
  * A stand-in for the backend, with the same contract: `POST /api/register` issues
  * credentials, `GET /api/me` and `PATCH /api/me` act on the user a bearer token
  * belongs to, `POST /api/games`, `GET /api/games` and `POST /api/games/{id}/join`
- * keep a list of games (two seats each), and any other path answers 200 to a known
- * token. Unknown tokens get 401.
+ * keep a list of games (two seats each), `POST` and `DELETE /api/games/{id}/rematch` answer
+ * as the real ones do to a game that is unknown (404), not the user's (403) or not over (409),
+ * and any other path answers 200 to a known token. Unknown tokens get 401.
  *
  * `users` maps access tokens to users. Clearing it makes the server forget everyone.
  * `games` maps game ids to games.
@@ -66,6 +67,7 @@ export function fakeServer() {
     const user = token ? users.get(token) : undefined;
     if (!user) return new Response(null, { status: 401 });
     const join = /^\/api\/games\/([^/]+)\/join$/.exec(path);
+    const rematch = /^\/api\/games\/([^/]+)\/rematch$/.exec(path);
     if (path === "/api/games" && init?.method === "POST") {
       const { kind, bot = false } = JSON.parse(String(init.body)) as { kind: string; bot?: boolean };
       if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
@@ -106,6 +108,13 @@ export function fakeServer() {
         game.updatedAt = tick();
       }
       return json({ gameId: game.id, seat: game.players.indexOf(user.userId) });
+    }
+    if (rematch) {
+      const game = games.get(rematch[1] ?? "");
+      if (!game) return new Response(null, { status: 404 });
+      if (!game.players.includes(user.userId)) return new Response("not a player", { status: 403 });
+      if (!game.finished) return new Response("the game is not over yet", { status: 409 });
+      return json({ rematch: null });
     }
     if (path !== "/api/me") return json({});
 

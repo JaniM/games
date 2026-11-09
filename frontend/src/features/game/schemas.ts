@@ -70,6 +70,20 @@ export const stateSchema = z.object({
 export type LongBackgammonState = z.infer<typeof stateSchema>;
 export type Seat = 0 | 1;
 
+/**
+ * Where the rematch of a finished game stands. It is not part of the rules, so it is beside
+ * the state in a snapshot. A rematch is a new game with the same two players.
+ */
+export const rematchSchema = z.discriminatedUnion("type", [
+  /** The player in seat `by` has asked to play again, and the other has not answered. */
+  z.object({ type: z.literal("offered"), by: seatSchema }),
+  /** The other player turned down the offer of the player in seat `by`. */
+  z.object({ type: z.literal("declined"), by: seatSchema }),
+  /** Both want it, and the new game exists. */
+  z.object({ type: z.literal("accepted"), gameId: z.string() }),
+]);
+export type Rematch = z.infer<typeof rematchSchema>;
+
 /** The only kind of game this client plays. A snapshot of any other kind is not for this page. */
 export const KIND = "long-backgammon";
 
@@ -86,6 +100,8 @@ export const incomingSnapshotSchema = z.object({
   players: z.array(z.string()),
   playerNames: z.array(z.string().nullable()),
   state: z.unknown(),
+  /** Left out by a server from before rematches, which means none. */
+  rematch: rematchSchema.nullish(),
 });
 
 /** What the client keeps of a snapshot. `state` is null until both seats are taken. */
@@ -96,6 +112,8 @@ export const snapshotSchema = z.object({
   /** Display names by seat; null for a player who has not picked one. */
   playerNames: z.array(z.string().nullable()),
   state: stateSchema.nullable(),
+  /** Null until a player of the finished game asks to play it again. */
+  rematch: rematchSchema.nullable(),
 });
 export type Snapshot = z.infer<typeof snapshotSchema>;
 

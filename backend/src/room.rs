@@ -22,7 +22,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use tokio::{
     sync::{mpsc, oneshot, watch},
     time::Instant,
@@ -33,6 +33,7 @@ use crate::{
     bot::BOT_USER,
     game::{Engine, Games, Live},
     game_id::GameId,
+    rematch::{self, Outcome, Rematch},
 };
 
 /// How long a room with nobody connected stays in memory.
@@ -58,7 +59,8 @@ pub struct Snapshot {
     pub game_id: GameId,
     pub kind: &'static str,
     /// Counts the changes since the game was created. Rises by one for each
-    /// player who joins and each action played, so clients can tell which of two snapshots is newer.
+    /// player who joins, each action played and each step of the rematch (see `rematch`), so
+    /// clients can tell which of two snapshots is newer.
     /// (A player renaming themselves is not a change to the game; see `player_names`.)
     pub revision: i64,
     /// The layout version of `state`. The server only sends the current one.
@@ -72,6 +74,8 @@ pub struct Snapshot {
     pub player_names: Vec<Option<String>>,
     /// Null until every seat is taken.
     pub state: Option<Value>,
+    /// Null until a player of the finished game asks to play again.
+    pub rematch: Option<Rematch>,
 }
 
 /// Why a request to a room failed.
@@ -86,6 +90,10 @@ pub enum RoomError {
     NoBot,
     /// An action came before the last seat was taken.
     NotStarted,
+    /// A rematch was asked about a game that hasn't ended.
+    NotOver,
+    /// A rematch was asked about a game that isn't for two players, so has no other side.
+    NoRematch,
     /// The game's rules refused the action. The reason is for the player.
     Rejected(String),
     /// Our fault. The details are in the log.
@@ -177,8 +185,15 @@ impl Rooms {
         state: Option<Value>,
         finished: bool,
     ) -> Result<GameId, RoomError> {
+        let game = NewGame {
+            kind: engine.kind(),
+            state_version: engine.state_version() as i32,
+            players: players.to_vec(),
+            state,
+            finished,
+        };
         let id = self
-            .insert(engine.as_ref(), players, state, finished)
+            .insert(&game)
             .await
             .map_err(|err| internal(err, "could not create a game"))?;
         // Loading it now is what makes it a room, ready for the socket that follows.
@@ -186,49 +201,11 @@ impl Rooms {
         Ok(id)
     }
 
-    /// Stores a new game with its players, who take seats in the order given.
-    async fn insert(
-        &self,
-        engine: &dyn Engine,
-        players: &[Uuid],
-        state: Option<Value>,
-        finished: bool,
-    ) -> Result<GameId, String> {
+    /// Stores a new game with its players.
+    async fn insert(&self, game: &NewGame) -> Result<GameId, String> {
         let db = |err: sqlx::Error| err.to_string();
         let mut tx = self.shared.pool.begin().await.map_err(db)?;
-        // A random id is taken by another game once in a very long while. Then try another.
-        let mut id = None;
-        for _ in 0..ID_ATTEMPTS {
-            let candidate = GameId::random().map_err(|err| err.to_string())?;
-            let inserted: Option<GameId> = sqlx::query_scalar(
-                "INSERT INTO games (id, kind, state_version, state, finished)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (id) DO NOTHING
-                 RETURNING id",
-            )
-            .bind(&candidate)
-            .bind(engine.kind())
-            .bind(engine.state_version() as i32)
-            .bind(&state)
-            .bind(finished)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db)?;
-            if inserted.is_some() {
-                id = Some(candidate);
-                break;
-            }
-        }
-        let id = id.ok_or("every id tried was taken")?;
-        for (seat, player) in players.iter().enumerate() {
-            sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, $2, $3)")
-                .bind(&id)
-                .bind(seat as i16)
-                .bind(player)
-                .execute(&mut *tx)
-                .await
-                .map_err(db)?;
-        }
+        let id = insert_game(&mut tx, game).await?;
         tx.commit().await.map_err(db)?;
         Ok(id)
     }
@@ -251,6 +228,37 @@ impl Rooms {
             .request(game_id, |reply| Command::Join { user, reply })
             .await?;
         Ok(seat)
+    }
+
+    /// `user`, a player of the finished game, asks to play it again, or says yes to the other
+    /// player's ask (see [`rematch`](crate::rematch)). Returns where the rematch stands. When
+    /// it is [`Rematch::Accepted`] the new game exists, with the same players, and is loaded.
+    pub async fn ask_rematch(
+        &self,
+        game_id: &GameId,
+        user: Uuid,
+    ) -> Result<Option<Rematch>, RoomError> {
+        let (rematch, _) = self
+            .request(game_id, |reply| Command::AskRematch { user, reply })
+            .await?;
+        if let Some(Rematch::Accepted { game_id: next }) = &rematch {
+            // As for a new game: loading it now makes it a room, ready for the sockets that follow.
+            self.shared.room(next);
+        }
+        Ok(rematch)
+    }
+
+    /// `user` takes back their own ask for a rematch, or turns down the other player's.
+    /// Returns where the rematch stands.
+    pub async fn decline_rematch(
+        &self,
+        game_id: &GameId,
+        user: Uuid,
+    ) -> Result<Option<Rematch>, RoomError> {
+        let (rematch, _) = self
+            .request(game_id, |reply| Command::DeclineRematch { user, reply })
+            .await?;
+        Ok(rematch)
     }
 
     /// Connects `user` to the game's room. The room stays in memory until the connection
@@ -369,6 +377,16 @@ enum Command {
         action: Value,
         reply: oneshot::Sender<Result<(), RoomError>>,
     },
+    /// A player asks for a rematch, or answers yes. The reply is where the rematch stands.
+    AskRematch {
+        user: Uuid,
+        reply: oneshot::Sender<Result<Option<Rematch>, RoomError>>,
+    },
+    /// A player takes back their ask for a rematch, or answers no.
+    DeclineRematch {
+        user: Uuid,
+        reply: oneshot::Sender<Result<Option<Rematch>, RoomError>>,
+    },
     /// A user changed their display name. Nobody waits for an answer.
     NameChanged { user: Uuid },
 }
@@ -380,6 +398,8 @@ impl Command {
             Self::Connect { reply, .. } => _ = reply.send(Err(err)),
             Self::Join { reply, .. } => _ = reply.send(Err(err)),
             Self::Act { reply, .. } => _ = reply.send(Err(err)),
+            Self::AskRematch { reply, .. } => _ = reply.send(Err(err)),
+            Self::DeclineRematch { reply, .. } => _ = reply.send(Err(err)),
             Self::NameChanged { .. } => {}
         }
     }
@@ -434,20 +454,31 @@ struct Room {
     /// read back from JSON while the room is up. Null until every seat is taken.
     live: Option<Box<dyn Live>>,
     revision: i64,
+    /// Whether the players have agreed to play again. Only a finished game has one.
+    rematch: Option<Rematch>,
     snapshots: watch::Sender<Arc<Snapshot>>,
     /// Set when a save failed: memory can't be trusted any more, so the room must stop.
     stale: bool,
 }
 
+/// One row of the query that loads a game, in the order of its columns: kind, state version,
+/// state, revision and rematch.
+type StoredGame = (String, i32, Option<Value>, i64, Option<Value>);
+
 impl Room {
     async fn load(shared: &Shared, id: &GameId) -> Result<Self, RoomError> {
-        let row: Option<(String, i32, Option<Value>, i64)> =
-            sqlx::query_as("SELECT kind, state_version, state, revision FROM games WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&shared.pool)
-                .await
-                .map_err(|err| internal(err, "could not load a game"))?;
-        let (kind, state_version, state, revision) = row.ok_or(RoomError::NotFound)?;
+        let row: Option<StoredGame> = sqlx::query_as(
+            "SELECT kind, state_version, state, revision, rematch FROM games WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&shared.pool)
+        .await
+        .map_err(|err| internal(err, "could not load a game"))?;
+        let (kind, state_version, state, revision, rematch) = row.ok_or(RoomError::NotFound)?;
+        let rematch: Option<Rematch> = rematch
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| internal(err, "could not read a stored rematch"))?;
         let players: Vec<Uuid> =
             sqlx::query_scalar("SELECT user_id FROM game_players WHERE game_id = $1 ORDER BY seat")
                 .bind(id)
@@ -480,6 +511,7 @@ impl Room {
             players: players.clone(),
             player_names: names.clone(),
             state,
+            rematch: rematch.clone(),
         };
         Ok(Self {
             pool: shared.pool.clone(),
@@ -489,6 +521,7 @@ impl Room {
             names,
             live,
             revision,
+            rematch,
             // Nobody is connected yet. The receiver the channel starts with is dropped at once.
             snapshots: watch::channel(Arc::new(snapshot)).0,
             stale: false,
@@ -572,6 +605,10 @@ impl Room {
                 action,
                 reply,
             } => _ = reply.send(self.act(user, action).await),
+            Command::AskRematch { user, reply } => _ = reply.send(self.ask_rematch(user).await),
+            Command::DeclineRematch { user, reply } => {
+                _ = reply.send(self.decline_rematch(user).await)
+            }
             Command::NameChanged { user } => self.name_changed(user).await,
         }
     }
@@ -624,6 +661,76 @@ impl Room {
         self.refresh_names().await;
         self.publish(state);
         Ok(())
+    }
+
+    /// The seat of `user` if they may take part in a rematch of this game: they are a player,
+    /// the game is for two players, and it is over.
+    fn rematch_seat(&self, user: Uuid) -> Result<usize, RoomError> {
+        let seat = self.seat_of(user).ok_or(RoomError::NotAPlayer)?;
+        if self.engine.players() != 2 {
+            return Err(RoomError::NoRematch);
+        }
+        match &self.live {
+            Some(live) if live.is_over() => Ok(seat),
+            _ => Err(RoomError::NotOver),
+        }
+    }
+
+    async fn ask_rematch(&mut self, user: Uuid) -> Result<Option<Rematch>, RoomError> {
+        let seat = self.rematch_seat(user)?;
+        let opponent_is_bot = self.players.get(1 - seat) == Some(&BOT_USER);
+        let outcome = rematch::ask(self.rematch.as_ref(), seat, opponent_is_bot);
+        self.change_rematch(outcome).await?;
+        Ok(self.rematch.clone())
+    }
+
+    async fn decline_rematch(&mut self, user: Uuid) -> Result<Option<Rematch>, RoomError> {
+        let seat = self.rematch_seat(user)?;
+        let outcome = rematch::decline(self.rematch.as_ref(), seat);
+        self.change_rematch(outcome).await?;
+        Ok(self.rematch.clone())
+    }
+
+    /// Carries out what a request did to the rematch: saves it as the next revision, and then
+    /// tells everyone. The game itself is as it was.
+    async fn change_rematch(&mut self, outcome: Outcome) -> Result<(), RoomError> {
+        let (rematch, new_game) = match outcome {
+            Outcome::Unchanged => return Ok(()),
+            Outcome::Becomes(rematch) => (rematch, None),
+            // The rematch is accepted by the game that is made for it.
+            Outcome::Start => (None, Some(self.rematch_game()?)),
+        };
+        let change = RematchChange {
+            game_id: &self.id,
+            from_revision: self.revision,
+            rematch: rematch.as_ref(),
+            new_game,
+        };
+        let saved = write_rematch(&self.pool, change).await;
+        self.rematch = saved.map_err(|reason| {
+            self.stale = true;
+            internal(
+                reason,
+                "could not save a rematch, so dropping it from memory",
+            )
+        })?;
+        self.revision += 1;
+        // The state is what the last snapshot has. Read it first: `publish` replaces the snapshot.
+        let state = self.snapshots.borrow().state.clone();
+        self.publish(state);
+        Ok(())
+    }
+
+    /// The game that follows this one: new, for the same players in the same seats.
+    fn rematch_game(&self) -> Result<NewGame, RoomError> {
+        let live = self.engine.start();
+        Ok(NewGame {
+            kind: self.engine.kind(),
+            state_version: self.engine.state_version() as i32,
+            players: self.players.clone(),
+            state: to_json(Some(live.as_ref()))?,
+            finished: live.is_over(),
+        })
     }
 
     /// Publishes the game again if `user`, a player here, has a different name than the room
@@ -692,6 +799,7 @@ impl Room {
             players: self.players.clone(),
             player_names: self.names.clone(),
             state,
+            rematch: self.rematch.clone(),
         }));
     }
 }
@@ -724,6 +832,110 @@ fn to_json(live: Option<&dyn Live>) -> Result<Option<Value>, RoomError> {
 fn internal(err: impl std::fmt::Display, context: &str) -> RoomError {
     tracing::error!(%err, "{context}");
     RoomError::Internal
+}
+
+/// A game to store, with its players, who take seats in the order given.
+struct NewGame {
+    kind: &'static str,
+    state_version: i32,
+    players: Vec<Uuid>,
+    /// Null for a game that waits for more players.
+    state: Option<Value>,
+    finished: bool,
+}
+
+/// Stores a new game and its players as part of the transaction `tx`, and returns its id.
+async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, String> {
+    let db = |err: sqlx::Error| err.to_string();
+    // A random id is taken by another game once in a very long while. Then try another.
+    let mut id = None;
+    for _ in 0..ID_ATTEMPTS {
+        let candidate = GameId::random().map_err(|err| err.to_string())?;
+        let inserted: Option<GameId> = sqlx::query_scalar(
+            "INSERT INTO games (id, kind, state_version, state, finished)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (id) DO NOTHING
+             RETURNING id",
+        )
+        .bind(&candidate)
+        .bind(game.kind)
+        .bind(game.state_version)
+        .bind(&game.state)
+        .bind(game.finished)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        if inserted.is_some() {
+            id = Some(candidate);
+            break;
+        }
+    }
+    let id = id.ok_or("every id tried was taken")?;
+    for (seat, player) in game.players.iter().enumerate() {
+        sqlx::query("INSERT INTO game_players (game_id, seat, user_id) VALUES ($1, $2, $3)")
+            .bind(&id)
+            .bind(seat as i16)
+            .bind(player)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+    }
+    Ok(id)
+}
+
+/// One change to the rematch of a stored game.
+struct RematchChange<'a> {
+    game_id: &'a GameId,
+    /// The revision the change builds on.
+    from_revision: i64,
+    /// What the rematch becomes. Ignored if `new_game` is set.
+    rematch: Option<&'a Rematch>,
+    /// The game that the rematch is for. It is stored with the change, and the rematch becomes
+    /// [`Rematch::Accepted`] with its id.
+    new_game: Option<NewGame>,
+}
+
+/// Stores a change to the rematch in one transaction, as revision `from_revision + 1`, along
+/// with the new game if there is one. Fails, and leaves no new game behind, if the game is no
+/// longer at `from_revision`, i.e. somebody else changed it. The error is for the log.
+/// Returns the rematch as stored.
+async fn write_rematch(
+    pool: &PgPool,
+    change: RematchChange<'_>,
+) -> Result<Option<Rematch>, String> {
+    let db = |err: sqlx::Error| err.to_string();
+    let mut tx = pool.begin().await.map_err(db)?;
+    let rematch = match &change.new_game {
+        Some(game) => Some(Rematch::Accepted {
+            game_id: insert_game(&mut tx, game).await?,
+        }),
+        None => change.rematch.cloned(),
+    };
+    let stored = rematch
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|err| err.to_string())?;
+    let updated = sqlx::query(
+        "UPDATE games
+         SET rematch = $2, revision = revision + 1, updated_at = now()
+         WHERE id = $1 AND revision = $3",
+    )
+    .bind(change.game_id)
+    .bind(&stored)
+    .bind(change.from_revision)
+    .execute(&mut *tx)
+    .await
+    .map_err(db)?
+    .rows_affected();
+    if updated != 1 {
+        return Err(format!(
+            "game is no longer at revision {}",
+            change.from_revision
+        ));
+    }
+    tx.commit().await.map_err(db)?;
+    Ok(rematch)
 }
 
 /// One change to a stored game.
@@ -780,13 +992,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::test_util::{Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually};
+    use crate::test_util::{Quick, Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually};
 
     /// Short enough to wait out in a test.
     const GRACE: Duration = Duration::from_millis(50);
 
     fn tally() -> Games {
-        Games::default().with::<Tally>().with::<Solo>()
+        Games::default()
+            .with::<Tally>()
+            .with::<Solo>()
+            .with::<Quick>()
     }
 
     fn rooms(pool: &PgPool, games: Games) -> Rooms {
@@ -957,6 +1172,7 @@ mod tests {
                 players: vec![creator],
                 player_names: vec![None],
                 state: None,
+                rematch: None,
             }
         );
     }
@@ -1356,5 +1572,382 @@ mod tests {
             "nobody takes the bot's seat"
         );
         assert_quiet(&mut connection).await;
+    }
+
+    // --- The rematch ---
+
+    /// A `quick` game, which is over as soon as somebody acts, for `first` and `second`.
+    /// Already over, and nobody is connected to it.
+    async fn finished_game(rooms: &Rooms, first: Uuid, second: Uuid) -> GameId {
+        let engine = rooms.games().get("quick").unwrap().clone();
+        let id = rooms.create(&engine, first).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
+        let connection = rooms.connect(&id, first).await.unwrap();
+        connection.act(json!({})).await.unwrap();
+        id
+    }
+
+    /// What the database holds as a game's rematch.
+    async fn stored_rematch(pool: &PgPool, id: &GameId) -> Option<Value> {
+        sqlx::query_scalar("SELECT rematch FROM games WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn players_of(pool: &PgPool, id: &GameId) -> Vec<Uuid> {
+        sqlx::query_scalar("SELECT user_id FROM game_players WHERE game_id = $1 ORDER BY seat")
+            .bind(id)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn game_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM games")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The game a rematch made, once it has been accepted.
+    fn next_game(rematch: Option<Rematch>) -> GameId {
+        match rematch {
+            Some(Rematch::Accepted { game_id }) => game_id,
+            other => panic!("expected an accepted rematch, got {other:?}"),
+        }
+    }
+
+    #[sqlx::test]
+    async fn asking_for_a_rematch_is_saved_and_shown_to_everyone_connected(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let mut ada_connection = rooms.connect(&id, ada).await.unwrap();
+        let mut grace_connection = rooms.connect(&id, grace).await.unwrap();
+        let before = ada_connection.latest();
+        grace_connection.latest();
+
+        let reply = rooms.ask_rematch(&id, ada).await;
+
+        assert_eq!(reply, Ok(Some(Rematch::Offered { by: 0 })));
+        for connection in [&mut ada_connection, &mut grace_connection] {
+            let snapshot = next(connection).await;
+            assert_eq!(snapshot.rematch, Some(Rematch::Offered { by: 0 }));
+            assert_eq!(snapshot.revision, before.revision + 1);
+            // The game is as it was: only what the players have agreed on is new.
+            assert_eq!(snapshot.state, before.state);
+        }
+        assert_eq!(
+            stored_rematch(&pool, &id).await,
+            Some(json!({ "type": "offered", "by": 0 }))
+        );
+        assert_eq!(stored(&pool, &id).await.0, before.revision + 1);
+    }
+
+    #[sqlx::test]
+    async fn the_other_player_saying_yes_starts_a_new_game_for_the_same_players(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let mut ada_connection = rooms.connect(&id, ada).await.unwrap();
+        ada_connection.latest();
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        next(&mut ada_connection).await;
+
+        let reply = rooms.ask_rematch(&id, grace).await.unwrap();
+
+        // The game that follows has started, with the players in the seats they had.
+        let following = next_game(reply);
+        assert_ne!(following, id);
+        assert_eq!(players_of(&pool, &following).await, [ada, grace]);
+        assert_eq!(
+            stored(&pool, &following).await,
+            (0, 1, Some(json!({ "over": false })))
+        );
+        assert!(!finished(&pool, &following).await);
+        // The old one says where it went, to the players connected and to a database reader.
+        let snapshot = next(&mut ada_connection).await;
+        assert_eq!(
+            snapshot.rematch,
+            Some(Rematch::Accepted {
+                game_id: following.clone()
+            })
+        );
+        assert_eq!(
+            stored_rematch(&pool, &id).await,
+            Some(json!({ "type": "accepted", "gameId": following.to_string() }))
+        );
+        // And it is ready for the players who are about to connect to it.
+        assert!(rooms.is_open(&following));
+    }
+
+    #[sqlx::test]
+    async fn the_old_game_stays_as_it_ended(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let (_, _, state) = stored(&pool, &id).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+
+        rooms.ask_rematch(&id, grace).await.unwrap();
+
+        assert_eq!(stored(&pool, &id).await.2, state);
+        assert!(finished(&pool, &id).await);
+        assert_eq!(players_of(&pool, &id).await, [ada, grace]);
+    }
+
+    #[sqlx::test]
+    async fn two_players_asking_at_the_same_time_get_one_new_game(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+
+        let (a, b) = tokio::join!(rooms.ask_rematch(&id, ada), rooms.ask_rematch(&id, grace));
+
+        // Whoever got in first made the offer, and the other one's ask answered it.
+        let replies = [a.unwrap(), b.unwrap()];
+        assert!(
+            replies
+                .iter()
+                .any(|reply| matches!(reply, Some(Rematch::Offered { .. }))),
+            "{replies:?}"
+        );
+        assert!(
+            replies
+                .iter()
+                .any(|reply| matches!(reply, Some(Rematch::Accepted { .. }))),
+            "{replies:?}"
+        );
+        assert_eq!(game_count(&pool).await, 2);
+    }
+
+    #[sqlx::test]
+    async fn asking_again_changes_nothing(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        let after_ask = stored(&pool, &id).await.0;
+
+        let again = rooms.ask_rematch(&id, ada).await;
+
+        assert_eq!(again, Ok(Some(Rematch::Offered { by: 0 })));
+        assert_eq!(stored(&pool, &id).await.0, after_ask);
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_that_has_started_cannot_be_started_twice(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        let following = next_game(rooms.ask_rematch(&id, grace).await.unwrap());
+
+        // Anyone asking now is pointed at the game that exists.
+        for player in [ada, grace] {
+            let reply = rooms.ask_rematch(&id, player).await.unwrap();
+            assert_eq!(next_game(reply), following);
+        }
+
+        assert_eq!(game_count(&pool).await, 2);
+    }
+
+    #[sqlx::test]
+    async fn turning_down_an_offer_tells_the_one_who_made_it(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let mut ada_connection = rooms.connect(&id, ada).await.unwrap();
+        ada_connection.latest();
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        next(&mut ada_connection).await;
+
+        let reply = rooms.decline_rematch(&id, grace).await;
+
+        assert_eq!(reply, Ok(Some(Rematch::Declined { by: 0 })));
+        let snapshot = next(&mut ada_connection).await;
+        assert_eq!(snapshot.rematch, Some(Rematch::Declined { by: 0 }));
+        assert_eq!(game_count(&pool).await, 1);
+        // Either of them can still ask later.
+        let asked_again = rooms.ask_rematch(&id, ada).await;
+        assert_eq!(asked_again, Ok(Some(Rematch::Offered { by: 0 })));
+    }
+
+    #[sqlx::test]
+    async fn the_one_who_said_no_can_change_their_mind_by_asking(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        rooms.decline_rematch(&id, grace).await.unwrap();
+
+        let reply = rooms.ask_rematch(&id, grace).await;
+
+        // It is an offer from Grace now, for Ada to answer.
+        assert_eq!(reply, Ok(Some(Rematch::Offered { by: 1 })));
+    }
+
+    #[sqlx::test]
+    async fn taking_back_your_own_ask_leaves_no_rematch(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let mut grace_connection = rooms.connect(&id, grace).await.unwrap();
+        grace_connection.latest();
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        next(&mut grace_connection).await;
+
+        let reply = rooms.decline_rematch(&id, ada).await;
+
+        assert_eq!(reply, Ok(None));
+        assert_eq!(next(&mut grace_connection).await.rematch, None);
+        assert_eq!(stored_rematch(&pool, &id).await, None);
+    }
+
+    #[sqlx::test]
+    async fn declining_with_nothing_to_decline_changes_nothing(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let before = stored(&pool, &id).await;
+
+        let reply = rooms.decline_rematch(&id, grace).await;
+
+        assert_eq!(reply, Ok(None));
+        assert_eq!(stored(&pool, &id).await, before);
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_is_not_over_has_no_rematch(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let engine = rooms.games().get("quick").unwrap().clone();
+        let waiting = rooms.create(&engine, ada).await.unwrap();
+        let playing = started_game(&rooms, ada, grace).await;
+
+        for id in [&waiting, &playing] {
+            assert_eq!(
+                rooms.ask_rematch(id, ada).await,
+                Err(RoomError::NotOver),
+                "{id}"
+            );
+            assert_eq!(
+                rooms.decline_rematch(id, ada).await,
+                Err(RoomError::NotOver),
+                "{id}"
+            );
+        }
+        assert_eq!(game_count(&pool).await, 2);
+    }
+
+    #[sqlx::test]
+    async fn only_a_player_can_ask_or_answer(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace, outsider) = (user(&pool).await, user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+
+        assert_eq!(
+            rooms.ask_rematch(&id, outsider).await,
+            Err(RoomError::NotAPlayer)
+        );
+        assert_eq!(
+            rooms.decline_rematch(&id, outsider).await,
+            Err(RoomError::NotAPlayer)
+        );
+        // Nothing the outsider did counted.
+        assert_eq!(
+            stored_rematch(&pool, &id).await,
+            Some(json!({ "type": "offered", "by": 0 }))
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_game_for_one_player_has_no_rematch(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let player = user(&pool).await;
+        let id = rooms
+            .create(rooms.games().get("solo").unwrap(), player)
+            .await
+            .unwrap();
+        let connection = rooms.connect(&id, player).await.unwrap();
+        for _ in 0..3 {
+            connection.act(json!({})).await.unwrap();
+        }
+        assert!(finished(&pool, &id).await);
+
+        let reply = rooms.ask_rematch(&id, player).await;
+
+        assert_eq!(reply, Err(RoomError::NoRematch));
+        assert_eq!(game_count(&pool).await, 1);
+    }
+
+    #[sqlx::test]
+    async fn the_bot_agrees_to_a_rematch_at_once(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let player = user(&pool).await;
+        let engine = rooms.games().get("quick").unwrap().clone();
+        let id = rooms.create_against_bot(&engine, player).await.unwrap();
+        let mut connection = rooms.connect(&id, player).await.unwrap();
+        connection.act(json!({})).await.unwrap();
+        connection.latest();
+
+        let reply = rooms.ask_rematch(&id, player).await.unwrap();
+
+        let following = next_game(reply);
+        assert_eq!(players_of(&pool, &following).await, [player, BOT_USER]);
+        assert_eq!(
+            stored(&pool, &following).await,
+            (0, 1, Some(json!({ "over": false })))
+        );
+        // The player's page hears about it as a snapshot, with no offer on the way.
+        assert_eq!(
+            next(&mut connection).await.rematch,
+            Some(Rematch::Accepted { game_id: following })
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_is_still_there_when_the_game_is_loaded_again(pool: PgPool) {
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let before = rooms(&pool, tally());
+        let id = finished_game(&before, ada, grace).await;
+        before.ask_rematch(&id, ada).await.unwrap();
+        eventually("the game is unloaded", || !before.is_open(&id)).await;
+
+        // A new set of rooms is as empty as after a restart.
+        let after = rooms(&pool, tally());
+        let mut connection = after.connect(&id, grace).await.unwrap();
+
+        assert_eq!(
+            connection.latest().rematch,
+            Some(Rematch::Offered { by: 0 })
+        );
+        // And it can be answered where it was left.
+        let reply = after.ask_rematch(&id, grace).await.unwrap();
+        assert_eq!(players_of(&pool, &next_game(reply)).await, [ada, grace]);
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_that_cannot_be_saved_leaves_no_game_behind(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        // Somebody else changes the game behind the room's back.
+        sqlx::query("UPDATE games SET revision = revision + 1 WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let reply = rooms.ask_rematch(&id, grace).await;
+
+        assert_eq!(reply, Err(RoomError::Internal));
+        // The game and its new game are saved together or not at all.
+        assert_eq!(game_count(&pool).await, 1);
+        eventually("the room shuts down", || !rooms.is_open(&id)).await;
     }
 }
