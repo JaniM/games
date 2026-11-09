@@ -51,14 +51,32 @@ describe("a checker that moved", () => {
     expect(html.lastIndexOf('class="flyer"')).toBeGreaterThan(html.lastIndexOf('class="tray"'));
   });
 
-  it("hops in an arc: three layers, pushed towards the middle of the board", () => {
+  it("hops in an arc: three layers, curving down on the top side", () => {
     const html = draw(stepped, step);
 
     expect(html).toMatch(/class="flyer"[^>]*><g class="flyer-lift"><g class="flyer-body"><circle/);
-    // This trip is along the top row, so its hop bulges down (and a little back).
-    const [, hopX, hopY] = /--hop-x:(-?\d+)px;--hop-y:(-?\d+)px/.exec(html) ?? [];
+    // This trip is along the top row, so its hop bulges straight down.
+    const [, hopY] = /--hop-x:0px;--hop-y:(\d+)px/.exec(html) ?? [];
     expect(Number(hopY)).toBeGreaterThan(40);
-    expect(Math.abs(Number(hopX))).toBeLessThan(Number(hopY));
+  });
+
+  it("curves up on the bottom side", () => {
+    const home = startingState({
+      points: [board({ 1: 14, 20: 1 }), board({ 1: 15 })],
+      ...moving([6, 3], [{ from: 20, die: 3 }], [{ from: 14, die: 6 }], [3]),
+    });
+    const html = draw(home, { ...step, from: { at: 14, count: 1 }, to: { at: 20, count: 1 } });
+
+    const [, hopY] = /--hop-x:0px;--hop-y:(-\d+)px/.exec(html) ?? [];
+    expect(Number(hopY)).toBeLessThan(-40);
+  });
+
+  it("goes in a straight line when it changes sides", () => {
+    // From point 10 on the top row, round the end, to point 15 on the bottom row.
+    const html = draw(stepped, { ...step, from: { at: 10, count: 1 }, to: { at: 15, count: 1 } });
+
+    expect(count(html, 'class="flyer"')).toBe(1);
+    expect(html).toContain("--hop-x:0px;--hop-y:0px");
   });
 
   it("is held back at its resting place until it lands", () => {

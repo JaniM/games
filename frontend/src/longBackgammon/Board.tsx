@@ -420,11 +420,13 @@ const SLAB_SCALE = { x: (TRAY_WIDTH - 24) / (2 * RADIUS), y: SLAB_HEIGHT / (2 * 
  * hides it on the way. It is gone when it lands: by then the checker at its resting place
  * is showing, and the two are drawn the same.
  *
- * It moves in an arc, as a lifted checker does, bulging towards the middle of the board (see
- * `hopVector`). Three nested groups each do one simple thing and the results add up, so that
- * none distorts another: the outer one carries the checker along the straight line between
- * the two places, the middle one pushes it off that line and back (a parabola in time), and
- * the inner one swells it at the top and, at the tray, lays it flat as a slab.
+ * It moves in an arc, as a lifted checker does: down on the top side, up on the bottom side,
+ * and in a straight line from one side to the other (see `hopVector`). Three nested groups
+ * each do one simple thing and the results add up, so that none distorts another: the outer
+ * one carries the checker along the straight line between the two places, the middle one
+ * pushes it off that line and back (a parabola in time; no push at all on a trip from one
+ * side to the other), and the inner one swells it at the top and, at the tray, lays it flat
+ * as a slab.
  */
 function Flight({ move, colour, trayTop }: { move: MoveMotion; colour: Colour; trayTop: boolean }) {
   const from = spot(move.from, trayTop);

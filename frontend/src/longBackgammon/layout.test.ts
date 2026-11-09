@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { board, moving, startingState } from "../fixtures";
-import { HEIGHT, WIDTH, hopVector, slotCentre } from "./geometry";
+import { HEIGHT, WIDTH, hopVector, slabCentre, slotCentre } from "./geometry";
 import {
   type Destination,
   colourOf,
@@ -298,18 +298,19 @@ describe("diceWords", () => {
 describe("hopVector", () => {
   const middle = { x: WIDTH / 2, y: HEIGHT / 2 };
 
-  it("curves down on the top side, where a trip along the top row bulges towards the middle", () => {
-    const hop = hopVector(slotCentre(1, 0), slotCentre(7, 0)); // top row, towards the left
-
-    expect(hop.y).toBeGreaterThan(0);
-    expect(Math.abs(hop.x)).toBeLessThan(hop.y / 4);
+  it("curves straight down on the top side, whatever the heights of the stacks", () => {
+    expect(hopVector(slotCentre(1, 0), slotCentre(7, 0)).y).toBeGreaterThan(0); // towards the left
+    expect(hopVector(slotCentre(7, 0), slotCentre(1, 0)).y).toBeGreaterThan(0); // and back
+    // The ends are at different heights, which must not tilt the curve.
+    expect(hopVector(slotCentre(1, 4, 5), slotCentre(7, 0, 1)).x).toBe(0);
+    expect(hopVector(slotCentre(7, 0, 1), slotCentre(1, 4, 5)).x).toBe(0);
   });
 
-  it("curves up on the bottom side", () => {
-    const hop = hopVector(slotCentre(13, 0), slotCentre(19, 0)); // bottom row, towards the right
-
-    expect(hop.y).toBeLessThan(0);
-    expect(Math.abs(hop.x)).toBeLessThan(-hop.y / 4);
+  it("curves straight up on the bottom side, whatever the heights of the stacks", () => {
+    expect(hopVector(slotCentre(13, 0), slotCentre(19, 0)).y).toBeLessThan(0); // towards the right
+    expect(hopVector(slotCentre(19, 0), slotCentre(13, 0)).y).toBeLessThan(0); // and back
+    expect(hopVector(slotCentre(13, 4, 5), slotCentre(19, 0, 1)).x).toBe(0);
+    expect(hopVector(slotCentre(19, 0, 1), slotCentre(13, 4, 5)).x).toBe(0);
   });
 
   it("curves the same way whichever direction the trip goes, since an undo goes back", () => {
@@ -319,32 +320,38 @@ describe("hopVector", () => {
     expect(back).toEqual(there);
   });
 
-  it("curves inward round the end where a trip crosses from the top row to the bottom row", () => {
-    const hop = hopVector(slotCentre(12, 2), slotCentre(13, 2)); // the far left end
-
-    expect(hop.x).toBeGreaterThan(0);
-    expect(Math.abs(hop.y)).toBeLessThan(hop.x / 2);
+  it("does not curve a trip from the top row to the bottom row, or back: it is a straight line", () => {
+    expect(hopVector(slotCentre(12, 2), slotCentre(13, 2))).toEqual({ x: 0, y: 0 }); // the far left end
+    expect(hopVector(slotCentre(13, 2), slotCentre(12, 2))).toEqual({ x: 0, y: 0 });
+    // Not only at the end, and not only for neighbours.
+    expect(hopVector(slotCentre(10, 0), slotCentre(15, 0))).toEqual({ x: 0, y: 0 });
+    expect(hopVector(slotCentre(1, 0), slotCentre(24, 0))).toEqual({ x: 0, y: 0 });
   });
 
-  it("is at right angles to the trip, longer for a longer trip, within limits", () => {
-    const length = (v: { x: number; y: number }) => Math.hypot(v.x, v.y);
+  it("curves a trip into the tray on the side the tray is on", () => {
+    // The viewer's tray is the bottom one, reached from their home on the bottom row.
+    const own = hopVector(slotCentre(20, 0), slabCentre(false, 0));
+    expect(own.y).toBeLessThan(0);
+    expect(own.x).toBe(0);
+    // The opponent's is the top one, reached from their home on the top row.
+    const theirs = hopVector(slotCentre(10, 0), slabCentre(true, 0));
+    expect(theirs.y).toBeGreaterThan(0);
+    expect(theirs.x).toBe(0);
+  });
+
+  it("is longer for a longer trip, within limits", () => {
     const short = hopVector(slotCentre(7, 0), slotCentre(6, 0));
     const long = hopVector(slotCentre(1, 0), slotCentre(7, 0));
     const very = hopVector({ x: 20, y: 60 }, { x: 700, y: 60 });
 
-    expect(length(short)).toBeCloseTo(28, 0);
-    expect(length(long)).toBeGreaterThan(length(short));
-    expect(length(very)).toBeCloseTo(80, 0);
-    // Right angles: no push along the trip.
-    const from = slotCentre(1, 0);
-    const to = slotCentre(7, 0);
-    expect(long.x * (to.x - from.x) + long.y * (to.y - from.y)).toBeLessThan(
-      length(long) * Math.hypot(to.x - from.x, to.y - from.y) * 0.02,
-    );
+    expect(short.y).toBe(28);
+    expect(long.y).toBeGreaterThan(short.y);
+    expect(very.y).toBe(80);
   });
 
   it("does not push a trip that goes nowhere", () => {
     expect(hopVector(middle, middle)).toEqual({ x: 0, y: 0 });
+    expect(hopVector(slotCentre(7, 0), slotCentre(7, 0))).toEqual({ x: 0, y: 0 });
   });
 });
 

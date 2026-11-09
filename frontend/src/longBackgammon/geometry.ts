@@ -78,30 +78,29 @@ const MIN_HOP = 28;
 const MAX_HOP = 80;
 const HOP_PER_DISTANCE = 0.22;
 
+/** Which half of the board a place is in. The points, and the trays with their slabs, keep to one. */
+const sideOf = (at: Xy): "top" | "bottom" => (at.y < HEIGHT / 2 ? "top" : "bottom");
+
 /**
  * How far a checker that moves from `from` to `to` is pushed off the straight line at the
- * top of its hop, as a vector. It is at right angles to the line, as long as more for a
- * longer trip (within limits), and it points towards the middle of the board: down on the
- * top side, up on the bottom side, and inward round the end where a trip crosses over.
+ * top of its hop, as a vector. It depends on the sides of the board the trip starts and ends on:
+ *
+ * - On the top side both ways, it curves straight down, towards the middle of the board.
+ * - On the bottom side both ways, it curves straight up.
+ * - From one side to the other, it does not curve: the vector is zero and the trip is a straight line.
+ *
+ * The push is as long as more for a longer trip (within limits), and the same whichever way
+ * the trip goes, since an undone step goes back.
  */
 export function hopVector(from: Xy, to: Xy): Xy {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const distance = Math.hypot(dx, dy);
+  const side = sideOf(from);
+  if (side !== sideOf(to)) return { x: 0, y: 0 };
+
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
   if (distance === 0) return { x: 0, y: 0 };
 
   const height = Math.round(Math.min(MAX_HOP, Math.max(MIN_HOP, distance * HOP_PER_DISTANCE)));
-  // A unit vector at right angles to the trip, turned to face the middle of the board.
-  let nx = -dy / distance;
-  let ny = dx / distance;
-  const towardsMiddle =
-    nx * (WIDTH / 2 - (from.x + to.x) / 2) + ny * (HEIGHT / 2 - (from.y + to.y) / 2);
-  if (towardsMiddle < 0) {
-    nx = -nx;
-    ny = -ny;
-  }
-  // `+ 0` turns a -0 (from a trip with no rise or no run) into 0.
-  return { x: Math.round(nx * height) + 0, y: Math.round(ny * height) + 0 };
+  return { x: 0, y: side === "top" ? height : -height };
 }
 
 // --- The dice ---

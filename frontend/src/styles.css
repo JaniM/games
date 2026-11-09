@@ -1375,9 +1375,10 @@ form.name-control .button {
 
 /*
  * The flight is an arc made of three layers (see `Flight`). The outer one goes along the
- * straight line, the middle one pushes the checker off it towards the middle of the board
- * and back, and the inner one swells it at the top. The push is quick at first and slows
- * at the top, then falls the same way in reverse, which makes the path a parabola.
+ * straight line, the middle one pushes the checker off it (down on the top side, up on the
+ * bottom side, not at all from one side to the other) and back, and the inner one swells it
+ * at the top. The push is quick at first and slows at the top, then falls the same way in
+ * reverse, which makes the path a parabola.
  */
 .flyer {
   animation: travel var(--move-ms) ease-in-out both;
