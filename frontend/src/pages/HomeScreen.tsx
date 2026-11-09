@@ -29,7 +29,7 @@ export interface HomeScreenProps {
 }
 
 /**
- * The front page: the user's games on the left, the games to start on the right, and the
+ * The front page: the user's games at the left edge, the games to start in the middle, and the
  * dialog for starting one. Everything it shows comes from its props, so it can be
  * rendered without a db.
  */
@@ -48,7 +48,7 @@ export function HomeScreen({
   const requestInfo = request && games.find((game) => game.id === request.kind);
 
   return (
-    <main className="page page-wide">
+    <main className="page page-home">
       {/* The nav says where you are, so the page shows no title: only a screen reader gets one. */}
       <h1 className="visually-hidden">Games</h1>
 

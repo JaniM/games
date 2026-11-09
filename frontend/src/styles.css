@@ -479,9 +479,14 @@ form.name-control .button {
   color: var(--muted);
 }
 
-/* The front page: the user's games on the left, the games to start beside them. */
+/* A page with room for a list beside something else. */
 .page-wide {
   max-width: 68rem;
+}
+
+/* The front page is as wide as the screen: its list is at the left edge, in line with the nav. */
+.page-home {
+  max-width: none;
 }
 
 .home {
@@ -495,8 +500,29 @@ form.name-control .button {
 .home-games {
   position: sticky;
   top: 1rem;
+  max-width: 19rem;
   max-height: calc(100vh - 2rem);
   overflow-y: auto;
+}
+
+.home-catalog {
+  width: 100%;
+  max-width: 46rem;
+  justify-self: center;
+}
+
+/*
+ * With room for both, the games to start are in the middle of the screen. An empty column as wide
+ * as the one for the list, on the other side, keeps them there.
+ */
+@media (min-width: 80rem) {
+  .home {
+    grid-template-columns: minmax(14rem, 1fr) minmax(0, 46rem) minmax(14rem, 1fr);
+  }
+
+  .home-catalog {
+    grid-column: 2;
+  }
 }
 
 /* The label over a list: small, and not in the display face. */
@@ -530,7 +556,7 @@ form.name-control .button {
 
 .game-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
   gap: 2rem 1.5rem;
   margin: 0;
   padding: 0;
