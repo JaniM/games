@@ -7,12 +7,16 @@
 {
   nixpkgs,
   disko,
+  crane,
   # Change to "aarch64-linux" for an ARM server, which also needs its own kexec image.
   system ? "x86_64-linux",
 }:
 
 let
   modules = [
+    # Hands the crane flake to games.nix, which builds the backend with it. Being a module, it
+    # reaches both nixosConfigurations and colmena.
+    { _module.args = { inherit crane; }; }
     disko.nixosModules.disko
     ./nixos/configuration.nix
     ./nixos/games.nix

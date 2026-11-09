@@ -1,12 +1,12 @@
 # The site: Postgres, the backend, and Caddy serving the frontend and proxying /api.
 # Nothing here is specific to one machine; that is configuration.nix.
-{ lib, pkgs, ... }:
+{ lib, pkgs, crane, ... }:
 
 let
   domain = "games.seequ.dev";
   backendAddr = "127.0.0.1:3000";
 
-  backend = pkgs.callPackage ./games-backend.nix { };
+  backend = pkgs.callPackage ./games-backend.nix { craneLib = crane.mkLib pkgs; };
   frontend = pkgs.callPackage ./games-frontend.nix { };
 
   # /api/health answers 200 only while the database does.

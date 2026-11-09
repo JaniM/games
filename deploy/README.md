@@ -12,7 +12,7 @@ deploy/nixos/configuration.nix       host: boot, network, SSH, swap, nix
 deploy/nixos/disk.nix                disko partitioning (/dev/vda, BIOS+UEFI). Erases the disk
 deploy/nixos/keys.nix                admin SSH keys
 deploy/nixos/games.nix               firewall, Postgres, the `games-backend` unit, Caddy
-deploy/nixos/games-backend.nix       the backend binary (rustPlatform.buildRustPackage)
+deploy/nixos/games-backend.nix       the backend binary (crane: dependencies and crate built apart)
 deploy/nixos/games-frontend.nix      the frontend's static files (pnpm + Vite)
 ```
 
@@ -55,8 +55,10 @@ and copy the dumps off the machine.
 
 The VM is x86_64-linux and the Mac is Apple Silicon, so Nix needs a Linux builder that can run
 x86_64 binaries. nix-darwin's `linux-builder` is an aarch64 VM that does this by emulation. It is
-slow: with no binary cache, the first build compiles the backend's dependencies under emulation,
-and after that only the crate itself. In the nix-darwin configuration:
+slow: with no binary cache, the first build compiles the backend's dependencies under emulation.
+Crane builds them as a derivation of their own, so after that a change to the backend's code
+compiles only the crate, and the dependencies build again only when `backend/Cargo.toml` or
+`Cargo.lock` change. In the nix-darwin configuration:
 
 ```nix
 nix.linux-builder = {
