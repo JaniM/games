@@ -1,7 +1,7 @@
 import { table } from "millpond";
 import { z } from "zod";
 import { randomId } from "../../randomId";
-import { actionSchema, snapshotSchema, stepSchema } from "./schemas";
+import { actionSchema, frameSchema, snapshotSchema, stepSchema } from "./schemas";
 
 /**
  * A game this browser has open: one row per game page, inserted when the page opens
@@ -43,6 +43,35 @@ export const gameViews = table(
     rematchStarted: z.string().nullable(),
   }),
   { key: "gameId", indexes: { byAuto: ["auto"] } },
+);
+
+/**
+ * A game page that is stepping through the positions the game has been in: one row per page,
+ * inserted when the user opens the review and deleted when they close it or leave the page. While
+ * there is one, the board shows a frame of the review instead of the live game.
+ *
+ * - `loading`: the `loadReview` effect is asking the server for the positions. The first time
+ *   there are no frames yet; later it is asking again, because some were missed, and the frames
+ *   held stay on show.
+ * - `ready`: the frames are the game so far, and a snapshot that follows adds to them.
+ * - `failed`: the server could not be asked, or its answer could not be read. `error` says why.
+ */
+export const reviews = table(
+  z.object({
+    gameId: z.string(),
+    load: z.enum(["loading", "ready", "failed"]),
+    error: z.string().nullable(),
+    /**
+     * The positions of the game in the order they were played, without the steps that were
+     * taken back (see `addFrame`). Empty until the first answer.
+     */
+    frames: z.array(frameSchema),
+    /** The revision of the newest position the frames include; -1 while there are none. */
+    through: z.number().int(),
+    /** The index of the frame on show, or null for the newest, which moves along with a live game. */
+    at: z.number().int().nullable(),
+  }),
+  { key: "gameId", indexes: { byLoad: ["load"] } },
 );
 
 /**

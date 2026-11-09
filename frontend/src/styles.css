@@ -801,6 +801,9 @@ form.name-control .button {
 }
 
 .status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-top: 0.5rem;
   padding-left: 1.125rem;
 }
@@ -864,7 +867,8 @@ form.name-control .button {
   border-block: 2px solid var(--fg);
 }
 
-.result-kicker {
+.result-kicker,
+.review-kicker {
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -906,6 +910,99 @@ form.name-control .button {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/*
+ * Stepping through a game, in the place of the status or the result under the board. It is set
+ * like the result, under a heavy rule: the page is not the game now but a look back at it. The
+ * accent is left to the game, which is where the player has something to do.
+ */
+.review {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border-block: 2px solid var(--fg);
+}
+
+.review-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.review-detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.review-error {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* The buttons, the slider and where it stands. The slider takes what the buttons leave, and wraps under them on a narrow screen. */
+.review-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* Wide enough to press with a thumb. */
+.review-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  min-height: 2.5rem;
+  padding: 0 0.5rem;
+}
+
+.review-step svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.review-slider {
+  flex: 1 1 8rem;
+  min-width: 0;
+  margin: 0 0.25rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.review-count {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* What the game is waiting for, and the way back to it. */
+.review-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.review-live {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 
 /*

@@ -79,7 +79,7 @@ export function HomeScreen({
 
       {request && (
         <Modal
-          title={`New game: ${requestInfo?.name ?? request.kind}`}
+          title={`${requestInfo?.name ?? request.kind}`}
           locked={request.state === "creating"}
           onClose={onClose}
         >

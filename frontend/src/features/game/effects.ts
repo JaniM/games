@@ -21,20 +21,26 @@ import {
   joined,
   rematchFailed,
   rematchSent,
+  reviewFailed,
+  reviewLoaded,
   sendQueued,
   snapshotReceived,
   submitAction,
 } from "./ops";
+import { asFrame } from "./review";
 import {
+  type Frame,
   KIND,
   STATE_VERSION,
   errorMessageSchema,
+  incomingHistorySchema,
   incomingSnapshotSchema,
+  positionSchema,
   seatReplySchema,
   stateSchema,
 } from "./schemas";
 import { registerSocket, socketOf, unregisterSocket } from "./sockets";
-import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
 
 const NEWER_VERSION = "This game needs a newer version of the site. Reload the page to get it.";
 const OTHER_GAME = "This link is for a different kind of game than this page can show.";
@@ -45,6 +51,7 @@ const ERROR_TEXT: Record<string, string> = {
   "not-a-player": "You are watching this game, not playing it.",
 };
 const GENERIC_ERROR = "Something went wrong on the server. Try again.";
+const GAME_GONE = "This game does not exist any more.";
 
 /**
  * Keeps a WebSocket to every open game, for as long as the game's row exists and the
@@ -305,7 +312,7 @@ export const joinGameRequest = effect({
                 signal: ctx.signal,
               });
               if (res.status === 401) return;
-              if (res.status === 404) throw new Error("This game does not exist any more.");
+              if (res.status === 404) throw new Error(GAME_GONE);
               if (res.status === 409) throw new Error("Both seats are taken.");
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
               seatReplySchema.parse(await res.json());
@@ -362,7 +369,7 @@ function rematchErrorText(status: number): string {
     case 403:
       return "Only the players of this game can do that.";
     case 404:
-      return "This game does not exist any more.";
+      return GAME_GONE;
     case 409:
       return "The game is not over yet.";
     default:
@@ -398,3 +405,64 @@ export const followRematch = effect({
       { rerunOn: ["rematchStarted"] },
     ),
 });
+
+/**
+ * Asks the server for the positions of a game while its review is `loading`: the first time
+ * the review is opened, and again when the snapshots that came in showed that some were missed
+ * (see `followReview`). It nests in the ready session, so a request that meets a 401 stays
+ * `loading` and is sent again with the new token. A review that asks again because its answer
+ * was behind (`reviewLoaded`) moves to a new `through`, which starts a new request.
+ */
+export const loadReview = effect({
+  inputs: [sessionState, reviews],
+  watch: (q, task) =>
+    q.each(sessionState.byState.stateEq("ready"), () =>
+      q.each(
+        reviews.byLoad.loadEq("loading"),
+        (review) =>
+          task(
+            async (ctx) => {
+              const { gameId } = review;
+              try {
+                const res = await apiFetch(ctx, `/api/games/${gameId}/history`, {
+                  signal: ctx.signal,
+                });
+                if (res.status === 401) return;
+                if (!res.ok) {
+                  const error = res.status === 404 ? GAME_GONE : GENERIC_ERROR;
+                  ctx.run(reviewFailed, { gameId, error });
+                  return;
+                }
+                const positions = readHistory(gameId, await res.json());
+                if (typeof positions === "string") ctx.run(reviewFailed, { gameId, error: positions });
+                else ctx.run(reviewLoaded, { gameId, positions });
+              } catch {
+                // A network failure has no words of its own that a player could use.
+                if (!ctx.signal.aborted) ctx.run(reviewFailed, { gameId, error: GENERIC_ERROR });
+              }
+            },
+            { label: `GET /api/games/${review.gameId}/history` },
+          ),
+        { rerunOn: ["through"] },
+      ),
+    ),
+});
+
+/**
+ * The positions in the server answer, as frames. Or, if they cannot be shown, the reason in words
+ * for the player: the history is of another kind of game or another layout of the state than this
+ * page reads, which is a page that needs reloading, as for a snapshot.
+ */
+function readHistory(gameId: string, body: unknown): Frame[] | string {
+  const history = incomingHistorySchema.safeParse(body);
+  if (!history.success || history.data.gameId !== gameId) return GENERIC_ERROR;
+  if (history.data.kind !== KIND) return OTHER_GAME;
+  if (history.data.stateVersion !== STATE_VERSION) return NEWER_VERSION;
+  const frames: Frame[] = [];
+  for (const { revision, state } of history.data.positions) {
+    const position = positionSchema.safeParse(state);
+    if (!position.success) return NEWER_VERSION;
+    frames.push(asFrame(revision, position.data));
+  }
+  return frames;
+}

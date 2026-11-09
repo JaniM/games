@@ -128,3 +128,42 @@ export function lastThrowText(state: LongBackgammonState): string {
   if (!state.lastThrow || state.phase.type === "over") return "";
   return "White has borne off everything. Black gets one last throw.";
 }
+
+/** What a position of a game in review says about itself, in two lines. */
+export interface FrameText {
+  /** What led to the position: the roll or the step that was just played. */
+  title: string;
+  /** What else is worth knowing about it: that the game is over, and how it ended, or that it is the last throw. */
+  detail: string;
+}
+
+/**
+ * The words for a position of the past. They come from the position alone, so they are the same
+ * whether the user stepped to it or jumped: a roll leaves the dice to play and nothing played,
+ * a step is the last of the turn's, and a step that ended the turn is the turn before in
+ * `lastTurn`, since the turn has passed on by then.
+ */
+export function frameText(snapshot: Snapshot, state: LongBackgammonState, mySeat: Seat | null): FrameText {
+  const result = resultOf({ ...snapshot, state }, mySeat);
+  const detail = result
+    ? `Game over. ${result.title}${result.detail ? `, ${result.detail.toLowerCase()}` : ""}.`
+    : lastThrowText(state);
+
+  if (state.phase.type === "move") {
+    const name = nameOf(snapshot, state.turn, mySeat);
+    const step = state.phase.played.at(-1);
+    const title = step
+      ? `${name} played ${stepText(step, state.turn, state.white)}`
+      : `${name} rolled ${diceText(state.phase.dice)}`;
+    return { title, detail };
+  }
+
+  const last = state.lastTurn;
+  if (!last) return { title: "Start of the game", detail };
+  const name = nameOf(snapshot, last.seat, mySeat);
+  const step = last.played.at(-1);
+  const title = step
+    ? `${name} played ${stepText(step, last.seat, state.white)}`
+    : `${name} rolled ${diceText(last.dice)} and could not move`;
+  return { title, detail };
+}

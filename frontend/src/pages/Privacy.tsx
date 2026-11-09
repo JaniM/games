@@ -39,9 +39,8 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
         <li>your anonymous user id and access token, and when they were made;</li>
         <li>your display name, if you pick one (up to 32 characters);</li>
         <li>
-          every game you are in: who sat where, the position (the checkers, the dice, the steps
-          played in the turn so far and the turn before), and when the game was made and last
-          changed.
+          every game you are in: who sat where, the game’s state, and when the game was made and
+          last changed.
         </li>
       </ul>
       <p>A game against the bot is kept the same way.</p>

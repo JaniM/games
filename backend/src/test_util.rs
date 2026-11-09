@@ -155,6 +155,14 @@ impl TestApp {
             .await
     }
 
+    /// Reads a game's history as the token's user, or with no token at all. Returns the reply
+    /// as it is.
+    pub async fn history(&self, token: Option<&str>, game_id: &str) -> Reply {
+        let uri = format!("/api/games/{game_id}/history");
+        self.send(Method::GET, &uri, token.map(bearer).as_deref(), None)
+            .await
+    }
+
     /// Serves the app on a free loopback port, for tests that need a real connection.
     /// The server stops when the returned value is dropped.
     pub async fn serve(&self) -> Server {

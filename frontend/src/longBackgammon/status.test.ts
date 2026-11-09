@@ -3,6 +3,7 @@ import type { Rematch } from "../features/game";
 import { moving, snapshotOf, startingState } from "../fixtures";
 import {
   barNameOf,
+  frameText,
   lastThrowText,
   lastTurnText,
   nameOf,
@@ -202,5 +203,113 @@ describe("rematchStage", () => {
   it("offers a spectator nothing to press", () => {
     expect(rematchStage(rematchOf(null), null)).toEqual({ stage: "closed", line: "" });
     expect(rematchStage(rematchOf({ type: "offered", by: 0 }), null)).toEqual({ stage: "closed", line: "" });
+  });
+});
+
+describe("frameText, for a position of a game in review", () => {
+  const look = (state: ReturnType<typeof startingState>, mySeat: 0 | 1 | null = null) =>
+    frameText(snap(), state, mySeat);
+
+  it("calls the first position the start of the game", () => {
+    expect(look(startingState())).toEqual({ title: "Start of the game", detail: "" });
+  });
+
+  it("says who rolled what, when the dice are rolled and nothing is played", () => {
+    const rolled = startingState(moving([6, 3], [{ from: 1, die: 6 }]));
+
+    expect(look(rolled).title).toBe("Ada rolled 6-3");
+    expect(look(rolled, 0).title).toBe("You rolled 6-3");
+    expect(look(rolled, 1).title).toBe("Ada rolled 6-3");
+  });
+
+  it("says the last step of the turn in progress, in the numbering both players share", () => {
+    const stepped = startingState(moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]));
+
+    // Seat 0 is White: its point 1 is point 24, and its point 7 is 18.
+    expect(look(stepped).title).toBe("Ada played 24→18");
+  });
+
+  it("names the mover by their seat, for either player", () => {
+    const grace = startingState({
+      turn: 1,
+      ...moving([2, 1], [], [{ from: 1, die: 2 }], [1]),
+    });
+
+    // Seat 1 is Black: its point 1 is point 12.
+    expect(look(grace).title).toBe("Grace played 12→10");
+    expect(look(grace, 1).title).toBe("You played 12→10");
+  });
+
+  it("says the step that ended a turn, which is in the turn before once the turn has passed", () => {
+    const passed = startingState({
+      turn: 1,
+      turns: [1, 0],
+      lastTurn: { seat: 0, dice: [6, 3], played: [{ from: 1, die: 6 }, { from: 7, die: 3 }] },
+    });
+
+    expect(look(passed).title).toBe("Ada played 18→15");
+  });
+
+  it("says a turn that could not be played", () => {
+    const lost = startingState({
+      turn: 1,
+      turns: [1, 0],
+      lastTurn: { seat: 0, dice: [6, 5], played: [] },
+    });
+
+    expect(look(lost).title).toBe("Ada rolled 6-5 and could not move");
+  });
+
+  it("says a step off the board", () => {
+    const off = startingState({
+      turn: 1,
+      turns: [30, 29],
+      off: [1, 0],
+      lastTurn: { seat: 0, dice: [5, 6], played: [{ from: 20, die: 5 }] },
+    });
+
+    expect(look(off).title).toBe("Ada played 5→off");
+  });
+
+  it("warns, in the position after White has borne off everything, that Black has one throw left", () => {
+    const last = startingState({ turn: 1, lastThrow: true, off: [15, 4] });
+
+    expect(look(last).detail).toBe("White has borne off everything. Black gets one last throw.");
+  });
+
+  it("gives the result in the last position, for the one who won and the one who is watching", () => {
+    const over = startingState({
+      off: [15, 3],
+      turns: [40, 39],
+      phase: { type: "over", winner: 0, points: 1 },
+      lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+    });
+
+    expect(look(over, 0)).toEqual({ title: "You played 1→off", detail: "Game over. You won, 1 point." });
+    expect(look(over, null).detail).toBe("Game over. Ada won, 1 point.");
+  });
+
+  it("gives a mars its two points, and a draw no points", () => {
+    const mars = startingState({
+      phase: { type: "over", winner: 1, points: 2 },
+      lastTurn: { seat: 1, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+    });
+    const draw = startingState({
+      phase: { type: "over", winner: null, points: 0 },
+      lastTurn: { seat: 1, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+    });
+
+    expect(look(mars).detail).toBe("Game over. Grace won, mars: 2 points.");
+    expect(look(draw).detail).toBe("Game over. Draw.");
+  });
+
+  it("tells the result of the position it is given, not of the game as it stands now", () => {
+    // The snapshot is of a game that is over, but the position in review is from the middle of it.
+    const live = snap({
+      state: startingState({ phase: { type: "over", winner: 0, points: 1 } }),
+    });
+    const middle = startingState(moving([6, 3], []));
+
+    expect(frameText(live, middle, null).detail).toBe("");
   });
 });

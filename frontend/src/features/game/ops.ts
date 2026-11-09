@@ -1,8 +1,9 @@
 import { type Tx, op } from "millpond";
 import { SESSION_ID, sessionState } from "../session";
-import type { Action, Snapshot, Step } from "./schemas";
+import { atFor, extend, framesOf, shownIndex } from "./review";
+import type { Action, Frame, Snapshot, Step } from "./schemas";
 import { landing, seatOf } from "./selectors";
-import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
 
 /** Marks a game page as open. The `connectGame` effect then connects. Does nothing if it is already open. */
 export const openGame = op((tx, args: { gameId: string }) => {
@@ -28,6 +29,7 @@ export const closeGame = op((tx, args: { gameId: string }) => {
   }
   if (tx.read(joinRequests.get(args.gameId))) tx.delete(joinRequests, args.gameId);
   if (tx.read(rematchRequests.get(args.gameId))) tx.delete(rematchRequests, args.gameId);
+  if (tx.read(reviews.get(args.gameId))) tx.delete(reviews, args.gameId);
   if (tx.read(gameViews.get(args.gameId))) tx.delete(gameViews, args.gameId);
 });
 
@@ -62,6 +64,9 @@ export const connectionChanged = op(
  * that was already going when the page opened is there to follow, not to be taken to. A
  * snapshot also ends a failure to answer about the rematch, which was about the one before.
  *
+ * A game that is in review gets the position of a newer snapshot as one more frame (see
+ * `followReview`).
+ *
  * One of the same revision is the same position with new labels, because a player changed
  * their name, or the same snapshot again after a reconnect. It replaces the old one and
  * leaves what the player is in the middle of alone.
@@ -85,6 +90,7 @@ export const snapshotReceived = op((tx, args: { gameId: string; snapshot: Snapsh
   if (tx.read(rematchRequests.get(args.gameId))?.state === "failed") {
     tx.delete(rematchRequests, args.gameId);
   }
+  followReview(tx, args.gameId, args.snapshot);
   tx.update(gameViews, args.gameId, {
     connection: "open",
     snapshot: args.snapshot,
@@ -96,6 +102,23 @@ export const snapshotReceived = op((tx, args: { gameId: string; snapshot: Snapsh
     rematchStarted: started ?? view.rematchStarted,
   });
 });
+
+/**
+ * Adds the position of a new snapshot to the game's review, if there is one that is up to date.
+ * If positions were missed in between, the review asks the server for them all again; the frames
+ * it holds stay on show until the answer. A review that is still loading, or has failed,
+ * doesn't take part: its next answer starts from the snapshot the page holds (`reviewLoaded`).
+ */
+function followReview(tx: Tx, gameId: string, snapshot: Snapshot) {
+  const review = tx.read(reviews.get(gameId));
+  if (review?.load !== "ready") return;
+  const more = extend(review.frames, review.through, snapshot);
+  if (more.type === "frames") {
+    tx.update(reviews, gameId, { frames: more.frames, through: more.through });
+  } else if (more.type === "missed") {
+    tx.update(reviews, gameId, { load: "loading" });
+  }
+}
 
 /** `point` if the user may start a step from it in `snapshot`, on their own turn, else null. */
 function startable(snapshot: Snapshot | null, userId: string | null, point: number | null) {
@@ -291,4 +314,68 @@ export const rematchSent = op((tx, args: { gameId: string }) => {
 export const rematchFailed = op((tx, args: { gameId: string; error: string }) => {
   if (!tx.read(rematchRequests.get(args.gameId))) return;
   tx.update(rematchRequests, args.gameId, { state: "failed", error: args.error });
+});
+
+/**
+ * Starts stepping through the game's positions: the `loadReview` effect asks the server for
+ * them. The review opens on the newest, so the board stays as it is until the user steps back.
+ * Ignored if the page is already reviewing, or has no game to review yet.
+ */
+export const openReview = op((tx, args: { gameId: string }) => {
+  if (!tx.read(gameViews.get(args.gameId))?.snapshot?.state) return;
+  if (tx.read(reviews.get(args.gameId))) return;
+  tx.insert(reviews, { gameId: args.gameId, load: "loading", error: null, frames: [], through: -1, at: null });
+});
+
+/** Ends the review: the board goes back to the game as it is now. */
+export const closeReview = op((tx, args: { gameId: string }) => {
+  if (tx.read(reviews.get(args.gameId))) tx.delete(reviews, args.gameId);
+});
+
+/**
+ * Takes the positions the server kept. They are the frames of the review, and the snapshot the
+ * page holds is added to them if it is newer, since it may have come while the answer was on its
+ * way. If it is more than one position ahead, the server is asked again, but only as long as each
+ * answer got further than the one before: an answer that doesn't is all the server has.
+ */
+export const reviewLoaded = op((tx, args: { gameId: string; positions: Frame[] }) => {
+  const review = tx.read(reviews.get(args.gameId));
+  if (review?.load !== "loading") return;
+  let frames = framesOf(args.positions);
+  let through = args.positions.at(-1)?.revision ?? -1;
+  let load: "ready" | "loading" = "ready";
+  const snapshot = tx.read(gameViews.get(args.gameId))?.snapshot;
+  const more = snapshot ? extend(frames, through, snapshot) : null;
+  if (more?.type === "frames") ({ frames, through } = more);
+  else if (more?.type === "missed" && through > review.through) load = "loading";
+  tx.update(reviews, args.gameId, { load, error: null, frames, through });
+});
+
+/** Records that the positions could not be had, with the reason for the player. The frames held stay. */
+export const reviewFailed = op((tx, args: { gameId: string; error: string }) => {
+  if (tx.read(reviews.get(args.gameId))?.load !== "loading") return;
+  tx.update(reviews, args.gameId, { load: "failed", error: args.error });
+});
+
+/** Asks again after a failure. */
+export const retryReview = op((tx, args: { gameId: string }) => {
+  if (tx.read(reviews.get(args.gameId))?.load !== "failed") return;
+  tx.update(reviews, args.gameId, { load: "loading", error: null });
+});
+
+/** Shows frame `index` of the review. One past either end is the end: the newest follows the game. */
+export const showFrame = op((tx, args: { gameId: string; index: number }) => {
+  const review = tx.read(reviews.get(args.gameId));
+  if (!review || review.frames.length === 0) return;
+  const at = atFor(review.frames.length, args.index);
+  if (at !== review.at) tx.update(reviews, args.gameId, { at });
+});
+
+/** Shows the frame `by` places from the one on show: 1 for the next, -1 for the one before. */
+export const stepFrame = op((tx, args: { gameId: string; by: number }) => {
+  const review = tx.read(reviews.get(args.gameId));
+  const shown = review ? shownIndex(review.frames.length, review.at) : null;
+  if (!review || shown === null) return;
+  const at = atFor(review.frames.length, shown + args.by);
+  if (at !== review.at) tx.update(reviews, args.gameId, { at });
 });

@@ -66,7 +66,7 @@ mod rules;
 
 use serde::{Deserialize, Serialize};
 
-use crate::game::{Game, Rejection};
+use crate::game::{Game, Rejection, StateError};
 use rules::{CHECKERS, Points, Step, Turn};
 
 /// The game itself. It has no data: everything is in its [`State`].
@@ -453,6 +453,14 @@ impl Game for LongBackgammon {
 
     fn is_over(state: &State) -> bool {
         matches!(state.position.phase, Phase::Over { .. })
+    }
+
+    /// The position alone. `legal` and `combos` are worked out again from it when a state is
+    /// read (see [`State`]), and for a game of some hundreds of states they would be most of
+    /// what the history stores.
+    fn record(state: &State) -> Result<serde_json::Value, StateError> {
+        serde_json::to_value(&state.position)
+            .map_err(|err| StateError::new(format!("could not write a state as JSON: {err}")))
     }
 
     /// Picks White at random: the rules let an implementation do that instead of having
@@ -1242,6 +1250,70 @@ mod tests {
         serde_json::from_value(serde_json::to_value(game).unwrap()).unwrap()
     }
 
+    fn recorded(game: &State) -> Value {
+        LongBackgammon::record(game).expect("the state can be recorded")
+    }
+
+    #[test]
+    fn a_record_is_the_position_without_what_is_worked_out_again() {
+        let game = rolled(&fresh(1), 1, [5, 2]);
+
+        let record = recorded(&game);
+
+        let mut head = vec![15];
+        head.extend([0; 23]);
+        assert_eq!(
+            record,
+            json!({
+                "white": 1,
+                "points": [head, head],
+                "off": [0, 0],
+                "turn": 1,
+                "turns": [0, 0],
+                "lastThrow": false,
+                "phase": { "type": "move", "dice": [5, 2], "remaining": [5, 2], "played": [] },
+                "lastTurn": null,
+            })
+        );
+        // So the whole state has what the record has, and more.
+        let state = serde_json::to_value(&game).unwrap();
+        for (key, value) in record.as_object().unwrap() {
+            assert_eq!(&state[key], value, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_state_survives_being_recorded_and_read_back() {
+        let game = rolled(&fresh(0), 0, [4, 4]);
+        let mid_turn = play(&game, 0, 1, 4).unwrap();
+        let between_turns = white_is_about_to_finish(&[(19, 3)], 12);
+        let between_turns = rolled(&between_turns, 0, [1, 4]);
+        let between_turns = play(&between_turns, 0, 24, 4).unwrap();
+
+        for game in [fresh(1), game, mid_turn, between_turns] {
+            let read: State = serde_json::from_value(recorded(&game)).unwrap();
+            assert_eq!(read, game);
+        }
+    }
+
+    #[test]
+    fn a_record_is_a_stored_state_the_server_can_load() {
+        // A history row is read like a stored game, by the engine of its layout version.
+        let engine = crate::game::Games::default()
+            .with::<LongBackgammon>()
+            .get(LongBackgammon::KIND)
+            .unwrap()
+            .clone();
+        let game = rolled(&fresh(0), 0, [5, 2]);
+
+        let live = engine
+            .load(LongBackgammon::STATE_VERSION, recorded(&game))
+            .expect("the record loads");
+
+        assert_eq!(live.to_json(), Ok(serde_json::to_value(&game).unwrap()));
+        assert_eq!(live.to_record(), Ok(recorded(&game)));
+    }
+
     #[test]
     fn a_state_survives_being_stored_and_read_back() {
         let game = rolled(&fresh(0), 0, [4, 4]);
@@ -1417,6 +1489,11 @@ mod tests {
                 reread(&game),
                 game,
                 "seed {seed}: storing changes the state"
+            );
+            assert_eq!(
+                serde_json::from_value::<State>(recorded(&game)).unwrap(),
+                game,
+                "seed {seed}: recording changes the state"
             );
         }
         (game, actions)

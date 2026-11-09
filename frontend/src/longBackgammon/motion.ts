@@ -23,10 +23,14 @@ export type Motion =
 
 const turnsPlayed = (state: LongBackgammonState) => state.turns[0] + state.turns[1];
 
-/** Whether `next` is what the roll of the player to move in `prev` led to. */
+/**
+ * Whether `next` is what the roll of the player to move in `prev` led to. The same player is
+ * to move after it: going the other way, from a player about to roll back to the last step of
+ * the one before, is not a roll (a review steps both ways).
+ */
 function isRoll(prev: LongBackgammonState, next: LongBackgammonState): boolean {
   if (prev.phase.type !== "roll") return false;
-  if (next.phase.type === "move") return true;
+  if (next.phase.type === "move") return next.turn === prev.turn;
   // A roll with nothing to play ends the turn at once, so the dice only show in `lastTurn`.
   return turnsPlayed(next) === turnsPlayed(prev) + 1 && next.lastTurn?.played.length === 0;
 }
@@ -68,6 +72,10 @@ function singleStep(
  * What the viewer should see happen on the way from `prev` to `next`, or null if nothing
  * that a drawing can follow: the very first position, a change of names, or several moves
  * at once (a reconnect that missed some), which are better shown as they are.
+ *
+ * It follows a step backwards as well, which a review does: the checker goes back where it
+ * came from. A step that ended the turn leaves the other player to roll, so the mover of
+ * the step back is the one to move in `next` then.
  */
 export function motionBetween(
   prev: LongBackgammonState | null,
@@ -76,9 +84,9 @@ export function motionBetween(
 ): Motion | null {
   if (!prev || !next) return null;
   if (isRoll(prev, next)) return { type: "roll" };
-  if (prev.phase.type !== "move") return null;
-
-  const seat = prev.turn;
+  // The player who moved a checker between the two: the one to move at the earlier position.
+  const seat = prev.phase.type === "move" ? prev.turn : next.phase.type === "move" ? next.turn : null;
+  if (seat === null) return null;
   const step = singleStep(prev, next, seat);
   if (!step) return null;
 

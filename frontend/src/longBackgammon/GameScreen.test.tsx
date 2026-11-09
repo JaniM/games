@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Snapshot } from "../features/game";
 import { GAME_ID, board, moving, snapshotOf, startingState } from "../fixtures";
 import { router } from "../features/router";
-import { GameScreen, type GameScreenProps, type GameViewRow } from "./GameScreen";
+import { asFrame } from "../features/game/review";
+import { GameScreen, type GameScreenProps, type GameViewRow, type ReviewRow } from "./GameScreen";
 
 // What a page shows is a function of its props, so these render it to a string.
 // (There is no DOM here: clicks are covered by the helpers and ops they call.)
@@ -47,10 +48,16 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         userId={userId}
         join={undefined}
         rematchRequest={undefined}
+        review={undefined}
         inviteUrl={URL}
         onJoin={noop}
         onRematch={noop}
         onDeclineRematch={noop}
+        onReview={noop}
+        onCloseReview={noop}
+        onRetryReview={noop}
+        onShowFrame={noop}
+        onStepFrame={noop}
         onRoll={noop}
         onUndo={noop}
         onAutoplay={noop}
@@ -578,8 +585,11 @@ describe("the rematch of a finished game", () => {
   const over = startingState({ phase: { type: "over", winner: 0, points: 1 } });
   const finished = (rematch: Snapshot["rematch"] = null, overrides: Partial<GameViewRow> = {}) =>
     viewOf({ snapshot: snapshotOf({ state: over, rematch }), ...overrides });
+  /** The buttons about the rematch: the review is another matter (see "reviewing a game"). */
   const buttons = (html: string) =>
-    [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+    [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)]
+      .map((match) => match[1])
+      .filter((label) => label !== "Review game");
   /** The result block, which is where all of it is. */
   const resultOnly = (html: string) => html.slice(html.indexOf('aria-label="Result"'));
 
@@ -671,5 +681,261 @@ describe("the rematch of a finished game", () => {
     expect(html).toMatch(/role="alert">The game is not over yet\./);
     // And it can be tried again.
     expect(html).not.toMatch(/<button[^>]*disabled/);
+  });
+});
+
+describe("reviewing a game", () => {
+  // Ada (seat 0) is White. A short game: the start, a roll, a step, the turn passing on.
+  const rolled = startingState(moving([6, 3], [{ from: 1, die: 6 }]));
+  const afterSix = startingState({
+    points: [board({ 1: 14, 7: 1 }), board({ 1: 15 })],
+    ...moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]),
+  });
+  const turnOver = startingState({
+    turn: 1,
+    turns: [1, 0],
+    points: [board({ 1: 14, 10: 1 }), board({ 1: 15 })],
+    lastTurn: { seat: 0, dice: [6, 3], played: [{ from: 1, die: 6 }, { from: 7, die: 3 }] },
+  });
+  const over = startingState({
+    off: [15, 2],
+    turns: [41, 40],
+    phase: { type: "over", winner: 0, points: 1 },
+    lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+  });
+
+  const reviewOf = (overrides: Partial<ReviewRow> = {}): ReviewRow => ({
+    gameId: GAME_ID,
+    load: "ready",
+    error: null,
+    frames: [asFrame(1, startingState()), asFrame(2, rolled), asFrame(3, afterSix), asFrame(4, turnOver)],
+    through: 4,
+    at: null,
+    ...overrides,
+  });
+  /** The game as it stands: seat 1 is about to roll, and the review is on it. */
+  const live = viewOf({ snapshot: snapshotOf({ revision: 4, state: turnOver }) });
+  /** The opening tag of a control of the review, by its label. */
+  const control = (html: string, label: string) =>
+    html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`))?.[0] ?? "";
+  /** Server rendering marks where one piece of text ends and the next begins, which a reader does not see. */
+  const plain = (html: string) => html.replaceAll("<!-- -->", "");
+  const panel = (html: string) => plain(html).slice(plain(html).indexOf('aria-label="Review"'));
+
+  describe("starting", () => {
+    it("is offered at the end of a game, to a player and to a spectator", () => {
+      const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
+
+      for (const userId of [ADA, GRACE, STRANGER]) {
+        expect(render(userId, finished)).toMatch(/<button[^>]*class="button button-quiet"[^>]*>Review game</);
+      }
+    });
+
+    it("is offered in the status of a game in progress, to a player and to a spectator", () => {
+      for (const userId of [ADA, GRACE, STRANGER]) {
+        const html = render(userId, live);
+
+        expect(html).toMatch(/<button[^>]*>Review moves</);
+        expect(html).not.toContain("Review game");
+        expect(html).not.toContain('aria-label="Review"');
+      }
+    });
+
+    it("is not offered before anything has been played: there is nothing to step through", () => {
+      expect(render(ADA, viewOf())).not.toContain("Review");
+    });
+
+    it("is not offered while the game waits for a player", () => {
+      expect(render(ADA, waiting)).not.toContain("Review");
+    });
+  });
+
+  describe("on the board", () => {
+    it("takes the place of the status, or of the result", () => {
+      const html = render(ADA, live, { review: reviewOf() });
+
+      expect(html).toContain('aria-label="Review"');
+      expect(html).not.toContain('aria-label="Turn"');
+      expect(html).not.toContain("Review moves");
+      const finished = viewOf({ snapshot: snapshotOf({ state: over }) });
+      const afterwards = render(ADA, finished, { review: reviewOf({ frames: [asFrame(9, over)] }) });
+      expect(afterwards).toContain('aria-label="Review"');
+      expect(afterwards).not.toContain('aria-label="Result"');
+    });
+
+    it("shows the newest position when the review opens, which is the game as it stands", () => {
+      const html = panel(render(STRANGER, live, { review: reviewOf() }));
+
+      expect(html).toContain("Ada played 18→15");
+      expect(html).toContain("4 / 4");
+    });
+
+    it("shows the position that was picked, with what led to it", () => {
+      const html = panel(render(STRANGER, live, { review: reviewOf({ at: 1 }) }));
+
+      expect(html).toContain("Ada rolled 6-3");
+      expect(html).toContain("2 / 4");
+      expect(render(STRANGER, live, { review: reviewOf({ at: 0 }) })).toContain("Start of the game");
+    });
+
+    it("calls the viewer \"You\" in what it says, as the rest of the page does", () => {
+      expect(panel(render(ADA, live, { review: reviewOf({ at: 1 }) }))).toContain("You rolled 6-3");
+      expect(panel(render(GRACE, live, { review: reviewOf({ at: 1 }) }))).toContain("Ada rolled 6-3");
+    });
+
+    it("draws the position picked in the bars over and under the board, not the game as it stands", () => {
+      const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
+      const frames = [asFrame(1, startingState()), asFrame(9, over)];
+
+      expect(plain(render(ADA, ended, { review: reviewOf({ frames, at: 0 }) }))).not.toContain('class="player-off"');
+      expect(plain(render(ADA, ended, { review: reviewOf({ frames, at: null }) }))).toContain("15 borne off</span>");
+    });
+
+    it("moves who is to move with the position", () => {
+      const forFrame = (at: number | null) => render(ADA, live, { review: reviewOf({ at }) });
+
+      // In the game seat 1 (Grace) is to roll; in the position after the roll, seat 0 (Ada) is to move.
+      expect(forFrame(null).match(/player-bar-active/g)).toHaveLength(1);
+      expect(forFrame(null).indexOf("player-bar-below player-bar-active")).toBeGreaterThan(-1);
+      expect(forFrame(1).indexOf("player-bar-above player-bar-active")).toBeGreaterThan(-1);
+    });
+
+    it("lets nothing be played, even on the player's own turn", () => {
+      const mine = viewOf({ snapshot: snapshotOf({ revision: 4, state: startingState() }) });
+      expect(render(ADA, mine)).toContain("Roll dice");
+
+      const html = render(ADA, mine, { review: reviewOf() });
+
+      expect(html).not.toContain("Roll dice");
+      expect(html).not.toContain(">Undo<");
+    });
+
+    it("says what the game is waiting for, so that a player's turn is not missed", () => {
+      const mine = viewOf({ snapshot: snapshotOf({ revision: 4, state: startingState() }) });
+
+      expect(panel(render(ADA, mine, { review: reviewOf() }))).toContain("In the game: Your turn. Roll the dice.");
+      expect(panel(render(GRACE, mine, { review: reviewOf() }))).toContain("In the game: Waiting for Ada to roll.");
+    });
+
+    it("says no such thing once the game is over", () => {
+      const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
+
+      expect(panel(render(ADA, ended, { review: reviewOf({ frames: [asFrame(9, over)] }) }))).not.toContain(
+        "In the game",
+      );
+    });
+
+    it("gives the result with the last position", () => {
+      const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
+      const frames = [asFrame(1, startingState()), asFrame(9, over)];
+
+      const html = panel(render(ADA, ended, { review: reviewOf({ frames }) }));
+
+      expect(html).toContain("You played 1→off");
+      expect(html).toContain("Game over. You won, 1 point.");
+    });
+  });
+
+  describe("the controls", () => {
+    it("can go back but not on from the newest position", () => {
+      const html = render(ADA, live, { review: reviewOf() });
+
+      expect(control(html, "First position")).not.toContain("disabled");
+      expect(control(html, "Previous position")).not.toContain("disabled");
+      expect(control(html, "Next position")).toContain("disabled");
+      expect(control(html, "Latest position")).toContain("disabled");
+    });
+
+    it("can go on but not back from the first", () => {
+      const html = render(ADA, live, { review: reviewOf({ at: 0 }) });
+
+      expect(control(html, "First position")).toContain("disabled");
+      expect(control(html, "Previous position")).toContain("disabled");
+      expect(control(html, "Next position")).not.toContain("disabled");
+      expect(control(html, "Latest position")).not.toContain("disabled");
+    });
+
+    it("has a slider over all the positions, set to the one shown", () => {
+      const html = render(ADA, live, { review: reviewOf({ at: 2 }) });
+
+      expect(html).toMatch(/<input[^>]*type="range"[^>]*min="0"[^>]*max="3"[^>]*value="2"/);
+      expect(html).toContain('aria-valuetext="3 of 4"');
+    });
+
+    it("is held back with a single position, when there is nowhere to go", () => {
+      const html = render(ADA, live, { review: reviewOf({ frames: [asFrame(4, turnOver)] }) });
+
+      expect(plain(html)).toContain("1 / 1");
+      for (const label of ["First position", "Previous position", "Next position", "Latest position"]) {
+        expect(control(html, label)).toContain("disabled");
+      }
+      expect(html).toMatch(/<input[^>]*type="range"[^>]*disabled/);
+    });
+
+    it("always has the way back to the game", () => {
+      for (const review of [reviewOf(), reviewOf({ load: "loading", frames: [] }), reviewOf({ load: "failed", error: "No." })]) {
+        expect(panel(render(ADA, live, { review }))).toContain("Close review");
+      }
+    });
+  });
+
+  describe("while the positions are on their way", () => {
+    const loading = reviewOf({ load: "loading", frames: [], through: -1 });
+
+    it("says so, and shows the game as it stands", () => {
+      const html = panel(render(ADA, live, { review: loading }));
+
+      expect(html).toContain("Loading the moves…");
+      expect(html).not.toContain("Next position");
+    });
+
+    it("lets nothing be played", () => {
+      const mine = viewOf({ snapshot: snapshotOf({ revision: 4, state: startingState() }) });
+
+      expect(render(ADA, mine, { review: loading })).not.toContain("Roll dice");
+    });
+
+    it("keeps the positions it has when it asks again", () => {
+      const html = panel(render(ADA, live, { review: reviewOf({ load: "loading" }) }));
+
+      expect(html).toContain("You played 18→15");
+      expect(html).not.toContain("Loading the moves…");
+    });
+  });
+
+  describe("when the positions could not be had", () => {
+    const failed = reviewOf({ load: "failed", error: "Something went wrong on the server. Try again.", frames: [], through: -1 });
+
+    it("says why, as an alert, and offers to try again", () => {
+      const html = panel(render(ADA, live, { review: failed }));
+
+      expect(html).toMatch(/role="alert">Something went wrong on the server\. Try again\./);
+      expect(html).toMatch(/<button[^>]*>Try again</);
+      expect(html).not.toContain("Loading the moves…");
+      expect(html).not.toContain("Nothing was kept");
+    });
+
+    it("offers nothing to try again when nothing failed", () => {
+      expect(panel(render(ADA, live, { review: reviewOf() }))).not.toContain("Try again");
+    });
+  });
+
+  describe("a game that was not kept", () => {
+    it("says that nothing was kept when there are no positions at all", () => {
+      const html = panel(render(ADA, live, { review: reviewOf({ frames: [], through: -1 }) }));
+
+      expect(html).toContain("Nothing was kept of this game.");
+    });
+
+    it("says that what came before the first position was not kept, when it is not the beginning", () => {
+      const finished = viewOf({ snapshot: snapshotOf({ revision: 30, state: over }) });
+      const html = panel(render(ADA, finished, { review: reviewOf({ frames: [asFrame(30, over)] }) }));
+
+      expect(html).toContain("What was played before this position was not kept.");
+    });
+
+    it("says nothing of the kind for a game that is kept from its start", () => {
+      expect(panel(render(ADA, live, { review: reviewOf() }))).not.toContain("not kept");
+    });
   });
 });

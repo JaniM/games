@@ -20,7 +20,9 @@
 //!   "rematch": null }
 //! ```
 //!
-//! `state` is whatever the game defines, and is null until every seat is taken.
+//! `state` is whatever the game defines, and is null until every seat is taken. A snapshot
+//! holds only the newest state; the ones before it are in the game's history, which is read
+//! over HTTP (see `history`) and whose `revision`s are the ones snapshots carry.
 //! `playerNames` is parallel to `players` and null for a player who has no name. A player
 //! who changes their name is published at once, as a snapshot with the same `revision` as
 //! before (the game did not change), so replace what you have unless `revision` is lower.

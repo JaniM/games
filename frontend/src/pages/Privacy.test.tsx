@@ -31,6 +31,7 @@ describe("the privacy policy", () => {
     expect(html).toContain("access token");
     expect(html).toContain("display name");
     expect(html).toContain("every game you are in");
+    expect(html).toContain("the game’s state");
   });
 
   it("says what the browser keeps, under the keys the code uses", () => {

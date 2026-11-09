@@ -5,6 +5,7 @@ import {
   continueMoves,
   followRematch,
   joinGameRequest,
+  loadReview,
   rematchRequest,
   sendActions,
 } from "./effects";
@@ -14,6 +15,7 @@ import {
   actionSent,
   askRematch,
   closeGame,
+  closeReview,
   connectionChanged,
   declineRematch,
   gameProblem,
@@ -21,19 +23,25 @@ import {
   joinGame,
   joined,
   openGame,
+  openReview,
   rematchFailed,
   rematchSent,
+  retryReview,
+  reviewFailed,
+  reviewLoaded,
   selectPoint,
   sendQueued,
   setAutoplay,
+  showFrame,
   snapshotReceived,
+  stepFrame,
   submitAction,
   submitMoves,
 } from "./ops";
-import { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
+import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
 
 export const game = feature({
-  tables: { gameViews, gameActions, joinRequests, rematchRequests },
+  tables: { gameViews, gameActions, joinRequests, rematchRequests, reviews },
   ops: {
     openGame,
     closeGame,
@@ -55,6 +63,13 @@ export const game = feature({
     declineRematch,
     rematchSent,
     rematchFailed,
+    openReview,
+    closeReview,
+    reviewLoaded,
+    reviewFailed,
+    retryReview,
+    showFrame,
+    stepFrame,
   },
   effects: {
     connectGame,
@@ -64,6 +79,7 @@ export const game = feature({
     continueMoves,
     rematchRequest,
     followRematch,
+    loadReview,
   },
 });
 
@@ -71,18 +87,26 @@ export const game = feature({
 export {
   askRematch,
   closeGame,
+  closeReview,
   declineRematch,
   joinGame,
   openGame,
+  openReview,
+  retryReview,
   selectPoint,
   setAutoplay,
+  showFrame,
+  stepFrame,
   submitAction,
   submitMoves,
 } from "./ops";
+export { hasMoves, moveForKey, shownIndex } from "./review";
+export type { ReviewMove } from "./review";
 export { isFull, landing, seatOf } from "./selectors";
 export type { Landing } from "./selectors";
 export type {
   Action,
+  Frame,
   LongBackgammonState,
   Phase,
   Rematch,
@@ -90,4 +114,4 @@ export type {
   Snapshot,
   Step,
 } from "./schemas";
-export { gameActions, gameViews, joinRequests, rematchRequests } from "./tables";
+export { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";

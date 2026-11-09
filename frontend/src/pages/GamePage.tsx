@@ -3,14 +3,20 @@ import { useEffect } from "react";
 import {
   askRematch,
   closeGame,
+  closeReview,
   declineRematch,
   gameViews,
   joinGame,
   joinRequests,
   openGame,
+  openReview,
   rematchRequests,
+  retryReview,
+  reviews,
   selectPoint,
   setAutoplay,
+  showFrame,
+  stepFrame,
   submitAction,
   submitMoves,
 } from "../features/game";
@@ -26,12 +32,18 @@ export function GamePage({ gameId }: { gameId: string }) {
   const view = useQuery(gameViews.get(gameId));
   const join = useQuery(joinRequests.get(gameId));
   const rematch = useQuery(rematchRequests.get(gameId));
+  const review = useQuery(reviews.get(gameId));
   const session = useQuery(sessionState.get(SESSION_ID));
   const open = useOp(openGame);
   const close = useOp(closeGame);
   const requestJoin = useOp(joinGame);
   const requestRematch = useOp(askRematch);
   const declineOffer = useOp(declineRematch);
+  const startReview = useOp(openReview);
+  const endReview = useOp(closeReview);
+  const askAgain = useOp(retryReview);
+  const showPosition = useOp(showFrame);
+  const stepPosition = useOp(stepFrame);
   const select = useOp(selectPoint);
   const submit = useOp(submitAction);
   const submitMove = useOp(submitMoves);
@@ -55,10 +67,16 @@ export function GamePage({ gameId }: { gameId: string }) {
       userId={session?.userId ?? null}
       join={join}
       rematchRequest={rematch}
+      review={review}
       inviteUrl={`${location.origin}${gamePath(gameId)}`}
       onJoin={() => requestJoin({ gameId })}
       onRematch={() => requestRematch({ gameId })}
       onDeclineRematch={() => declineOffer({ gameId })}
+      onReview={() => startReview({ gameId })}
+      onCloseReview={() => endReview({ gameId })}
+      onRetryReview={() => askAgain({ gameId })}
+      onShowFrame={(index) => showPosition({ gameId, index })}
+      onStepFrame={(by) => stepPosition({ gameId, by })}
       onRoll={() => submit({ gameId, action: { type: "roll" } })}
       onUndo={() => submit({ gameId, action: { type: "undo" } })}
       onAutoplay={(on) => autoplay({ gameId, on })}

@@ -71,6 +71,33 @@ export type LongBackgammonState = z.infer<typeof stateSchema>;
 export type Seat = 0 | 1;
 
 /**
+ * A position as the server keeps it in a game's history: the state without what the server
+ * works out again from it (`legal` and `combos`). Nothing can be played in a position of the
+ * past, so a client puts empty lists back (see `asFrame`) and draws it like any other state.
+ */
+export const positionSchema = stateSchema.omit({ legal: true, combos: true });
+export type Position = z.infer<typeof positionSchema>;
+
+/**
+ * One position of a game in review: the state the game was in, and the revision of the
+ * snapshot that showed it. Nothing in it is playable: `legal` and `combos` are empty.
+ */
+export const frameSchema = z.object({ revision: z.number().int(), state: stateSchema });
+export type Frame = z.infer<typeof frameSchema>;
+
+/**
+ * What `GET /api/games/{id}/history` answers, with the positions still unread so that a bad
+ * one can be reported, as with a snapshot's state. They are in the order they were played,
+ * and empty for a game from before positions were kept.
+ */
+export const incomingHistorySchema = z.object({
+  gameId: z.string(),
+  kind: z.string(),
+  stateVersion: z.number().int(),
+  positions: z.array(z.object({ revision: z.number().int(), state: z.unknown() })),
+});
+
+/**
  * Where the rematch of a finished game stands. It is not part of the rules, so it is beside
  * the state in a snapshot. A rematch is a new game with the same two players.
  */

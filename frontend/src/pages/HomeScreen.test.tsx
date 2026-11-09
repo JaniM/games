@@ -26,7 +26,7 @@ afterEach(() => {
 function render(overrides: Partial<HomeScreenProps> = {}) {
   const db = createDb({ features: { router } });
   dbs.push(db);
-  const noop = () => {};
+  const noop = () => { };
   return renderToString(
     <DbProvider db={db}>
       <HomeScreen
@@ -223,7 +223,7 @@ describe("the dialog for creating a game", () => {
     const html = render({ request: request() });
 
     expect(html).toContain("<dialog");
-    expect(html).toContain("New game: Long backgammon");
+    expect(html).toContain("Long backgammon");
     expect(html).toContain("Race all fifteen of your checkers");
     expect(html).toContain("Create game");
     expect(html).toContain("Cancel");
@@ -291,7 +291,7 @@ describe("the dialog for creating a game", () => {
     const html = render({ request: request({ kind: "chess" }) });
     const dialog = html.slice(html.indexOf("<dialog"));
 
-    expect(dialog).toContain("New game: chess");
+    expect(dialog).toContain("chess");
     expect(dialog).not.toContain("Race all fifteen");
   });
 });

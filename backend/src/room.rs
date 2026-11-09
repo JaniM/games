@@ -9,6 +9,8 @@
 //! adopt it and publish a [`Snapshot`] of the whole game to everyone connected, so
 //! what clients see has always been stored. If a save fails, the room can no longer
 //! tell what the database holds. It shuts down and the next request loads the truth.
+//! A change that gives the game a state is also kept in the game's history, in the same
+//! transaction (see `history`).
 //!
 //! A room stays in memory as long as anyone is [`Connection`]ed to it, and for
 //! [`IDLE_GRACE`] after the last request or disconnection. The grace period covers the
@@ -33,6 +35,7 @@ use crate::{
     bot::BOT_USER,
     game::{Engine, Games, Live},
     game_id::GameId,
+    history,
     rematch::{self, Outcome, Rematch},
 };
 
@@ -152,14 +155,9 @@ impl Rooms {
         creator: Uuid,
     ) -> Result<GameId, RoomError> {
         // A game for one player has no one to wait for.
-        let (state, finished) = match engine.players() {
-            1 => {
-                let live = engine.start();
-                (to_json(Some(live.as_ref()))?, live.is_over())
-            }
-            _ => (None, false),
-        };
-        self.create_with(engine, &[creator], state, finished).await
+        let live = (engine.players() == 1).then(|| engine.start());
+        let game = NewGame::new(engine.as_ref(), vec![creator], live.as_deref())?;
+        self.create_with(game).await
     }
 
     /// Creates a game against the bot, which takes seat 1. The game starts at once, because
@@ -173,25 +171,15 @@ impl Rooms {
             return Err(RoomError::NoBot);
         }
         let live = engine.start();
-        let state = to_json(Some(live.as_ref()))?;
-        self.create_with(engine, &[creator, BOT_USER], state, live.is_over())
-            .await
+        let game = NewGame::new(
+            engine.as_ref(),
+            vec![creator, BOT_USER],
+            Some(live.as_ref()),
+        )?;
+        self.create_with(game).await
     }
 
-    async fn create_with(
-        &self,
-        engine: &Arc<dyn Engine>,
-        players: &[Uuid],
-        state: Option<Value>,
-        finished: bool,
-    ) -> Result<GameId, RoomError> {
-        let game = NewGame {
-            kind: engine.kind(),
-            state_version: engine.state_version() as i32,
-            players: players.to_vec(),
-            state,
-            finished,
-        };
+    async fn create_with(&self, game: NewGame) -> Result<GameId, RoomError> {
         let id = self
             .insert(&game)
             .await
@@ -628,10 +616,16 @@ impl Room {
         // The last seat starts the game.
         let live = (seat + 1 == self.engine.players()).then(|| self.engine.start());
         let state = to_json(live.as_deref())?;
+        let record = to_record(live.as_deref())?;
         let finished = live.as_deref().is_some_and(|live| live.is_over());
 
-        self.save(Some((seat, user)), state.as_ref(), finished)
-            .await?;
+        self.save(
+            Some((seat, user)),
+            state.as_ref(),
+            record.as_ref(),
+            finished,
+        )
+        .await?;
         self.players.push(user);
         self.live = live;
         self.revision += 1;
@@ -654,8 +648,10 @@ impl Room {
     /// Makes `next`, the game after an action, the game: saves it, and then tells everyone.
     async fn commit(&mut self, next: Box<dyn Live>) -> Result<(), RoomError> {
         let state = to_json(Some(next.as_ref()))?;
+        let record = to_record(Some(next.as_ref()))?;
 
-        self.save(None, state.as_ref(), next.is_over()).await?;
+        self.save(None, state.as_ref(), record.as_ref(), next.is_over())
+            .await?;
         self.live = Some(next);
         self.revision += 1;
         self.refresh_names().await;
@@ -724,13 +720,11 @@ impl Room {
     /// The game that follows this one: new, for the same players in the same seats.
     fn rematch_game(&self) -> Result<NewGame, RoomError> {
         let live = self.engine.start();
-        Ok(NewGame {
-            kind: self.engine.kind(),
-            state_version: self.engine.state_version() as i32,
-            players: self.players.clone(),
-            state: to_json(Some(live.as_ref()))?,
-            finished: live.is_over(),
-        })
+        NewGame::new(
+            self.engine.as_ref(),
+            self.players.clone(),
+            Some(live.as_ref()),
+        )
     }
 
     /// Publishes the game again if `user`, a player here, has a different name than the room
@@ -763,13 +757,14 @@ impl Room {
         self.players.iter().position(|player| *player == user)
     }
 
-    /// Writes a change to the database as the next revision: the state, whether the game
-    /// has ended with it, and the player who joined with it if there is one. The room is
-    /// stale if this fails.
+    /// Writes a change to the database as the next revision: the state (and its record for the
+    /// game's history, see `history`), whether the game has ended with it, and the player who
+    /// joined with it if there is one. The room is stale if this fails.
     async fn save(
         &mut self,
         new_player: Option<(usize, Uuid)>,
         state: Option<&Value>,
+        record: Option<&Value>,
         finished: bool,
     ) -> Result<(), RoomError> {
         let change = Change {
@@ -778,6 +773,7 @@ impl Room {
             state_version: self.engine.state_version() as i32,
             new_player,
             state,
+            record,
             finished,
         };
         // Not a method: the future may only borrow what it needs, so that a game's
@@ -828,6 +824,13 @@ fn to_json(live: Option<&dyn Live>) -> Result<Option<Value>, RoomError> {
         .map_err(|err| internal(err, "could not write a game state as JSON"))
 }
 
+/// The game's state as the history keeps it (see `history`). Null for a game that hasn't started.
+fn to_record(live: Option<&dyn Live>) -> Result<Option<Value>, RoomError> {
+    live.map(|live| live.to_record())
+        .transpose()
+        .map_err(|err| internal(err, "could not write a game state as JSON for the history"))
+}
+
 /// Logs what went wrong and gives the error that goes to the requester.
 fn internal(err: impl std::fmt::Display, context: &str) -> RoomError {
     tracing::error!(%err, "{context}");
@@ -841,10 +844,31 @@ struct NewGame {
     players: Vec<Uuid>,
     /// Null for a game that waits for more players.
     state: Option<Value>,
+    /// The state as the history keeps it: there exactly when `state` is.
+    record: Option<Value>,
     finished: bool,
 }
 
+impl NewGame {
+    /// A game of `engine`'s kind for `players`, in the state `live` if it has started.
+    fn new(
+        engine: &dyn Engine,
+        players: Vec<Uuid>,
+        live: Option<&dyn Live>,
+    ) -> Result<Self, RoomError> {
+        Ok(Self {
+            kind: engine.kind(),
+            state_version: engine.state_version() as i32,
+            players,
+            state: to_json(live)?,
+            record: to_record(live)?,
+            finished: live.is_some_and(|live| live.is_over()),
+        })
+    }
+}
+
 /// Stores a new game and its players as part of the transaction `tx`, and returns its id.
+/// A game that has started is in the history from its first state, at revision 0.
 async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, String> {
     let db = |err: sqlx::Error| err.to_string();
     // A random id is taken by another game once in a very long while. Then try another.
@@ -879,6 +903,9 @@ async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, St
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+    }
+    if let Some(record) = &game.record {
+        history::insert(tx, &id, 0, game.state_version, record).await?;
     }
     Ok(id)
 }
@@ -946,12 +973,16 @@ struct Change<'a> {
     state_version: i32,
     new_player: Option<(usize, Uuid)>,
     state: Option<&'a Value>,
+    /// The state as the history keeps it: there exactly when `state` is. It goes into the
+    /// history under the revision of the change.
+    record: Option<&'a Value>,
     /// The game has ended with this state.
     finished: bool,
 }
 
-/// Stores a change in one transaction, as revision `from_revision + 1`. Fails if the game
-/// is no longer at `from_revision`, i.e. somebody else changed it. The error is for the log.
+/// Stores a change in one transaction, as revision `from_revision + 1`, along with its state
+/// in the game's history. Fails, and leaves nothing behind, if the game is no longer at
+/// `from_revision`, i.e. somebody else changed it. The error is for the log.
 async fn write(pool: &PgPool, change: Change<'_>) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
     if let Some((seat, user)) = change.new_player {
@@ -983,6 +1014,17 @@ async fn write(pool: &PgPool, change: Change<'_>) -> Result<(), String> {
             "game is no longer at revision {}",
             change.from_revision
         ));
+    }
+    if let Some(record) = change.record {
+        let revision = change.from_revision + 1;
+        history::insert(
+            &mut tx,
+            change.game_id,
+            revision,
+            change.state_version,
+            record,
+        )
+        .await?;
     }
     tx.commit().await.map_err(|err| err.to_string())
 }
@@ -1949,5 +1991,280 @@ mod tests {
         // The game and its new game are saved together or not at all.
         assert_eq!(game_count(&pool).await, 1);
         eventually("the room shuts down", || !rooms.is_open(&id)).await;
+    }
+
+    // --- The history ---
+
+    /// The game's history as the database holds it: revision, state version and state, oldest
+    /// first.
+    async fn history_of(pool: &PgPool, id: &GameId) -> Vec<(i64, i32, Value)> {
+        sqlx::query_as(
+            "SELECT revision, state_version, state FROM game_history
+             WHERE game_id = $1 ORDER BY revision",
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    fn tallied(total: i64, turn: usize) -> Value {
+        json!({ "total": total, "turn": turn })
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_waits_for_a_player_has_no_history(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+
+        let id = waiting_game(&rooms, creator).await;
+
+        assert_eq!(history_of(&pool, &id).await, []);
+    }
+
+    #[sqlx::test]
+    async fn the_history_begins_when_the_last_player_joins(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+
+        let id = started_game(&rooms, first, second).await;
+
+        assert_eq!(history_of(&pool, &id).await, [(1, 1, tallied(0, 0))]);
+    }
+
+    #[sqlx::test]
+    async fn every_accepted_action_adds_the_state_it_led_to(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
+
+        ada.act(add(1)).await.unwrap();
+        grace.act(add(2)).await.unwrap();
+        ada.act(add(3)).await.unwrap();
+
+        assert_eq!(
+            history_of(&pool, &id).await,
+            [
+                (1, 1, tallied(0, 0)),
+                (2, 1, tallied(1, 1)),
+                (3, 1, tallied(3, 0)),
+                (4, 1, tallied(6, 1)),
+            ]
+        );
+        // The newest state of the history is the game's own.
+        assert_eq!(stored(&pool, &id).await.2, Some(tallied(6, 1)));
+    }
+
+    #[sqlx::test]
+    async fn a_refused_action_adds_nothing_to_the_history(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let grace = rooms.connect(&id, second).await.unwrap();
+
+        // It is Ada's turn.
+        assert!(grace.act(add(5)).await.is_err());
+
+        assert_eq!(history_of(&pool, &id).await, [(1, 1, tallied(0, 0))]);
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_starts_when_it_is_made_has_its_first_state_at_revision_zero(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let solo = rooms.games().get("solo").unwrap().clone();
+
+        let alone = rooms.create(&solo, creator).await.unwrap();
+        let against_bot = bot_game(&rooms, creator).await;
+
+        assert_eq!(
+            history_of(&pool, &alone).await,
+            [(0, 1, json!({ "count": 0 }))]
+        );
+        assert_eq!(
+            history_of(&pool, &against_bot).await,
+            [(0, 1, tallied(0, 0))]
+        );
+    }
+
+    #[sqlx::test]
+    async fn the_bots_moves_are_in_the_history_like_the_players(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        let id = bot_game(&rooms, creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+
+        connection.act(add(5)).await.unwrap();
+        next(&mut connection).await;
+        next(&mut connection).await;
+
+        assert_eq!(
+            history_of(&pool, &id).await,
+            [
+                (0, 1, tallied(0, 0)),
+                (1, 1, tallied(5, 1)),
+                (2, 1, tallied(6, 0)),
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_adds_nothing_to_the_old_history_and_starts_the_new_one(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (ada, grace) = (user(&pool).await, user(&pool).await);
+        let id = finished_game(&rooms, ada, grace).await;
+        let over = vec![
+            (1, 1, json!({ "over": false })),
+            (2, 1, json!({ "over": true })),
+        ];
+        assert_eq!(history_of(&pool, &id).await, over);
+
+        rooms.ask_rematch(&id, ada).await.unwrap();
+        rooms.decline_rematch(&id, grace).await.unwrap();
+        rooms.ask_rematch(&id, grace).await.unwrap();
+        let reply = rooms.ask_rematch(&id, ada).await.unwrap();
+
+        // The revisions rose by the offer, the refusal, the new offer and its answer, but the
+        // game was in the same state through all of them.
+        assert_eq!(stored(&pool, &id).await.0, 6);
+        assert_eq!(history_of(&pool, &id).await, over);
+        assert_eq!(
+            history_of(&pool, &next_game(reply)).await,
+            [(0, 1, json!({ "over": false }))]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_player_changing_their_name_adds_nothing_to_the_history(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let mut ada = rooms.connect(&id, first).await.unwrap();
+        ada.latest();
+
+        sqlx::query("UPDATE users SET name = 'Ada' WHERE id = $1")
+            .bind(first)
+            .execute(&pool)
+            .await
+            .unwrap();
+        rooms.name_changed(first);
+        next(&mut ada).await;
+
+        assert_eq!(history_of(&pool, &id).await, [(1, 1, tallied(0, 0))]);
+    }
+
+    #[sqlx::test]
+    async fn a_save_that_is_refused_leaves_nothing_in_the_history(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        // Somebody else changes the game behind the room's back.
+        sqlx::query("UPDATE games SET revision = revision + 1 WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(ada.act(add(5)).await, Err(RoomError::Internal));
+
+        assert_eq!(history_of(&pool, &id).await, [(1, 1, tallied(0, 0))]);
+    }
+
+    #[sqlx::test]
+    async fn a_state_is_saved_with_its_history_or_not_at_all(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        // The history already has a state at the revision the action would make.
+        sqlx::query(
+            "INSERT INTO game_history (game_id, revision, state_version, state)
+             VALUES ($1, 2, 1, '{}')",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(ada.act(add(5)).await, Err(RoomError::Internal));
+
+        // The game did not move on without its history.
+        assert_eq!(stored(&pool, &id).await, (1, 1, Some(tallied(0, 0))));
+    }
+
+    #[sqlx::test]
+    async fn the_history_goes_with_the_game(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        assert_eq!(history_of(&pool, &id).await.len(), 1);
+
+        sqlx::query("DELETE FROM games WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(history_of(&pool, &id).await, []);
+    }
+
+    #[sqlx::test]
+    async fn a_whole_long_backgammon_game_leaves_a_history_the_server_can_load(pool: PgPool) {
+        let rooms = rooms(
+            &pool,
+            Games::default().with::<crate::long_backgammon::LongBackgammon>(),
+        );
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let engine = rooms.games().get("long-backgammon").unwrap().clone();
+        let id = rooms.create(&engine, first).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
+        // By seat.
+        let mut players = [
+            rooms.connect(&id, first).await.unwrap(),
+            rooms.connect(&id, second).await.unwrap(),
+        ];
+
+        // Whoever is to move rolls, or plays the first step the server lists as legal.
+        let mut actions = 0;
+        loop {
+            let state = players[0]
+                .latest()
+                .state
+                .clone()
+                .expect("the game has started");
+            let action = match state["phase"]["type"].as_str().unwrap() {
+                "roll" => json!({ "type": "roll" }),
+                "move" => {
+                    let step = &state["legal"][0];
+                    json!({ "type": "move", "from": step["from"], "die": step["die"] })
+                }
+                _ => break,
+            };
+            let seat = state["turn"].as_u64().unwrap() as usize;
+            players[seat].act(action).await.unwrap();
+            actions += 1;
+            assert!(actions < 5000, "the game does not end");
+        }
+
+        // The start of the game, and a state for each action after it.
+        let history = history_of(&pool, &id).await;
+        assert_eq!(history.len(), actions + 1);
+        for (n, (revision, version, state)) in history.iter().enumerate() {
+            assert_eq!(*revision, n as i64 + 1);
+            // The record leaves out what the game works out again.
+            assert!(state.get("legal").is_none() && state.get("combos").is_none());
+            let live = engine
+                .load(*version as u32, state.clone())
+                .expect("a recorded state loads");
+            assert_eq!(live.to_record().as_ref(), Ok(state), "revision {revision}");
+        }
+        // The last one is the game as it ended, as the players were told.
+        let (_, version, last) = history.last().unwrap();
+        let live = engine.load(*version as u32, last.clone()).unwrap();
+        assert!(live.is_over());
+        assert_eq!(Some(live.to_json().unwrap()), players[0].latest().state);
     }
 }

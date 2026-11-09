@@ -17,6 +17,7 @@ mod bot;
 mod error;
 mod game;
 mod game_id;
+mod history;
 mod lobby;
 mod long_backgammon;
 mod profile;
@@ -102,6 +103,7 @@ fn app(state: AppState) -> Router {
             "/api/games/{id}/rematch",
             post(lobby::ask_rematch).delete(lobby::decline_rematch),
         )
+        .route("/api/games/{id}/history", get(history::game_history))
         .route("/api/games/{id}/ws", get(socket::connect))
         .with_state(state)
 }

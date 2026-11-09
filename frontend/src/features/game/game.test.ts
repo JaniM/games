@@ -6,7 +6,7 @@ import { LOCATION_ID, locationState, router } from "../router";
 import { SESSION_ID, session, sessionState } from "../session";
 import { AUTOPLAY_PAUSE_MS } from "./autoplay";
 import { QUEUED_STEP_PAUSE_MS } from "./effects";
-import { game, gameActions, gameViews, joinRequests, rematchRequests } from "./index";
+import { game, gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./index";
 
 // A fresh db per test, from the same features the app uses.
 const dbs: { dispose(): void }[] = [];
@@ -1364,6 +1364,435 @@ describe("a rematch", () => {
       }
 
       expect(pushState).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("reviewing a game", () => {
+  // One turn of seat 0 (White), then the next player is to roll. The server keeps the position
+  // without `legal` and `combos`; the revision is the one the position had.
+  const rolled = startingState(moving([6, 3], [{ from: 1, die: 6 }, { from: 1, die: 3 }]));
+  const afterSix = startingState({
+    points: [board({ 1: 14, 7: 1 }), board({ 1: 15 })],
+    ...moving([6, 3], [{ from: 7, die: 3 }], [{ from: 1, die: 6 }], [3]),
+  });
+  const turnOver = startingState({
+    turn: 1,
+    turns: [1, 0],
+    points: [board({ 1: 14, 10: 1 }), board({ 1: 15 })],
+    lastTurn: { seat: 0, dice: [6, 3], played: [{ from: 1, die: 6 }, { from: 7, die: 3 }] },
+  });
+  const over = startingState({
+    off: [15, 2],
+    turns: [41, 40],
+    phase: { type: "over", winner: 0, points: 1 },
+    lastTurn: { seat: 0, dice: [1, 2], played: [{ from: 24, die: 1 }] },
+  });
+
+  const kept = (...positions: [number, ReturnType<typeof startingState>][]) =>
+    positions.map(([revision, { legal: _legal, combos: _combos, ...state }]) => ({ revision, state }));
+  const review = (db: TestDb) => db.read(reviews.get(GAME_ID));
+  const revisions = (db: TestDb) => review(db)?.frames.map((frame) => frame.revision);
+  const historyCalls = (fetchMock: ReturnType<typeof setup>["fetchMock"]) =>
+    fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/history"));
+  const keep = (server: ReturnType<typeof setup>["server"], history: ReturnType<typeof kept>, kind = "long-backgammon") =>
+    server.addGame({ id: GAME_ID, kind, players: ["user-a", "user-b"], history });
+
+  /** Opens the review of a game whose snapshot is at `revision`, and waits for the positions. */
+  async function opened(db: TestDb, revision: number, state = afterSix) {
+    const socket = await connected(db, { revision, state });
+    db.ops.game.openReview({ gameId: GAME_ID });
+    await settle();
+    return socket;
+  }
+
+  describe("opening", () => {
+    it("asks the server for the positions, with the user's token, and keeps them as frames", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      await connected(db, { revision: 3, state: afterSix });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      expect(review(db)).toMatchObject({ load: "loading", frames: [], at: null });
+      await settle();
+
+      const [input, init] = historyCalls(fetchMock)[0] ?? [];
+      expect(String(input)).toBe(`/api/games/${GAME_ID}/history`);
+      expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${issued(1).accessToken}`);
+      expect(review(db)).toMatchObject({ load: "ready", error: null, through: 3, at: null });
+      expect(revisions(db)).toEqual([1, 2, 3]);
+    });
+
+    it("keeps nothing in the frames that could be played", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await opened(db, 2, rolled);
+
+      const states = review(db)?.frames.map((frame) => frame.state) ?? [];
+      expect(states).toHaveLength(2);
+      expect(states.every((state) => state.legal.length === 0 && state.combos.length === 0)).toBe(true);
+    });
+
+    it("leaves out the steps that were taken back", async () => {
+      const { db, server } = setup();
+      keep(
+        server,
+        kept([1, startingState()], [2, rolled], [3, afterSix], [4, rolled], [5, afterSix], [6, turnOver]),
+      );
+      await opened(db, 6, turnOver);
+
+      expect(revisions(db)).toEqual([1, 2, 5, 6]);
+      expect(review(db)?.through).toBe(6);
+    });
+
+    it("asks once, however many times it is pressed", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await connected(db, { revision: 2, state: rolled });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("needs a game that has started", async () => {
+      const { db, fetchMock } = setup();
+      await connected(db, { players: ["user-a"], playerNames: ["Ada"], state: null });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(review(db)).toBeUndefined();
+      expect(historyCalls(fetchMock)).toHaveLength(0);
+    });
+
+    it("begins with the game as it stands when the server kept no positions, as for a game from before they were", async () => {
+      const { db, server } = setup();
+      keep(server, []);
+      await opened(db, 30, afterSix);
+
+      expect(review(db)).toMatchObject({ load: "ready", through: 30 });
+      expect(revisions(db)).toEqual([30]);
+    });
+
+    it("adds a snapshot that came while the positions were on their way", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+
+      await opened(db, 3, afterSix); // the page holds revision 3; the server answers up to 2
+
+      expect(revisions(db)).toEqual([1, 2, 3]);
+      expect(review(db)?.through).toBe(3);
+    });
+
+    it("asks again when the answer is behind the game by more than one, and takes what the server has when asking again gets no further", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+
+      await opened(db, 5, turnOver);
+
+      expect(historyCalls(fetchMock)).toHaveLength(2);
+      expect(review(db)).toMatchObject({ load: "ready", through: 2 });
+      expect(revisions(db)).toEqual([1, 2]);
+    });
+  });
+
+  describe("following a game that goes on", () => {
+    it("adds the position of each snapshot as a frame", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      const socket = await opened(db, 2, rolled);
+
+      socket.receive(snapshotMessage({ revision: 3, state: afterSix }));
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2, 3]);
+      expect(review(db)?.through).toBe(3);
+    });
+
+    it("takes a step back as the frame it came from", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      const socket = await opened(db, 3, afterSix);
+
+      socket.receive(snapshotMessage({ revision: 4, state: rolled }));
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2]);
+      expect(review(db)?.through).toBe(4);
+    });
+
+    it("asks the server again when snapshots were missed, and keeps the frames it has until the answer", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      const socket = await opened(db, 2, rolled);
+      keep(server, kept([1, startingState()], [2, rolled], [3, afterSix], [4, rolled], [5, afterSix]));
+
+      socket.receive(snapshotMessage({ revision: 5, state: afterSix }));
+      expect(review(db)).toMatchObject({ load: "loading", through: 2 });
+      expect(revisions(db)).toEqual([1, 2]);
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(2);
+      expect(review(db)).toMatchObject({ load: "ready", through: 5 });
+      expect(revisions(db)).toEqual([1, 2, 5]);
+    });
+
+    it("adds nothing for the snapshots of a rematch, which come after the end", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled], [3, over]));
+      const socket = await opened(db, 3, over);
+
+      socket.receive(snapshotMessage({ revision: 4, state: over, rematch: { type: "offered", by: 0 } }));
+      socket.receive(snapshotMessage({ revision: 5, state: over, rematch: { type: "accepted", gameId: gameIdOf(2) } }));
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(1);
+      expect(revisions(db)).toEqual([1, 2, 3]);
+      expect(review(db)).toMatchObject({ load: "ready", through: 3 });
+    });
+
+    it("leaves a review that is still loading to the answer, which takes the newest snapshot", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      const socket = await connected(db, { revision: 2, state: rolled });
+      db.ops.game.openReview({ gameId: GAME_ID });
+
+      socket.receive(snapshotMessage({ revision: 3, state: afterSix }));
+      expect(review(db)).toMatchObject({ load: "loading", frames: [] });
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2, 3]);
+    });
+  });
+
+  describe("stepping", () => {
+    /** Frames at revisions 1, 2 and 3, with the review open on the newest. */
+    async function threeFrames() {
+      const ctx = setup();
+      keep(ctx.server, kept([1, startingState()], [2, rolled], [3, afterSix]));
+      const socket = await opened(ctx.db, 3, afterSix);
+      return { ...ctx, socket };
+    }
+    const step = (db: TestDb, by: number) => db.ops.game.stepFrame({ gameId: GAME_ID, by });
+    const show = (db: TestDb, index: number) => db.ops.game.showFrame({ gameId: GAME_ID, index });
+
+    it("opens on the newest frame, which is no frame in particular", async () => {
+      const { db } = await threeFrames();
+
+      expect(review(db)?.at).toBeNull();
+    });
+
+    it("goes back a frame at a time, and stops at the first", async () => {
+      const { db } = await threeFrames();
+
+      step(db, -1);
+      expect(review(db)?.at).toBe(1);
+      step(db, -1);
+      expect(review(db)?.at).toBe(0);
+      step(db, -1);
+      expect(review(db)?.at).toBe(0);
+    });
+
+    it("goes forward again, and the newest is the newest once more", async () => {
+      const { db } = await threeFrames();
+      show(db, 0);
+
+      step(db, 1);
+      expect(review(db)?.at).toBe(1);
+      step(db, 1);
+      expect(review(db)?.at).toBeNull();
+      step(db, 1);
+      expect(review(db)?.at).toBeNull();
+    });
+
+    it("jumps to a frame, and to either end", async () => {
+      const { db } = await threeFrames();
+
+      show(db, 1);
+      expect(review(db)?.at).toBe(1);
+      show(db, 0);
+      expect(review(db)?.at).toBe(0);
+      show(db, 99);
+      expect(review(db)?.at).toBeNull();
+      show(db, -4);
+      expect(review(db)?.at).toBe(0);
+    });
+
+    it("stays on the frame it was put on while the game goes on", async () => {
+      const { db, socket } = await threeFrames();
+      show(db, 1);
+
+      socket.receive(snapshotMessage({ revision: 4, state: turnOver }));
+      await settle();
+
+      expect(revisions(db)).toEqual([1, 2, 3, 4]);
+      expect(review(db)?.at).toBe(1);
+    });
+
+    it("follows the game on the newest frame, which is where it opens", async () => {
+      const { db, socket } = await threeFrames();
+
+      socket.receive(snapshotMessage({ revision: 4, state: turnOver }));
+      await settle();
+
+      expect(review(db)?.at).toBeNull();
+    });
+
+    it("does nothing without frames", async () => {
+      const { db } = setup();
+      await connected(db, { revision: 2, state: rolled });
+      db.ops.game.openReview({ gameId: GAME_ID });
+
+      step(db, -1);
+      show(db, 1);
+
+      expect(review(db)?.at).toBeNull();
+    });
+  });
+
+  describe("closing", () => {
+    it("ends the review and nothing else: the game is still there", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await opened(db, 2, rolled);
+
+      db.ops.game.closeReview({ gameId: GAME_ID });
+
+      expect(review(db)).toBeUndefined();
+      expect(view(db)?.snapshot?.revision).toBe(2);
+    });
+
+    it("can be opened again, and asks again, since the game may have gone on", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await opened(db, 2, rolled);
+      db.ops.game.closeReview({ gameId: GAME_ID });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(2);
+      expect(revisions(db)).toEqual([1, 2]);
+    });
+
+    it("goes with the page", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await opened(db, 2, rolled);
+
+      db.ops.game.closeGame({ gameId: GAME_ID });
+
+      expect(review(db)).toBeUndefined();
+    });
+
+    it("drops an answer that comes after the review was closed", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await connected(db, { revision: 2, state: rolled });
+      db.ops.game.openReview({ gameId: GAME_ID });
+
+      db.ops.game.closeReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(review(db)).toBeUndefined();
+    });
+  });
+
+  describe("when the positions cannot be had", () => {
+    it("says the game is gone for a 404", async () => {
+      const { db } = setup();
+      await connected(db, { revision: 2, state: rolled });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(review(db)).toMatchObject({ load: "failed", error: "This game does not exist any more." });
+    });
+
+    it("says something went wrong for a failure of the server or the network, and can be tried again", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await connected(db, { revision: 2, state: rolled });
+      fetchMock.mockImplementationOnce(async () => new Response(null, { status: 500 }));
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+      expect(review(db)).toMatchObject({ load: "failed", error: "Something went wrong on the server. Try again." });
+
+      fetchMock.mockImplementationOnce(async () => {
+        throw new TypeError("network down");
+      });
+      db.ops.game.retryReview({ gameId: GAME_ID });
+      expect(review(db)).toMatchObject({ load: "loading", error: null });
+      await settle();
+      expect(review(db)).toMatchObject({ load: "failed", error: "Something went wrong on the server. Try again." });
+
+      db.ops.game.retryReview({ gameId: GAME_ID });
+      await settle();
+      expect(review(db)).toMatchObject({ load: "ready", error: null });
+      expect(revisions(db)).toEqual([1, 2]);
+    });
+
+    it("keeps the frames it has when asking again fails", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      const socket = await opened(db, 2, rolled);
+      fetchMock.mockImplementationOnce(async () => new Response(null, { status: 500 }));
+
+      socket.receive(snapshotMessage({ revision: 5, state: afterSix })); // skips some
+      await settle();
+
+      expect(review(db)).toMatchObject({ load: "failed" });
+      expect(revisions(db)).toEqual([1, 2]);
+    });
+
+    it("does not retry unless it failed", async () => {
+      const { db, server, fetchMock } = setup();
+      keep(server, kept([1, startingState()], [2, rolled]));
+      await opened(db, 2, rolled);
+
+      db.ops.game.retryReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(historyCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("says the page needs reloading for another kind of game", async () => {
+      const { db, server } = setup();
+      keep(server, kept([1, startingState()]), "chess");
+      await connected(db, { revision: 2, state: rolled });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(review(db)).toMatchObject({
+        load: "failed",
+        error: "This link is for a different kind of game than this page can show.",
+      });
+    });
+
+    it("says the page needs reloading for a position it cannot read", async () => {
+      const { db, server } = setup();
+      server.addGame({
+        id: GAME_ID,
+        kind: "long-backgammon",
+        players: ["user-a", "user-b"],
+        history: [{ revision: 1, state: { somethingNew: true } }],
+      });
+      await connected(db, { revision: 2, state: rolled });
+
+      db.ops.game.openReview({ gameId: GAME_ID });
+      await settle();
+
+      expect(review(db)).toMatchObject({
+        load: "failed",
+        error: "This game needs a newer version of the site. Reload the page to get it.",
+      });
     });
   });
 });

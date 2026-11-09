@@ -30,6 +30,8 @@ export interface FakeGame {
   updatedAt: number;
   /** The game has ended. */
   finished?: boolean;
+  /** The positions the game has been in, as `GET /api/games/{id}/history` lists them. Left out, there are none. */
+  history?: { revision: number; state: unknown }[];
 }
 
 /**
@@ -38,6 +40,7 @@ export interface FakeGame {
  * belongs to, `POST /api/games`, `GET /api/games` and `POST /api/games/{id}/join`
  * keep a list of games (two seats each), `POST` and `DELETE /api/games/{id}/rematch` answer
  * as the real ones do to a game that is unknown (404), not the user's (403) or not over (409),
+ * `GET /api/games/{id}/history` lists the positions the game was given (404 for an unknown game),
  * and any other path answers 200 to a known token. Unknown tokens get 401.
  *
  * `users` maps access tokens to users. Clearing it makes the server forget everyone.
@@ -68,6 +71,7 @@ export function fakeServer() {
     if (!user) return new Response(null, { status: 401 });
     const join = /^\/api\/games\/([^/]+)\/join$/.exec(path);
     const rematch = /^\/api\/games\/([^/]+)\/rematch$/.exec(path);
+    const history = /^\/api\/games\/([^/]+)\/history$/.exec(path);
     if (path === "/api/games" && init?.method === "POST") {
       const { kind, bot = false } = JSON.parse(String(init.body)) as { kind: string; bot?: boolean };
       if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
@@ -108,6 +112,11 @@ export function fakeServer() {
         game.updatedAt = tick();
       }
       return json({ gameId: game.id, seat: game.players.indexOf(user.userId) });
+    }
+    if (history) {
+      const game = games.get(history[1] ?? "");
+      if (!game) return new Response(null, { status: 404 });
+      return json({ gameId: game.id, kind: game.kind, stateVersion: 1, positions: game.history ?? [] });
     }
     if (rematch) {
       const game = games.get(rematch[1] ?? "");

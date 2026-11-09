@@ -9,16 +9,21 @@ import {
   type gameViews,
   type joinRequests,
   type rematchRequests,
+  type reviews,
+  hasMoves,
   isFull,
   seatOf,
+  shownIndex,
 } from "../features/game";
 import { gamePath } from "../features/router";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
 import { type Colour, colourOf } from "./layout";
+import { ReviewPanel } from "./ReviewPanel";
 import {
   barNameOf,
+  frameText,
   lastThrowText,
   lastTurnText,
   rematchStage,
@@ -31,6 +36,7 @@ import { VolumeControl } from "./VolumeControl";
 export type GameViewRow = RowOf<typeof gameViews>;
 export type JoinRequestRow = RowOf<typeof joinRequests>;
 export type RematchRequestRow = RowOf<typeof rematchRequests>;
+export type ReviewRow = RowOf<typeof reviews>;
 
 export interface GameScreenProps {
   /** The game page's row, or undefined for the moment before the page has opened it. */
@@ -40,6 +46,8 @@ export interface GameScreenProps {
   join: JoinRequestRow | undefined;
   /** An answer about the rematch that is on its way, or has failed; undefined if there is none. */
   rematchRequest: RematchRequestRow | undefined;
+  /** The page is stepping through the game's positions, or is about to: undefined if it is not. */
+  review: ReviewRow | undefined;
   /** The link to give to the opponent. It is also how anyone else can watch. */
   inviteUrl: string;
   onJoin: () => void;
@@ -47,6 +55,15 @@ export interface GameScreenProps {
   onRematch: () => void;
   /** Takes back one's own ask for a rematch, or says no to the other player's. */
   onDeclineRematch: () => void;
+  /** Starts stepping through the game's positions. */
+  onReview: () => void;
+  onCloseReview: () => void;
+  /** Asks again for the positions, after that failed. */
+  onRetryReview: () => void;
+  /** Shows the position at this index of the review. */
+  onShowFrame: (index: number) => void;
+  /** Shows the position this many places on in the review: 1 for the next, -1 for the one before. */
+  onStepFrame: (by: number) => void;
   onRoll: () => void;
   /** Takes back the last step of the turn in progress. */
   onUndo: () => void;
@@ -100,10 +117,16 @@ export function GameScreen({
   userId,
   join,
   rematchRequest,
+  review,
   inviteUrl,
   onJoin,
   onRematch,
   onDeclineRematch,
+  onReview,
+  onCloseReview,
+  onRetryReview,
+  onShowFrame,
+  onStepFrame,
   onRoll,
   onUndo,
   onAutoplay,
@@ -144,8 +167,16 @@ export function GameScreen({
   const connected = view.connection === "open";
   const over = state?.phase.type === "over";
   const myTurn = state !== null && mySeat !== null && state.turn === mySeat && !over;
+  // In a review the board shows a position of the past, which nothing can be played in.
+  const reviewing = review !== undefined;
   // Not while a step is on its way, nor between the steps of a combined move: it is one move.
-  const canAct = myTurn && connected && !view.busy && view.queued.length === 0;
+  const canAct = myTurn && connected && !view.busy && view.queued.length === 0 && !reviewing;
+  // The position on the board: the one picked in the review, else the game as it stands. While the
+  // positions are on their way, the game as it stands is all there is to show.
+  const shown = review ? shownIndex(review.frames.length, review.at) : null;
+  const frame = review && shown !== null ? review.frames[shown] : undefined;
+  const board = frame?.state ?? state;
+  const canReview = state !== null && hasMoves(state);
   // Only a step of the turn in progress can be taken back: the one that ends the turn is final.
   const canUndo = canAct && state?.phase.type === "move" && state.phase.played.length > 0;
   const canJoin = userId !== null && mySeat === null && !isFull(snapshot);
@@ -163,6 +194,23 @@ export function GameScreen({
   // A player's own rematch answer has gone out and the other's is not back. It shows as a snapshot.
   const answering = rematchRequest?.state === "sending";
   const rematchProblem = rematchRequest?.state === "failed" ? rematchRequest.error : null;
+
+  // Takes the place of the status or the result under the board, while the user steps through the game.
+  const reviewPanel = review ? (
+    <ReviewPanel
+      loading={review.load === "loading"}
+      error={review.load === "failed" ? review.error : null}
+      count={review.frames.length}
+      index={shown}
+      text={frame ? frameText(snapshot, frame.state, mySeat) : null}
+      partial={review.frames[0] !== undefined && hasMoves(review.frames[0].state)}
+      live={over ? "" : `In the game: ${turnText(snapshot, mySeat)}`}
+      onShow={onShowFrame}
+      onStep={onStepFrame}
+      onRetry={onRetryReview}
+      onClose={onCloseReview}
+    />
+  ) : null;
 
   const status = result ? (
     <section className={result.won ? "result result-won" : "result"} aria-label="Result">
@@ -221,6 +269,9 @@ export function GameScreen({
             Go to the rematch
           </Link>
         )}
+        <button className="button button-quiet" type="button" onClick={onReview}>
+          Review game
+        </button>
         {/* The way out is the main button only when there is nothing else to do. */}
         <Link className={rematch.stage === "closed" ? "button" : "button button-quiet"} to={HOME}>
           All games
@@ -238,17 +289,24 @@ export function GameScreen({
         </p>
       )}
       {lastThrow && <p className="status-warning">{lastThrow}</p>}
-      {showAutoplay && mySeat !== null && state && (
+      {(canReview || (showAutoplay && mySeat !== null && state)) && (
         <div className="status-actions">
-          <button
-            className="button button-quiet button-small"
-            type="button"
-            aria-pressed={view.auto}
-            title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
-            onClick={() => onAutoplay(!view.auto)}
-          >
-            Auto-play
-          </button>
+          {canReview && (
+            <button className="button button-quiet button-small" type="button" onClick={onReview}>
+              Review moves
+            </button>
+          )}
+          {showAutoplay && mySeat !== null && state && (
+            <button
+              className="button button-quiet button-small"
+              type="button"
+              aria-pressed={view.auto}
+              title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
+              onClick={() => onAutoplay(!view.auto)}
+            >
+              Auto-play
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -288,17 +346,17 @@ export function GameScreen({
       <PlayerBar
         edge="above"
         name={barNameOf(snapshot, viewer, mySeat)}
-        colour={state ? colourOf(viewer, state, viewer) : null}
-        off={state?.off[viewer] ?? 0}
-        toMove={state !== null && !over && state.turn === viewer}
+        colour={board ? colourOf(viewer, board, viewer) : null}
+        off={board?.off[viewer] ?? 0}
+        toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
         empty={viewer >= snapshot.players.length}
       />
       <div className="board-wrap">
         <Board
-          state={state}
-          revision={snapshot.revision}
+          state={board}
+          revision={frame?.revision ?? snapshot.revision}
           viewer={viewer}
-          selected={view.selected}
+          selected={reviewing ? null : view.selected}
           interactive={canAct}
           player={mySeat !== null}
           onSelect={onSelect}
@@ -326,13 +384,13 @@ export function GameScreen({
       <PlayerBar
         edge="below"
         name={barNameOf(snapshot, opponent, mySeat)}
-        colour={state ? colourOf(opponent, state, viewer) : null}
-        off={state?.off[opponent] ?? 0}
-        toMove={state !== null && !over && state.turn === opponent}
+        colour={board ? colourOf(opponent, board, viewer) : null}
+        off={board?.off[opponent] ?? 0}
+        toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
         empty={opponent >= snapshot.players.length}
       />
 
-      {status}
+      {reviewPanel ?? status}
     </Shell>
   );
 }

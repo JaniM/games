@@ -4,8 +4,9 @@
 //! A game is a pure rules engine: it knows its state, how to start one and how an
 //! action by a player changes it. It knows nothing about sockets, users or the
 //! database. A room keeps a game's state in memory as the game's own type. The state
-//! becomes JSON only at the edges: when it is stored, sent to clients, or read back
-//! from storage. An action is read from JSON, because that is how it arrives.
+//! becomes JSON only at the edges: when it is stored (and kept in the game's history), sent
+//! to clients, or read back from storage. An action is read from JSON, because that is how
+//! it arrives.
 //!
 //! To add a game, implement [`Game`] and register it in [`registry`].
 
@@ -81,6 +82,19 @@ pub trait Game: 'static {
         false
     }
 
+    /// The state as it is kept in the game's history, which lets the game be stepped through
+    /// afterwards (see `history`). A game may leave out whatever it can work out again from
+    /// the rest, because the history keeps a state for every change and would otherwise
+    /// store the same derived data hundreds of times.
+    ///
+    /// What this returns must be a state that [`Engine::load`] accepts, in the layout of
+    /// [`Game::STATE_VERSION`]: a history row is brought up to date like a stored game is, and
+    /// is shown by writing it as JSON again. The default keeps the whole state.
+    fn record(state: &Self::State) -> Result<Value, StateError> {
+        serde_json::to_value(state)
+            .map_err(|err| StateError::new(format!("could not write a state as JSON: {err}")))
+    }
+
     /// The state of a new game, once all the seats are taken. May use randomness, e.g. to
     /// choose who begins.
     fn start() -> Self::State;
@@ -131,6 +145,9 @@ pub trait Live: Send {
     /// The state as JSON, to store and to send to clients.
     fn to_json(&self) -> Result<Value, StateError>;
 
+    /// The state as JSON, to keep in the game's history. See [`Game::record`].
+    fn to_record(&self) -> Result<Value, StateError>;
+
     /// Whether the game has ended. See [`Game::is_over`].
     fn is_over(&self) -> bool;
 
@@ -152,6 +169,10 @@ impl<G: Game> Live for Running<G> {
     fn to_json(&self) -> Result<Value, StateError> {
         serde_json::to_value(&self.0)
             .map_err(|err| StateError::new(format!("could not write a state as JSON: {err}")))
+    }
+
+    fn to_record(&self) -> Result<Value, StateError> {
+        G::record(&self.0)
     }
 
     fn is_over(&self) -> bool {

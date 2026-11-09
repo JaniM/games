@@ -155,6 +155,54 @@ describe("a step", () => {
   });
 });
 
+describe("going back through the game, as a review does", () => {
+  /** After the mover played 6 and 3, the turn has passed to seat 1, who is to roll. */
+  const turnOver = startingState({
+    turn: 1,
+    turns: [1, 0],
+    points: [board({ 1: 14, 10: 1 }), board({ 1: 15 })],
+    lastTurn: { seat: 0, dice: [6, 3], played: [{ from: 1, die: 6 }, { from: 7, die: 3 }] },
+  });
+
+  it("is the checker going back, also when the step it takes back ended the turn", () => {
+    expect(motionBetween(turnOver, afterSix, 0)).toEqual({
+      type: "move",
+      seat: 0,
+      from: { at: 10, count: 1 },
+      to: { at: 7, count: 1 },
+    });
+  });
+
+  it("is not a roll when the player to roll goes back to the last step of the one before", () => {
+    // Both are "to roll, then dice to play" in shape; only the player to move tells them apart.
+    expect(motionBetween(turnOver, afterSix, 0)?.type).not.toBe("roll");
+  });
+
+  it("is a bear-off taken back from the end of the game", () => {
+    const before = startingState({
+      points: [board({ 24: 1 }), board({ 1: 15 })],
+      off: [14, 0],
+      ...moving([1, 2], [{ from: 24, die: 1 }]),
+    });
+    const over = startingState({
+      points: [board({}), board({ 1: 15 })],
+      off: [15, 0],
+      phase: { type: "over", winner: 0, points: 2 },
+    });
+
+    expect(motionBetween(over, before, 0)).toEqual({
+      type: "move",
+      seat: 0,
+      from: { at: "off", count: 15 },
+      to: { at: 24, count: 1 },
+    });
+  });
+
+  it("is nothing when the roll itself is taken back: the dice just go", () => {
+    expect(motionBetween(rolled, startingState(), 0)).toBeNull();
+  });
+});
+
 describe("nothing to follow", () => {
   it("is the case without an earlier position, or without a later one", () => {
     expect(motionBetween(null, rolled, 0)).toBeNull();
