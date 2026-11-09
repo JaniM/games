@@ -38,10 +38,10 @@ use crate::{
 /// How long a room with nobody connected stays in memory.
 pub const IDLE_GRACE: Duration = Duration::from_secs(30);
 
-/// How long the bot waits before each action it plays. The front end takes 900 ms to roll
-/// the dice (`ROLL_MS`) and 450 ms to move a checker, so the player sees one thing finish
+/// How long the bot waits before each action it plays. The front end takes 450 ms to roll
+/// the dice (`ROLL_MS`) and 225 ms to move a checker, so the player sees one thing finish
 /// before the next starts.
-pub const BOT_PAUSE: Duration = Duration::from_millis(900);
+pub const BOT_PAUSE: Duration = Duration::from_millis(450);
 
 /// How many random ids a new game tries before giving up. One is nearly always enough.
 const ID_ATTEMPTS: usize = 3;

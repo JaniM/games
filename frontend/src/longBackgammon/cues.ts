@@ -25,8 +25,8 @@ export interface TimedCue {
 
 // How long the motions take to play, as in `--move-ms` and `--roll-ms` in styles.css. A
 // checker is heard where it lands, so its sound waits for the end of the flight.
-export const MOVE_MS = 450;
-export const ROLL_MS = 900;
+export const MOVE_MS = 225;
+export const ROLL_MS = 450;
 
 /** The pause between the last motion and the jingle that ends the game. */
 const BEFORE_RESULT_MS = 250;

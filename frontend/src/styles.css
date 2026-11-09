@@ -1017,8 +1017,8 @@ form.name-control .button {
 
 .board {
   /* How long a checker takes to cross the board, and the dice to settle. */
-  --move-ms: 450ms;
-  --roll-ms: 900ms;
+  --move-ms: 225ms;
+  --roll-ms: 450ms;
   display: block;
   width: 100%;
   height: auto;
