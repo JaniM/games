@@ -1326,7 +1326,7 @@ form.name-control .button {
   stroke-opacity: 0.25;
 }
 
-/* The selected checker can be borne off: the whole tray is where to press, and shows it. */
+/* A checker can be borne off (the selected one, or the farthest if none is): the whole tray is where to press, and shows it. */
 .tray-box-active {
   stroke: var(--accent);
   stroke-opacity: 1;

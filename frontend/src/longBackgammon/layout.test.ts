@@ -7,6 +7,7 @@ import {
   destinations,
   diceFaces,
   diceWords,
+  farthestBearOff,
   landing,
   otherIndex,
   pointNumber,
@@ -400,6 +401,81 @@ describe("bearOffSteps", () => {
     expect(bearOffSteps(20, [way(20, [3], 23)])).toBeNull();
     expect(bearOffSteps(20, [])).toBeNull();
     expect(bearOffSteps(null, [way(20, [5], "off")])).toBeNull();
+  });
+});
+
+describe("farthestBearOff", () => {
+  type Steps = { from: number; die: number }[];
+  const home = (dice: [number, number], legal: Steps, combos: Steps[] = []) =>
+    startingState({
+      points: [board({ 19: 1, 20: 1, 22: 13 }), board({ 1: 15 })],
+      ...moving(dice, legal, [], undefined, combos),
+    });
+
+  it("bears off the farthest checker that a die bears off, with that die", () => {
+    // A 6 bears off the checker on 19. The 5 would bear off the one on 20, which is nearer.
+    const state = home(
+      [6, 5],
+      [
+        { from: 19, die: 5 },
+        { from: 19, die: 6 },
+        { from: 20, die: 5 },
+        { from: 22, die: 3 },
+      ],
+    );
+
+    expect(farthestBearOff(state)).toEqual([{ from: 19, die: 6 }]);
+  });
+
+  it("skips a farther checker that no die bears off", () => {
+    // The checker on 19 can only move in the home with a 4; the 5 bears off the one on 20.
+    const state = home(
+      [5, 4],
+      [
+        { from: 19, die: 4 },
+        { from: 20, die: 5 },
+        { from: 22, die: 3 },
+      ],
+    );
+
+    expect(farthestBearOff(state)).toEqual([{ from: 20, die: 5 }]);
+  });
+
+  it("uses the larger die when two could bear that checker off", () => {
+    const state = startingState({
+      points: [board({ 21: 15 }), board({ 1: 15 })],
+      ...moving([6, 5], [{ from: 21, die: 5 }, { from: 21, die: 6 }]),
+    });
+
+    expect(farthestBearOff(state)).toEqual([{ from: 21, die: 6 }]);
+  });
+
+  it("never plays several dice, even for a farther checker only they can bear off", () => {
+    // The 3 and the 3 together bear off the checker on 19 (19 to 22 to off), and a single 3
+    // bears off the one on 22. Only the single die is played.
+    const state = home(
+      [3, 3],
+      [
+        { from: 19, die: 3 },
+        { from: 20, die: 3 },
+        { from: 22, die: 3 },
+      ],
+      [
+        [
+          { from: 19, die: 3 },
+          { from: 22, die: 3 },
+        ],
+      ],
+    );
+
+    expect(farthestBearOff(state)).toEqual([{ from: 22, die: 3 }]);
+  });
+
+  it("is nothing when no die bears anything off", () => {
+    const state = home([2, 1], [{ from: 19, die: 2 }, { from: 20, die: 1 }]);
+
+    expect(farthestBearOff(state)).toBeNull();
+    expect(farthestBearOff(home([2, 1], []))).toBeNull();
   });
 });
 

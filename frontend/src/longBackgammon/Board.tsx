@@ -34,6 +34,7 @@ import {
   destinations,
   diceFaces,
   diceWords,
+  farthestBearOff,
   pointNumber,
   pointSlot,
   pressOutcome,
@@ -121,7 +122,9 @@ export function BoardView({
   const ways = active && picked !== null ? destinations(state, picked) : [];
   const targets = new Map<number, Destination>();
   for (const way of ways) if (way.to !== "off") targets.set(way.to, way);
-  const bearOff = bearOffSteps(picked, ways);
+  // The tray bears off the picked checker or, with none picked, the farthest one it can.
+  const bearOff =
+    picked !== null ? bearOffSteps(picked, ways) : active ? farthestBearOff(state) : null;
 
   function press(on: "piece" | "background", point: number) {
     const outcome = pressOutcome(on, point, picked, ways, sources);
@@ -356,7 +359,7 @@ interface TrayProps {
   count: number;
   colour: Colour;
   label: string;
-  /** The selected checker can be borne off: the tray offers the button for it. */
+  /** A checker can be borne off from here (the selected one, or with none selected the farthest): the tray is its button. */
   canBearOff?: boolean;
   /** The slot of a checker still flying in, which is not drawn until it lands, or null. */
   arriving: number | null;

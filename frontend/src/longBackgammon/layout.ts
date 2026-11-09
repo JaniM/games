@@ -162,6 +162,22 @@ export function bearOffSteps(picked: number | null, ways: readonly Destination[]
 }
 
 /**
+ * The steps that bear off a checker when none is selected (D11 in the rules doc): the
+ * farthest checker from the tray that one die can bear off, with that die alone, or null if
+ * no die bears anything off. Which die, if two could, is `bearOffSteps`' choice (D8). Several
+ * dice in a row are never played: a checker that only a combined move could bear off is not
+ * a candidate, and a nearer one that a single die bears off is played instead.
+ */
+export function farthestBearOff(state: LongBackgammonState): Step[] | null {
+  const farthest = Math.min(
+    ...state.legal.filter((step) => landing(step) === "off").map((step) => step.from),
+  );
+  // Math.min of nothing is Infinity: no step bears off. Otherwise `farthest` has a single die
+  // that bears it off, which `bearOffSteps` prefers to any combined move.
+  return Number.isFinite(farthest) ? bearOffSteps(farthest, destinations(state, farthest)) : null;
+}
+
+/**
  * The dice of a move in words, for a screen reader and a tooltip: "the 6", "the 6 and the 3"
  * or, for the same die repeated, "two 5s".
  */

@@ -290,12 +290,46 @@ describe("the tray as a bear-off button", () => {
     expect(count(drawPicked(home, 20), 'class="tray-box tray-box-active"')).toBe(1);
   });
 
-  it("is only the tray the picked checker can go to, and only while one is picked", () => {
-    for (const html of [drawPicked(home, null), drawPicked(home, 22)]) {
-      // The checker on 22 cannot be borne off with a 5 or a 2 here, and none is picked at all.
-      expect(html).not.toContain("bear-off");
-      expect(html).not.toContain("tray-box-active");
-    }
+  it("is lit for the farthest checker that can be borne off when none is picked", () => {
+    const html = drawPicked(home, null);
+
+    expect(count(html, 'aria-label="Bear off"')).toBe(1);
+    expect(count(html, 'class="tray-box tray-box-active"')).toBe(1);
+  });
+
+  it("is dark when the picked checker cannot be borne off, even if another could", () => {
+    // The checker on 22 cannot be borne off with a 5 or a 2 here, though the one on 20 could.
+    const html = drawPicked(home, 22);
+
+    expect(html).not.toContain("bear-off");
+    expect(html).not.toContain("tray-box-active");
+  });
+
+  it("is dark when no die bears anything off", () => {
+    const stuck = startingState({
+      points: [board({ 20: 1, 22: 14 }), board({ 1: 15 })],
+      ...moving([3, 2], [{ from: 20, die: 3 }, { from: 22, die: 2 }]),
+    });
+
+    expect(drawPicked(stuck, null)).not.toContain("bear-off");
+  });
+
+  it("is dark when it is not the viewer's turn to move", () => {
+    const html = renderToString(
+      <BoardView
+        state={home}
+        revision={7}
+        viewer={0}
+        selected={null}
+        interactive={false}
+        motion={null}
+        rolls={0}
+        onSelect={noop}
+        onMove={noop}
+      />,
+    );
+
+    expect(html).not.toContain("bear-off");
   });
 });
 
