@@ -37,7 +37,8 @@ function isForField(target: EventTarget | null): boolean {
 
 /**
  * Stepping through a game, in the place of the status under the board: what led to the position
- * on show, the buttons and the slider to move through the game, and the way back to it. The arrow
+ * on show, the buttons and the slider to move through the game, what else is worth knowing about
+ * the position (under them: that the game is over, and how it ended), and the way back to it. The arrow
  * keys step, and Home and End go to the ends.
  */
 export function ReviewPanel({
@@ -74,12 +75,9 @@ export function ReviewPanel({
     <section className="review" aria-label="Review">
       <p className="review-kicker">Review</p>
       {text ? (
-        <>
-          <p className="review-title" role="status" aria-live="polite">
-            {text.title}
-          </p>
-          {text.detail && <p className="review-detail">{text.detail}</p>}
-        </>
+        <p className="review-title" role="status" aria-live="polite">
+          {text.title}
+        </p>
       ) : loading ? (
         <p className="review-title" role="status">
           Loading the moves…
@@ -125,6 +123,8 @@ export function ReviewPanel({
           </span>
         </div>
       )}
+      {/* Under the bar, so that the bar stays where it is as the user steps, whether a position has more to say or not. */}
+      {text?.detail && <p className="review-detail">{text.detail}</p>}
       {partial && index !== null && (
         <p className="review-detail">What was played before this position was not kept.</p>
       )}

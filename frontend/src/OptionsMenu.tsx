@@ -24,7 +24,7 @@ export function closesMenu(event: { key: string; defaultPrevented: boolean }, op
 
 /**
  * A button that drops a small panel down from it, so that settings take no room on the page until
- * they are wanted ("Options" in the strip of a game page, the account in the top right corner). On
+ * they are wanted (the account menu in the top right corner, which holds the volume on a game's page). On
  * the browser's own `<details>`, which opens and closes with the button and tells a screen reader
  * that it does; the code here only adds the way out that a menu has: pressing outside it, or Esc,
  * closes it.

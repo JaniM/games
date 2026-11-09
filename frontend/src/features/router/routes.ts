@@ -6,6 +6,8 @@ import { GAMES } from "../../games";
  */
 export type Route =
   | { page: "home" }
+  /** `/games`: the public list, which anyone can read. */
+  | { page: "games" }
   /** `/games/<gameId>`: play or watch one game. The link is also the invite. */
   | { page: "game"; gameId: string }
   /** `/privacy`: what the site stores about people, and who can see it. */
@@ -23,6 +25,7 @@ export function parseRoute(pathname: string): Route {
   const path = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
   if (path === "/") return { page: "home" };
   if (path === "/privacy") return { page: "privacy" };
+  if (path === "/games") return { page: "games" };
 
   const [empty, section, first, second, ...rest] = path.split("/");
   if (empty !== "" || section !== "games" || first === undefined || rest.length > 0) {

@@ -116,6 +116,7 @@ fn app(state: AppState) -> Router {
             "/api/games",
             get(lobby::list_games).post(lobby::create_game),
         )
+        .route("/api/public-games", get(lobby::list_public_games))
         .route("/api/games/{id}/join", post(lobby::join_game))
         .route(
             "/api/games/{id}/rematch",

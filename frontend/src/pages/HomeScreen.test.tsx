@@ -36,6 +36,7 @@ function render(overrides: Partial<HomeScreenProps> = {}) {
         request={undefined}
         onNewGame={noop}
         onOpponent={noop}
+        onPublic={noop}
         onCreate={noop}
         onClose={noop}
         onReload={noop}
@@ -63,8 +64,19 @@ const request = (overrides: Partial<NewGameRow> = {}): NewGameRow => ({
   state: "choosing",
   kind: "long-backgammon",
   bot: false,
+  public: true,
   error: null,
   ...overrides,
+});
+
+describe("the title of the page", () => {
+  it("is not shown, but a screen reader has one", () => {
+    const html = render();
+
+    expect(html).toContain('<h1 class="visually-hidden">Games</h1>');
+    expect(html).not.toContain("page-header");
+    expect(html).not.toContain("Simple board games");
+  });
 });
 
 describe("the games to start", () => {
@@ -292,6 +304,29 @@ describe("the dialog for creating a game", () => {
     expect(html).toContain("Create game");
   });
 
+  it("has a box for a public game, ticked when the game is to be public", () => {
+    const html = render({ request: request({ public: true }) });
+
+    expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*checked=""/);
+    expect(html).toContain("Public game");
+    expect(html).toContain("Listed for anyone to watch once it has started.");
+  });
+
+  it("has the box unticked when the game is to be private", () => {
+    const html = render({ request: request({ public: false }) });
+
+    expect(html).toMatch(/<input[^>]*type="checkbox"/);
+    expect(html).not.toMatch(/<input[^>]*type="checkbox"[^>]*checked=""/);
+  });
+
+  it("has the box for a game with no bot too", () => {
+    const withoutBot = GAMES.map((game) => ({ ...game, bot: false }));
+
+    const html = render({ games: withoutBot, request: request() });
+
+    expect(html).toMatch(/<input[^>]*type="checkbox"/);
+  });
+
   it("can't be cancelled while the game is being made", () => {
     const html = render({ request: request({ state: "creating" }) });
 
@@ -301,6 +336,8 @@ describe("the dialog for creating a game", () => {
     // choice of opponent, which the request that has gone out can no longer take.
     expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(2);
     expect(html).toMatch(/<fieldset[^>]*disabled=""/);
+    // The request has gone out as it was, so the box can't change it either.
+    expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*disabled=""/);
   });
 
   it("shows why the game could not be made, and offers to try again", () => {

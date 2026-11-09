@@ -86,6 +86,27 @@ describe("the privacy policy", () => {
     expect(html).toContain("display name");
   });
 
+  it("says that a game can be public, who sees it then, and what that choice covers", () => {
+    const html = privacy();
+
+    expect(html).toContain("Anyone, with no link and no account,");
+    expect(html).toContain("can see the public games at");
+    expect(html).toContain('<a href="/games">/games</a>');
+    expect(html).toContain("left “Public game” ticked in the dialog for a new game");
+    expect(html).toContain("the site remembers the choice in that browser");
+    expect(html).toContain("anyone can open it and watch every move");
+    expect(html).toContain("A rematch of a public game is public.");
+    expect(html).toContain("Games still waiting for an opponent, and games made before the list existed, are not in it.");
+    expect(html).toContain("can’t be changed afterwards");
+  });
+
+  it("says the site keeps whether a game is public, and the browser whether new games are", () => {
+    const html = privacy();
+
+    expect(html).toContain("whether it is public");
+    expect(html).toContain("<code>games.public</code>");
+  });
+
   it("says that the host may keep access logs, with the IP address in them", () => {
     const html = privacy();
 
@@ -146,8 +167,9 @@ describe("the privacy policy", () => {
     expect(html).toContain("To have your games deleted, write to");
     expect(html).toContain('href="mailto:help@acme.test"');
     expect(html).toContain("with the links to them");
-    // Twice, each time as a link and as text: where the page says who runs the site, and where it says how to ask for deletion.
-    expect(html.match(/help@acme\.test/g)).toHaveLength(4);
+    // Three times, each time as a link and as text: where the page says who runs the site, where
+    // it says how to take a public game out of the list, and where it says how to ask for deletion.
+    expect(html.match(/help@acme\.test/g)).toHaveLength(6);
   });
 
   it("says that a game can only be opened with its link", () => {

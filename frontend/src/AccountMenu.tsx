@@ -1,9 +1,21 @@
 import { useOp, useQuery } from "millpond/react";
 import { NameControl } from "./NameControl";
 import { OptionsMenu } from "./OptionsMenu";
+import { VolumeControl } from "./VolumeControl";
 import { ACCOUNT_ID, accountRequest, openAccountForm, signOut } from "./features/account";
 import { PROFILE_ID, profileState } from "./features/profile";
 import { SESSION_ID, sessionState } from "./features/session";
+import { DEFAULT_VOLUME, SOUND_ID, setVolume, soundSettings } from "./features/sound";
+import { playCue } from "./longBackgammon/sounds";
+
+/** The volume of the game sounds, and what the slider does. */
+export interface SoundProps {
+  /** From 0 (silent) to 1. */
+  volume: number;
+  onChange: (volume: number) => void;
+  /** The person has let go of the slider: a good time to play a sound at the new level. */
+  onSettle: () => void;
+}
 
 export interface AccountMenuViewProps {
   /** The name on the button: an account's username, a guest's name if they have one, else null: the button says "Account" then. */
@@ -12,6 +24,8 @@ export interface AccountMenuViewProps {
   username: string | null;
   /** A request is on its way, so there is nothing to start. */
   busy: boolean;
+  /** The sound slider, for a page that has sound (a game's); null for one that has none. */
+  sound: SoundProps | null;
   onCreate: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -22,7 +36,8 @@ export interface AccountMenuViewProps {
  * The account in the top right corner: a button with the user's name on it, and under it the
  * name and what they can do about it. A guest can change their name (others see it with a guest
  * indicator) and make an account or sign in. An account's name is its username, which can't be
- * changed, and an account can sign out. Either can delete itself.
+ * changed, and an account can sign out. Either can delete itself. On a page with sound, the
+ * first thing in the list is the volume.
  *
  * Everything it shows comes from its props (the name field is the one part with a db of its own),
  * so it can be rendered without one. The forms are not in here: what is in a closed `<details>`
@@ -32,6 +47,7 @@ export function AccountMenuView({
   name,
   username,
   busy,
+  sound,
   onCreate,
   onSignIn,
   onSignOut,
@@ -62,6 +78,11 @@ export function AccountMenuView({
               )}
             </div>
             <ul className="menu-list">
+              {sound && (
+                <li className="menu-row">
+                  <VolumeControl volume={sound.volume} onChange={sound.onChange} onSettle={sound.onSettle} />
+                </li>
+              )}
               {username === null ? (
                 <>
                   <MenuItem disabled={busy} onClick={then(onCreate)}>
@@ -97,13 +118,15 @@ function MenuItem({ disabled, onClick, children }: { disabled: boolean; onClick:
   );
 }
 
-/** Connects the menu to the session, the profile and the account forms. */
-export function AccountMenu() {
+/** Connects the menu to the session, the profile, the sound and the account forms. `showSound` puts the volume in it. */
+export function AccountMenu({ showSound }: { showSound: boolean }) {
   const session = useQuery(sessionState.get(SESSION_ID));
   const profile = useQuery(profileState.get(PROFILE_ID));
   const request = useQuery(accountRequest.get(ACCOUNT_ID));
   const open = useOp(openAccountForm);
   const leave = useOp(signOut);
+  const volume = useQuery(soundSettings.get(SOUND_ID))?.volume ?? DEFAULT_VOLUME;
+  const changeVolume = useOp(setVolume);
 
   // An account's name is its username, which the session knows before the profile has loaded. A
   // guest's name being saved shows already, as in the name field.
@@ -114,6 +137,16 @@ export function AccountMenu() {
       name={name}
       username={session?.username ?? null}
       busy={request?.state === "submitting"}
+      sound={
+        showSound
+          ? {
+              volume,
+              onChange: (level) => changeVolume({ volume: level }),
+              // Letting go of the slider plays a knock, so that the new level can be heard.
+              onSettle: () => playCue("move", 0, volume),
+            }
+          : null
+      }
       onCreate={() => open({ form: "create" })}
       onSignIn={() => open({ form: "signIn" })}
       onSignOut={() => leave()}

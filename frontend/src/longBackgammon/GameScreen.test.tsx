@@ -65,8 +65,6 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
         showAutoplay={true}
         onSelect={noop}
         onMove={noop}
-        volume={0.7}
-        onVolume={noop}
         onCue={noop}
         {...extra}
       />
@@ -615,37 +613,41 @@ describe("the view from each side", () => {
   });
 });
 
-describe("the strip along the top", () => {
+describe("the top of the page", () => {
   const view = viewOf();
 
-  it("has the way back to the games before the title, so it costs no height of its own", () => {
+  it("shows no title: the nav says where you are, and only a screen reader gets one", () => {
     const html = render(ADA, view);
 
-    expect(html).toContain("← All games");
-    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf("Long backgammon"));
-    expect(html.indexOf('class="game-top"')).toBeLessThan(html.indexOf("← All games"));
+    expect(html).toContain('<h1 class="visually-hidden">Long backgammon</h1>');
+    expect(html).not.toContain("game-head");
+    expect(html).not.toContain("game-title");
   });
 
-  it("keeps the volume slider in an options menu beside it, closed until it is wanted", () => {
-    const html = render(ADA, view, { volume: 0.5 });
+  it("has no strip of its own: the nav and the account menu are the page's, not the game's", () => {
+    const html = render(ADA, view);
 
-    expect(html).toMatch(/<details[^>]*class="options"/);
-    expect(html).not.toMatch(/<details[^>]*\sopen/);
-    expect(html).toContain(">Options</span></summary>");
-    expect(html.indexOf("← All games")).toBeLessThan(html.indexOf('class="options"'));
-    expect(html.indexOf('class="options"')).toBeLessThan(html.indexOf('class="volume-slider"'));
-    expect(html.indexOf("</details>")).toBeGreaterThan(html.indexOf('class="volume-slider"'));
+    expect(html).not.toContain("game-top");
+    expect(html).not.toContain("← All games");
+    expect(html).not.toContain("Options");
   });
 
-  it("sets the slider to the volume it is given", () => {
-    const html = render(ADA, view, { volume: 0.5 });
+  it("has no volume slider: it is in the account menu", () => {
+    const html = render(ADA, view);
 
-    expect(html).toMatch(/<input[^>]*type="range"[^>]*value="10"/);
-    expect(html).toContain('aria-valuetext="50%"');
+    expect(html).not.toContain("volume");
+    expect(html).not.toContain("type=\"range\"");
   });
 
-  it("calls the slider's left end Off", () => {
-    expect(render(ADA, view, { volume: 0 })).toContain('aria-valuetext="Off"');
+  it("says a viewer is watching on a line of its own above the board, with no title beside it", () => {
+    const html = render(STRANGER, view);
+
+    expect(html).toContain('<p class="game-caption">You are watching this game.</p>');
+    expect(html.indexOf("game-caption")).toBeLessThan(html.indexOf("Waiting for Ada to roll."));
+  });
+
+  it("says nothing of the sort to a player", () => {
+    expect(render(ADA, view)).not.toContain("game-caption");
   });
 });
 
@@ -901,6 +903,17 @@ describe("reviewing a game", () => {
 
       expect(html).toContain("You played 1→off");
       expect(html).toContain("Game over. You won, 1 point.");
+    });
+
+    it("puts the result under the bar and not over it, so that the bar stays put as the user steps", () => {
+      const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
+      const frames = [asFrame(1, startingState()), asFrame(9, over)];
+
+      const html = panel(render(ADA, ended, { review: reviewOf({ frames }) }));
+
+      expect(html.indexOf("You played 1→off")).toBeLessThan(html.indexOf("review-controls"));
+      expect(html.indexOf("review-controls")).toBeLessThan(html.indexOf("Game over. You won, 1 point."));
+      expect(html.indexOf("Game over. You won, 1 point.")).toBeLessThan(html.indexOf("review-foot"));
     });
   });
 

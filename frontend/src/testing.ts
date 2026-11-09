@@ -41,6 +41,8 @@ export interface FakeGame {
   updatedAt: number;
   /** The game has ended. */
   finished?: boolean;
+  /** The game is in the public list once it has started. */
+  public?: boolean;
   /** The positions the game has been in, as `GET /api/games/{id}/history` lists them. Left out, there are none. */
   history?: { revision: number; state: unknown }[];
 }
@@ -49,8 +51,10 @@ export interface FakeGame {
  * A stand-in for the backend, with the same contract: `POST /api/register` issues
  * credentials, `GET /api/me` and `PATCH /api/me` act on the user a bearer token
  * belongs to, `POST /api/games`, `GET /api/games` and `POST /api/games/{id}/join`
- * keep a list of games (two seats each), `POST` and `DELETE /api/games/{id}/rematch` answer
- * as the real ones do to a game that is unknown (404), not the user's (403) or not over (409),
+ * keep a list of games (two seats each; `POST` takes `public`, off if left out),
+ * `GET /api/public-games` lists the public games that have started, newest change first, and needs
+ * no token, `POST` and `DELETE /api/games/{id}/rematch` answer as the real ones do to a game that
+ * is unknown (404), not the user's (403) or not over (409),
  * `GET /api/games/{id}/history` lists the positions the game was given (404 for an unknown game),
  * and any other path answers 200 to a known token. Unknown tokens get 401.
  *
@@ -77,6 +81,17 @@ export function fakeServer() {
     return clock;
   };
 
+  /** The names of a game's players by seat, and which of them are guests, as the server lists them. */
+  const playersOf = (game: FakeGame) => ({
+    playerNames: game.players.map((id) =>
+      id === BOT_USER_ID ? "Bot" : ([...users.values()].find((u) => u.userId === id)?.name ?? null),
+    ),
+    // The bot is not a guest, and neither is anyone with a username.
+    playerGuests: game.players.map(
+      (id) => id !== BOT_USER_ID && ![...users.values()].find((u) => u.userId === id)?.username,
+    ),
+  });
+
   const fetchImpl: typeof fetch = async (input, init) => {
     const path = String(input);
     if (path === "/api/register") {
@@ -99,6 +114,21 @@ export function fakeServer() {
       const session = `session-${sessions}`;
       users.set(session, account.user);
       return json({ userId: account.user.userId, accessToken: session, username: account.user.username });
+    }
+
+    if (path === "/api/public-games") {
+      const listed = [...games.values()]
+        .filter((game) => game.public && game.players.length === 2)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return json({
+        games: listed.map((game) => ({
+          gameId: game.id,
+          kind: game.kind,
+          finished: game.finished ?? false,
+          updatedAt: game.updatedAt,
+          ...playersOf(game),
+        })),
+      });
     }
 
     const token = new Headers(init?.headers).get("Authorization")?.replace(/^Bearer /, "");
@@ -144,13 +174,18 @@ export function fakeServer() {
     const rematch = /^\/api\/games\/([^/]+)\/rematch$/.exec(path);
     const history = /^\/api\/games\/([^/]+)\/history$/.exec(path);
     if (path === "/api/games" && init?.method === "POST") {
-      const { kind, bot = false } = JSON.parse(String(init.body)) as { kind: string; bot?: boolean };
+      const { kind, bot = false, public: isPublic = false } = JSON.parse(String(init.body)) as {
+        kind: string;
+        bot?: boolean;
+        public?: boolean;
+      };
       if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
       const game = {
         id: gameIdOf(games.size + 1),
         kind,
         players: bot ? [user.userId, BOT_USER_ID] : [user.userId],
         updatedAt: tick(),
+        public: isPublic,
       };
       games.set(game.id, game);
       return json({ gameId: game.id, seat: 0 }, 201);
@@ -166,15 +201,7 @@ export function fakeServer() {
           started: game.players.length === 2,
           finished: game.finished ?? false,
           updatedAt: game.updatedAt,
-          playerNames: game.players.map((id) =>
-            id === BOT_USER_ID
-              ? "Bot"
-              : ([...users.values()].find((u) => u.userId === id)?.name ?? null),
-          ),
-          // The bot is not a guest, and neither is anyone with a username.
-          playerGuests: game.players.map(
-            (id) => id !== BOT_USER_ID && ![...users.values()].find((u) => u.userId === id)?.username,
-          ),
+          ...playersOf(game),
         })),
       });
     }

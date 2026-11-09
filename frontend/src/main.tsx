@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { db } from "./db";
+import { loadPublic } from "./features/lobby";
 import { bindBrowserLocation } from "./features/router";
 import { loadCredentials } from "./features/session";
 import { loadVolume } from "./features/sound";
@@ -14,6 +15,8 @@ db.ops.backend.checkBackend();
 db.ops.session.startSession({ stored: loadCredentials() });
 // The volume the last visit ended on, or the default.
 db.ops.sound.startSound({ stored: loadVolume() });
+// Whether the last visit left a new game public, or the default.
+db.ops.lobby.startLobby({ stored: loadPublic() });
 // Reports the page we opened on, and every back or forward after it.
 bindBrowserLocation(db.ops.router.pathChanged);
 

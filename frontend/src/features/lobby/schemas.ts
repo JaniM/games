@@ -19,3 +19,17 @@ export const gamesReplySchema = z.object({
 
 /** What `POST /api/games` returns. */
 export const createdReplySchema = z.object({ gameId: z.string(), seat: z.number().int() });
+
+/** What `GET /api/public-games` returns. */
+export const publicGamesReplySchema = z.object({
+  games: z.array(
+    z.object({
+      gameId: z.string(),
+      kind: z.string(),
+      finished: z.boolean(),
+      updatedAt: z.number(),
+      playerNames: z.array(z.string().nullable()),
+      playerGuests: z.array(z.boolean()),
+    }),
+  ),
+});

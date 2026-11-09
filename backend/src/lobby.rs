@@ -4,6 +4,10 @@
 //! A game's id is its invite: whoever has it can join while a seat is free, and can watch
 //! the game on its WebSocket whether or not they have a seat. Ids are random (see
 //! `game_id`), so they can't be found by guessing.
+//!
+//! The one way to find an id without being told it is the public list
+//! (`GET /api/public-games`). A game is in it only if the player who made it said so, and only
+//! once it has started: while a seat is free the id is still an invite to one person.
 
 use axum::{
     Json,
@@ -22,7 +26,7 @@ use crate::{
     room::{RoomError, Rooms},
 };
 
-/// The most games `GET /api/games` returns, newest activity first.
+/// The most games `GET /api/games` and `GET /api/public-games` return, newest activity first.
 const LIST_LIMIT: i64 = 100;
 
 #[derive(Deserialize)]
@@ -31,6 +35,10 @@ pub struct NewGame {
     /// Play against the computer. The game starts at once, with the bot in seat 1.
     #[serde(default)]
     bot: bool,
+    /// Put the game in the public list once it has started. Off unless asked for: the id of a
+    /// game that is listed is no secret any more.
+    #[serde(default)]
+    public: bool,
 }
 
 /// Where a user sits in a game.
@@ -41,10 +49,11 @@ pub struct Seat {
     seat: usize,
 }
 
-/// `POST /api/games` with `{ "kind": "...", "bot": false }`: creates a game, with the user in
-/// seat 0, and loads it. With `"bot": true` the computer takes the other seat and the game
-/// starts at once; `bot` can be left out. Answers 422 for a kind the server doesn't offer,
-/// and for a bot in a game that has none.
+/// `POST /api/games` with `{ "kind": "...", "bot": false, "public": false }`: creates a game,
+/// with the user in seat 0, and loads it. With `"bot": true` the computer takes the other seat
+/// and the game starts at once. With `"public": true` the game is in the public list once it
+/// has started (see [`list_public_games`]). `bot` and `public` can be left out, which is false.
+/// Answers 422 for a kind the server doesn't offer, and for a bot in a game that has none.
 pub async fn create_game(
     AuthUser(user): AuthUser,
     State(rooms): State<Rooms>,
@@ -55,9 +64,9 @@ pub async fn create_game(
         .get(&body.kind)
         .ok_or(ApiError::Invalid("unknown kind of game"))?;
     let game_id = if body.bot {
-        rooms.create_against_bot(engine, user).await
+        rooms.create_against_bot(engine, user, body.public).await
     } else {
-        rooms.create(engine, user).await
+        rooms.create(engine, user, body.public).await
     }
     .map_err(api_error)?;
     Ok((StatusCode::CREATED, Json(Seat { game_id, seat: 0 })))
@@ -223,6 +232,80 @@ pub async fn list_games(
         )
         .collect();
     Ok(Json(Games { games }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicGames {
+    games: Vec<PublicListed>,
+}
+
+/// A game in the public list. Unlike [`Listed`] it has no seat of the reader's, because the
+/// reader needn't be a player, or even a user.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicListed {
+    game_id: GameId,
+    kind: String,
+    /// True once the game has ended (see `Game::is_over`). A game that hasn't is in progress:
+    /// every listed game has started.
+    finished: bool,
+    /// When the game last changed, in milliseconds since the epoch.
+    updated_at: i64,
+    /// As in [`Listed`]: the players' display names by seat, null for one with no name.
+    player_names: Vec<Option<String>>,
+    /// As in [`Listed`]: which of the players are guests, by seat.
+    player_guests: Vec<bool>,
+}
+
+/// One row of the public list query, in the order of its columns.
+type PublicListedRow = (GameId, String, bool, i64, Vec<Option<String>>, Vec<bool>);
+
+/// `GET /api/public-games`: the games that were made public and have started, most recently
+/// changed first, at most 100. **Needs no token**: the list is for anyone, and a game's id in
+/// it is all that is needed to watch the game, as on its WebSocket. A game that waits for an
+/// opponent isn't listed, so that the list never offers a seat.
+pub async fn list_public_games(State(pool): State<PgPool>) -> Result<Json<PublicGames>, ApiError> {
+    let rows: Vec<PublicListedRow> = sqlx::query_as(
+        "SELECT g.id,
+                g.kind,
+                g.finished,
+                (extract(epoch FROM g.updated_at) * 1000)::bigint,
+                ARRAY(SELECT u.name
+                      FROM game_players gp
+                      JOIN users u ON u.id = gp.user_id
+                      WHERE gp.game_id = g.id
+                      ORDER BY gp.seat),
+                -- A guest here is one in a room (`read_players` in `room`): keep the two the same.
+                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND u.id <> $2
+                      FROM game_players gp
+                      JOIN users u ON u.id = gp.user_id
+                      WHERE gp.game_id = g.id
+                      ORDER BY gp.seat)
+         FROM games g
+         WHERE g.public AND g.state IS NOT NULL
+         ORDER BY g.updated_at DESC, g.id
+         LIMIT $1",
+    )
+    .bind(LIST_LIMIT)
+    .bind(BOT_USER)
+    .fetch_all(&pool)
+    .await
+    .map_err(ApiError::database("could not list the public games"))?;
+    let games = rows
+        .into_iter()
+        .map(
+            |(game_id, kind, finished, updated_at, player_names, player_guests)| PublicListed {
+                game_id,
+                kind,
+                finished,
+                updated_at,
+                player_names,
+                player_guests,
+            },
+        )
+        .collect();
+    Ok(Json(PublicGames { games }))
 }
 
 fn api_error(err: RoomError) -> ApiError {
@@ -749,6 +832,230 @@ mod tests {
                 .await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         }
+    }
+
+    // --- The public list ---
+
+    /// Creates a game as the token's user, with the options given as the request body does.
+    /// Returns its id.
+    async fn create_with(app: &TestApp, token: &str, body: Value) -> String {
+        let reply = app
+            .send(Method::POST, "/api/games", Some(&bearer(token)), Some(body))
+            .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json);
+        reply.json["gameId"].as_str().unwrap().to_owned()
+    }
+
+    /// The public list, asked for by someone who has no token.
+    async fn public_list(app: &TestApp) -> Value {
+        let reply = app.send(Method::GET, "/api/public-games", None, None).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        reply.json["games"].clone()
+    }
+
+    fn ids(games: &Value) -> Vec<&str> {
+        games
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["gameId"].as_str().unwrap())
+            .collect()
+    }
+
+    #[sqlx::test]
+    async fn a_public_game_is_listed_once_it_has_started_and_not_before(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let (_, grace) = app.register_user().await;
+        name(&app, &ada, "Ada").await;
+        let game_id = create_with(&app, &ada, json!({ "kind": "tally", "public": true })).await;
+
+        // One seat is free, so the id is still an invite and stays unlisted.
+        assert_eq!(public_list(&app).await, json!([]));
+
+        app.join_game(&grace, &game_id).await;
+
+        let games = public_list(&app).await;
+        assert_eq!(ids(&games), [game_id.as_str()]);
+        let game = &games[0];
+        assert_eq!(game["kind"], "tally");
+        assert_eq!(game["finished"], false);
+        // Grace has no name. Ada is a guest, so her name is marked as one.
+        assert_eq!(game["playerNames"], json!(["Ada", null]));
+        assert_eq!(game["playerGuests"], json!([true, true]));
+        assert!(game["updatedAt"].as_i64().unwrap() > 1_700_000_000_000);
+        // Only what a list needs: nothing about the reader, and no seat to take.
+        assert!(game.get("seat").is_none());
+    }
+
+    #[sqlx::test]
+    async fn a_game_is_private_unless_it_was_made_public(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let (_, grace) = app.register_user().await;
+        // Left out, and said no.
+        for body in [
+            json!({ "kind": "tally" }),
+            json!({ "kind": "tally", "public": false }),
+            json!({ "kind": "solo" }),
+            json!({ "kind": "quick", "bot": true, "public": false }),
+        ] {
+            let game_id = create_with(&app, &ada, body).await;
+            app.join_game(&grace, &game_id).await;
+        }
+
+        assert_eq!(public_list(&app).await, json!([]));
+    }
+
+    #[sqlx::test]
+    async fn a_public_game_against_the_bot_is_listed_at_once(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        name(&app, &ada, "Ada").await;
+        let game_id = create_with(
+            &app,
+            &ada,
+            json!({ "kind": "quick", "bot": true, "public": true }),
+        )
+        .await;
+
+        let games = public_list(&app).await;
+
+        assert_eq!(ids(&games), [game_id.as_str()]);
+        // The bot is a player with a name of its own, and is not a guest.
+        assert_eq!(games[0]["playerNames"], json!(["Ada", "Bot"]));
+        assert_eq!(games[0]["playerGuests"], json!([true, false]));
+    }
+
+    #[sqlx::test]
+    async fn a_public_game_for_one_player_is_listed_at_once(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let game_id = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+
+        assert_eq!(ids(&public_list(&app).await), [game_id.as_str()]);
+    }
+
+    #[sqlx::test]
+    async fn the_public_list_shows_newest_change_first_and_says_which_games_are_over(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, ada) = app.register_user().await;
+        let first = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+        let second = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+        let third = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+        // What the room writes when a game's rules say it is over (see the room's tests). It
+        // also moves `updated_at`, which a save does too.
+        sqlx::query("UPDATE games SET finished = true, updated_at = now() WHERE id = $1")
+            .bind(&first)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let games = public_list(&app).await;
+
+        assert_eq!(
+            ids(&games),
+            [first.as_str(), third.as_str(), second.as_str()]
+        );
+        let finished: Vec<_> = games
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["finished"].as_bool().unwrap())
+            .collect();
+        assert_eq!(finished, [true, false, false]);
+    }
+
+    #[sqlx::test]
+    async fn the_public_list_stops_at_a_hundred_games(pool: PgPool) {
+        // Made by hand: a hundred and one rooms are more than a test needs to keep alive.
+        sqlx::query(
+            "INSERT INTO games (id, kind, state_version, state, public)
+             SELECT 'game' || lpad(n::text, 8, '0'), 'solo', 1, '{\"count\": 0}', true
+             FROM generate_series(1, 101) AS n",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let app = app(pool);
+
+        assert_eq!(public_list(&app).await.as_array().unwrap().len(), 100);
+    }
+
+    #[sqlx::test]
+    async fn games_that_existed_before_the_list_are_not_public(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, ada) = app.register_user().await;
+        let game_id = app.create_game(&ada, "solo").await;
+        // The column's default is what an old row got when the migration added it.
+        let public: bool = sqlx::query_scalar("SELECT public FROM games WHERE id = $1")
+            .bind(&game_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert!(!public);
+        assert_eq!(public_list(&app).await, json!([]));
+    }
+
+    #[sqlx::test]
+    async fn the_public_list_needs_no_token(pool: PgPool) {
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let game_id = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+
+        // Whatever the request carries: the list is the same, and so for a token that is wrong.
+        for authorization in [None, Some("Bearer unknown")] {
+            let reply = app
+                .send(Method::GET, "/api/public-games", authorization, None)
+                .await;
+            assert_eq!(reply.status, StatusCode::OK);
+            assert_eq!(ids(&reply.json["games"]), [game_id.as_str()]);
+        }
+    }
+
+    #[sqlx::test]
+    async fn listing_a_game_does_not_open_its_history_to_people_without_a_token(pool: PgPool) {
+        // The list is a way to find ids, not a new way to read a game: its history is still
+        // for users, as it was.
+        let app = app(pool);
+        let (_, ada) = app.register_user().await;
+        let game_id = create_with(&app, &ada, json!({ "kind": "solo", "public": true })).await;
+
+        assert_eq!(
+            app.history(None, &game_id).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_rematch_is_as_public_as_the_game_it_follows(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, ada) = app.register_user().await;
+        let server = app.serve().await;
+        let mut rematches = Vec::new();
+        for public in [true, false] {
+            let game_id = create_with(
+                &app,
+                &ada,
+                json!({ "kind": "quick", "bot": true, "public": public }),
+            )
+            .await;
+            let mut client = Client::sign_in(&server, &game_id, &ada).await;
+            client.next().await;
+            client.act(json!({})).await;
+            client.next().await;
+            let reply = app.ask_rematch(&ada, &game_id).await;
+            assert_eq!(reply.status, StatusCode::OK);
+            rematches.push(reply.json["rematch"]["gameId"].as_str().unwrap().to_owned());
+        }
+
+        let listed = public_list(&app).await;
+
+        // Both the first game and its rematch are public; the private pair is nowhere.
+        assert_eq!(listed.as_array().unwrap().len(), 2);
+        assert!(ids(&listed).contains(&rematches[0].as_str()));
+        assert!(!ids(&listed).contains(&rematches[1].as_str()));
     }
 
     // --- The rematch ---

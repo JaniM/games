@@ -1,15 +1,57 @@
 import { op } from "millpond";
 import type { z } from "zod";
-import type { gamesReplySchema } from "./schemas";
-import { GAMES_LIST_ID, NEW_GAME_ID, gamesList, myGames, newGame } from "./tables";
+import type { gamesReplySchema, publicGamesReplySchema } from "./schemas";
+import {
+  DEFAULT_PUBLIC,
+  GAMES_LIST_ID,
+  LOBBY_SETTINGS_ID,
+  NEW_GAME_ID,
+  PUBLIC_LIST_ID,
+  gamesList,
+  lobbySettings,
+  myGames,
+  newGame,
+  publicGames,
+  publicList,
+} from "./tables";
+
+/**
+ * Sets up the remembered choices once at startup, from whatever local storage held (null:
+ * nothing, so the defaults). Does nothing if a choice has been made since.
+ */
+export const startLobby = op((tx, args: { stored: boolean | null }) => {
+  if (tx.read(lobbySettings.get(LOBBY_SETTINGS_ID))) return;
+  tx.insert(lobbySettings, { id: LOBBY_SETTINGS_ID, public: args.stored ?? DEFAULT_PUBLIC });
+});
 
 /**
  * Opens the dialog for creating a game of `kind`. Ignored while a game is being created,
- * since that dialog is already open. Opening it again after a failure starts afresh.
+ * since that dialog is already open. Opening it again after a failure starts afresh, with
+ * "public" as the player last chose it.
  */
 export const openNewGame = op((tx, args: { kind: string }) => {
   if (tx.read(newGame.get(NEW_GAME_ID))?.state === "creating") return;
-  tx.upsert(newGame, { id: NEW_GAME_ID, state: "choosing", kind: args.kind, bot: false, error: null });
+  const remembered = tx.read(lobbySettings.get(LOBBY_SETTINGS_ID))?.public;
+  tx.upsert(newGame, {
+    id: NEW_GAME_ID,
+    state: "choosing",
+    kind: args.kind,
+    bot: false,
+    public: remembered ?? DEFAULT_PUBLIC,
+    error: null,
+  });
+});
+
+/**
+ * Picks whether the game is in the public list, and remembers the choice for the next game.
+ * Ignored with no dialog, and while a game is being created, since the request has gone out as
+ * it was.
+ */
+export const choosePublic = op((tx, args: { public: boolean }) => {
+  const request = tx.read(newGame.get(NEW_GAME_ID));
+  if (!request || request.state === "creating") return;
+  tx.update(newGame, NEW_GAME_ID, { public: args.public });
+  tx.upsert(lobbySettings, { id: LOBBY_SETTINGS_ID, public: args.public });
 });
 
 /**
@@ -76,4 +118,26 @@ export const gamesLoaded = op((tx, args: { games: z.infer<typeof gamesReplySchem
 /** Records a read that did not work. The games already shown stay. */
 export const gamesLoadFailed = op((tx, args: { error: string }) => {
   tx.upsert(gamesList, { id: GAMES_LIST_ID, state: "failed", error: args.error });
+});
+
+/** Asks the `loadPublicGamesList` effect to read the public list. Calling it again restarts the read. */
+export const loadPublicGames = op((tx) => {
+  tx.upsert(publicList, { id: PUBLIC_LIST_ID, state: "loading", error: null });
+});
+
+/** Replaces the public games shown with what the server listed. */
+export const publicGamesLoaded = op(
+  (tx, args: { games: z.infer<typeof publicGamesReplySchema>["games"] }) => {
+    const listed = new Set(args.games.map((game) => game.gameId));
+    for (const game of tx.read(publicGames.all())) {
+      if (!listed.has(game.gameId)) tx.delete(publicGames, game.gameId);
+    }
+    for (const game of args.games) tx.upsert(publicGames, game);
+    tx.upsert(publicList, { id: PUBLIC_LIST_ID, state: "loaded", error: null });
+  },
+);
+
+/** Records a read of the public list that did not work. The games already shown stay. */
+export const publicGamesLoadFailed = op((tx, args: { error: string }) => {
+  tx.upsert(publicList, { id: PUBLIC_LIST_ID, state: "failed", error: args.error });
 });

@@ -20,6 +20,18 @@ describe("parseRoute", () => {
     expect(parseRoute("/privacy/")).toEqual({ page: "privacy" });
   });
 
+  it("knows the public list, with or without a trailing slash", () => {
+    expect(parseRoute("/games")).toEqual({ page: "games" });
+    expect(parseRoute("/games/")).toEqual({ page: "games" });
+  });
+
+  it.each(["/Games", "/games.html", "/games//", "/games/public"])(
+    "has no public list at %s",
+    (path) => {
+      expect(parseRoute(path)).toEqual({ page: "notFound" });
+    },
+  );
+
   it.each(["/privacy/extra", "/privacy.html", "/Privacy", "/games/privacy"])(
     "has no privacy page at %s",
     (path) => {
@@ -52,8 +64,6 @@ describe("parseRoute", () => {
 
   it.each([
     "/nope",
-    "/games",
-    "/games/",
     "/games/chess",
     `/games/chess/${ID}`,
     "/games/not-an-id",

@@ -9,8 +9,8 @@ export interface PrivacyProps {
 /**
  * The privacy policy. It says what the code does, so when the code changes what it stores or
  * who sees it, this page changes with it: the backend's migrations (`backend/migrations`) and
- * the browser storage keys (`features/session/credentials.ts`, `features/sound/storage.ts`)
- * are what it describes, and what deleting a user does is `remove_user` in
+ * the browser storage keys (`features/session/credentials.ts`, `features/sound/storage.ts`,
+ * `features/lobby/storage.ts`) are what it describes, and what deleting a user does is `remove_user` in
  * `backend/src/account.rs`.
  */
 export function Privacy({ operator = OPERATOR }: PrivacyProps) {
@@ -64,15 +64,15 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
           account, your username is your name;
         </li>
         <li>
-          every game you are in: who sat where, the game’s state, and when the game was made and
-          last changed.
+          every game you are in: who sat where, the game’s state, whether it is public, and when the
+          game was made and last changed.
         </li>
       </ul>
       <p>A game against the bot is kept the same way.</p>
       <p>
         In your browser, in its local storage: your user id and access token, and your username if
-        you have an account (<code>games.session</code>), and the sound volume (
-        <code>games.volume</code>).
+        you have an account (<code>games.session</code>); the sound volume (
+        <code>games.volume</code>); and whether new games are public (<code>games.public</code>).
       </p>
       <p>
         Whoever hosts the site may keep ordinary access logs of their own, such as the time of a
@@ -81,6 +81,17 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
 
       <h2>Who can see what</h2>
       <ul>
+        <li>
+          <strong>Anyone, with no link and no account,</strong> can see the public games at{" "}
+          <Link to="/games">/games</Link>. A game is public if the player who made it left “Public
+          game” ticked in the dialog for a new game, which it is until they untick it, and the
+          site remembers the choice in that browser. A public game is listed once both players are
+          in it, with the players’ names, whether it is in progress or over, and when it last
+          changed, and anyone can open it and watch every move. A rematch of a public game is
+          public. Games still waiting for an opponent, and games made before the list existed, are
+          not in it. The choice is made when the game is made and can’t be changed afterwards. To
+          take a game out of the list, write to {mail} with its link.
+        </li>
         <li>
           <strong>Your opponent, and anyone who has the link to a game,</strong> can see your
           display name (or “Player 1” and “Player 2” if you have none) and every move in that game.
@@ -94,7 +105,10 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
           The game also sends your anonymous user id to everyone connected to it. It is not shown on
           the page, and it is not your name.
         </li>
-        <li>A game can only be opened by someone who has its link.</li>
+        <li>
+          A game can only be opened by someone who has its link. The public list is where the links
+          of public games are.
+        </li>
         <li>{operator.name}, which runs the site, can read everything the server keeps.</li>
       </ul>
       <p>

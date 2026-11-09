@@ -25,6 +25,7 @@ function render(overrides: Partial<AccountMenuViewProps> = {}) {
         name="Ada"
         username={null}
         busy={false}
+        sound={null}
         onCreate={noop}
         onSignIn={noop}
         onSignOut={noop}
@@ -113,5 +114,47 @@ describe("the panel", () => {
     expect(html.match(/<button class="menu-item" type="button" disabled=""/g)).toHaveLength(3);
     // (The name button is held back until the profile loads, which it hasn't here.)
     expect(render({ username: null })).not.toMatch(/class="menu-item"[^>]*disabled/);
+  });
+});
+
+describe("the volume", () => {
+  const sound = (volume: number) => ({ volume, onChange: () => {}, onSettle: () => {} });
+
+  it("has no slider on a page with no sound", () => {
+    const html = render();
+
+    expect(html).not.toContain("volume");
+    expect(html).not.toContain("type=\"range\"");
+  });
+
+  it("is a slider in the panel, set to the volume it is given, closed until the menu is opened", () => {
+    const html = render({ sound: sound(0.5) });
+
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+    expect(html.indexOf("<details")).toBeLessThan(html.indexOf("volume-slider"));
+    expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf("</details>"));
+    expect(html).toMatch(/<input[^>]*type="range"[^>]*value="10"/);
+    expect(html).toContain("aria-valuetext=\"50%\"");
+    expect(html).toContain(">Sound<");
+  });
+
+  it("calls the left end of the slider Off", () => {
+    expect(render({ sound: sound(0) })).toContain("aria-valuetext=\"Off\"");
+  });
+
+  it("is the first thing in the list, above what the account can do", () => {
+    const html = render({ sound: sound(0.7) });
+
+    expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf("Create account"));
+    expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf("Delete my data"));
+    // A row of the list, between hairlines like the buttons.
+    expect(html).toMatch(/<li class="menu-row"><label class="volume">/);
+  });
+
+  it("is there for an account as well as a guest", () => {
+    const html = render({ sound: sound(0.7), username: "ada" });
+
+    expect(html).toContain("volume-slider");
+    expect(html).toContain("Sign out");
   });
 });

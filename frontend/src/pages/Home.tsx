@@ -10,6 +10,7 @@ import {
   myGames,
   newGame,
   chooseOpponent,
+  choosePublic,
   openNewGame,
 } from "../features/lobby";
 import { GAMES } from "../games";
@@ -24,6 +25,7 @@ export function Home() {
   const load = useOp(loadGames);
   const open = useOp(openNewGame);
   const opponent = useOp(chooseOpponent);
+  const makePublic = useOp(choosePublic);
   const create = useOp(createGame);
   const close = useOp(closeNewGame);
 
@@ -43,6 +45,7 @@ export function Home() {
       request={request}
       onNewGame={(kind) => open({ kind })}
       onOpponent={(bot) => opponent({ bot })}
+      onPublic={(isPublic) => makePublic({ public: isPublic })}
       onCreate={() => create()}
       onClose={() => close()}
       onReload={() => load()}

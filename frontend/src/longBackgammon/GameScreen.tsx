@@ -1,7 +1,6 @@
 import type { RowOf } from "millpond";
 import { useRef, useState } from "react";
 import { Link } from "../Link";
-import { OptionsMenu } from "../OptionsMenu";
 import { copyText } from "../copyText";
 import {
   type Seat,
@@ -32,7 +31,6 @@ import {
   turnText,
   viewerSeat,
 } from "./status";
-import { VolumeControl } from "./VolumeControl";
 
 export type GameViewRow = RowOf<typeof gameViews>;
 export type JoinRequestRow = RowOf<typeof joinRequests>;
@@ -77,9 +75,6 @@ export interface GameScreenProps {
   onSelect: (point: number | null) => void;
   /** Plays steps one after the other: one for a single die, more for a combined move by one checker. */
   onMove: (steps: Step[]) => void;
-  /** How loud the sounds are, from 0 (silent) to 1. */
-  volume: number;
-  onVolume: (volume: number) => void;
   /** Plays a sound. The caller applies the volume, and may play nothing. */
   onCue: (cue: TimedCue) => void;
 }
@@ -87,25 +82,17 @@ export interface GameScreenProps {
 const HOME = "/";
 
 interface ShellProps {
-  options?: React.ReactNode;
-  /** What the viewer is to the game, beside its title, if they are not a player. */
+  /** What the viewer is to the game, if they are not a player. */
   caption?: string;
   children: React.ReactNode;
 }
 
-function Shell({ options, caption, children }: ShellProps) {
+function Shell({ caption, children }: ShellProps) {
   return (
     <main className="page game-page">
-      <div className="game-top">
-        <p className="crumbs">
-          <Link to={HOME}>← All games</Link>
-        </p>
-        {options}
-      </div>
-      <header className="game-head">
-        <h1 className="game-title">Long backgammon</h1>
-        {caption && <p className="game-caption">{caption}</p>}
-      </header>
+      {/* The nav says where you are, and the board what the game is: only a screen reader gets a title. */}
+      <h1 className="visually-hidden">Long backgammon</h1>
+      {caption && <p className="game-caption">{caption}</p>}
       {children}
     </main>
   );
@@ -137,8 +124,6 @@ export function GameScreen({
   showAutoplay,
   onSelect,
   onMove,
-  volume,
-  onVolume,
   onCue,
 }: GameScreenProps) {
   if (view?.connection === "missing") {
@@ -326,16 +311,6 @@ export function GameScreen({
   return (
     <Shell
       caption={mySeat === null && userId !== null && !canJoin ? "You are watching this game." : undefined}
-      options={
-        <OptionsMenu>
-          {/* Letting go of the slider plays a knock, so that the new level can be heard. */}
-          <VolumeControl
-            volume={volume}
-            onChange={onVolume}
-            onSettle={() => onCue({ cue: "move", afterMs: 0 })}
-          />
-        </OptionsMenu>
-      }
     >
       {canJoin && (
         <section className="panel" aria-label="Join this game">

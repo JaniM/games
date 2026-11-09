@@ -1,8 +1,7 @@
 import type { RowOf } from "millpond";
-import { Link } from "../Link";
+import { GAME_STATE_TEXT, GameRow, gameState } from "../GameRow";
 import { Modal } from "../Modal";
 import type { gamesList, myGames, newGame } from "../features/lobby";
-import { gamePath } from "../features/router";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";
 
@@ -22,6 +21,8 @@ export interface HomeScreenProps {
   onNewGame: (kind: string) => void;
   /** Picks the opponent in the dialog: the computer (true), or a friend. */
   onOpponent: (bot: boolean) => void;
+  /** Ticks or unticks "public game" in the dialog. */
+  onPublic: (isPublic: boolean) => void;
   onCreate: () => void;
   onClose: () => void;
   onReload: () => void;
@@ -39,6 +40,7 @@ export function HomeScreen({
   request,
   onNewGame,
   onOpponent,
+  onPublic,
   onCreate,
   onClose,
   onReload,
@@ -47,10 +49,8 @@ export function HomeScreen({
 
   return (
     <main className="page page-wide">
-      <header className="page-header">
-        <h1>Games</h1>
-        <p>Simple board games, played live or at your own pace.</p>
-      </header>
+      {/* The nav says where you are, so the page shows no title: only a screen reader gets one. */}
+      <h1 className="visually-hidden">Games</h1>
 
       <div className="home">
         <MyGames games={games} mine={mine} list={list} onReload={onReload} />
@@ -88,6 +88,7 @@ export function HomeScreen({
             request={request}
             info={requestInfo}
             onOpponent={onOpponent}
+            onPublic={onPublic}
             onCreate={onCreate}
             onClose={onClose}
           />
@@ -113,14 +114,7 @@ export function playersText(game: Pick<MyGameRow, "seat" | "playerNames" | "play
 
 /** Where a game stands: waiting for an opponent, in progress, or finished. */
 export function gameStateText(game: Pick<MyGameRow, "started" | "finished">): string {
-  if (game.finished) return "Finished";
-  return game.started ? "In progress" : "Waiting for an opponent";
-}
-
-/** The same three states as a word for the stylesheet, which draws each with its own dot. */
-function gameStateKind(game: Pick<MyGameRow, "started" | "finished">): "done" | "live" | "waiting" {
-  if (game.finished) return "done";
-  return game.started ? "live" : "waiting";
+  return GAME_STATE_TEXT[gameState(game)];
 }
 
 interface MyGamesProps {
@@ -156,22 +150,13 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
       <ul className="my-games">
         {shown.map(({ game, info }) => (
           <li key={game.gameId}>
-            <Link className="my-game" to={gamePath(game.gameId)}>
-              <span className="my-game-name">{info.name}</span>
-              <span className="my-game-players">{playersText(game)}</span>
-              {/* Where the game stands and when it last changed share a row. */}
-              <span className="my-game-meta">
-                <span className={`my-game-state my-game-state-${gameStateKind(game)}`}>
-                  {gameStateText(game)}
-                </span>
-                <time className="muted" dateTime={new Date(game.updatedAt).toISOString()}>
-                  {new Date(game.updatedAt).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
-                </time>
-              </span>
-            </Link>
+            <GameRow
+              gameId={game.gameId}
+              name={info.name}
+              players={playersText(game)}
+              state={gameState(game)}
+              updatedAt={game.updatedAt}
+            />
           </li>
         ))}
       </ul>
@@ -184,15 +169,16 @@ interface NewGameFormProps {
   /** The catalog entry for the kind, if the site has one. */
   info: GameInfo | undefined;
   onOpponent: (bot: boolean) => void;
+  onPublic: (isPublic: boolean) => void;
   onCreate: () => void;
   onClose: () => void;
 }
 
 /**
  * What goes in the dialog: what the game is, who to play (if the game has a computer opponent
- * to choose), and the buttons.
+ * to choose), whether it is public, and the buttons.
  */
-function NewGameForm({ request, info, onOpponent, onCreate, onClose }: NewGameFormProps) {
+function NewGameForm({ request, info, onOpponent, onPublic, onCreate, onClose }: NewGameFormProps) {
   const creating = request.state === "creating";
   // Only a game the catalog knows can say it has a bot. Without one, a friend is the only choice.
   const bot = info?.bot === true && request.bot;
@@ -217,6 +203,18 @@ function NewGameForm({ request, info, onOpponent, onCreate, onClose }: NewGameFo
           it can watch.
         </p>
       )}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={request.public}
+          disabled={creating}
+          onChange={(event) => onPublic(event.target.checked)}
+        />
+        <span>
+          <span className="check-name">Public game</span>
+          <span className="check-hint muted">Listed for anyone to watch once it has started.</span>
+        </span>
+      </label>
       {request.state === "failed" && (
         <p className="error" role="alert">
           Could not create the game: {request.error}

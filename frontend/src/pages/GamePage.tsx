@@ -23,7 +23,7 @@ import {
 } from "../features/game";
 import { gamePath } from "../features/router";
 import { SESSION_ID, sessionState } from "../features/session";
-import { DEFAULT_VOLUME, SOUND_ID, setVolume, soundSettings } from "../features/sound";
+import { DEFAULT_VOLUME, SOUND_ID, soundSettings } from "../features/sound";
 import type { TimedCue } from "../longBackgammon/cues";
 import { GameScreen } from "../longBackgammon/GameScreen";
 import { playCue, unlockOnGesture } from "../longBackgammon/sounds";
@@ -51,7 +51,6 @@ export function GamePage({ gameId }: { gameId: string }) {
   const submitMove = useOp(submitMoves);
   const autoplay = useOp(setAutoplay);
   const volume = useQuery(soundSettings.get(SOUND_ID))?.volume ?? DEFAULT_VOLUME;
-  const changeVolume = useOp(setVolume);
 
   // A browser lets a page make sound only after it has been used: be ready for the first press.
   useEffect(unlockOnGesture, []);
@@ -87,8 +86,6 @@ export function GamePage({ gameId }: { gameId: string }) {
       showAutoplay={import.meta.env.DEV}
       onSelect={(point) => select({ gameId, point })}
       onMove={(steps) => submitMove({ gameId, steps })}
-      volume={volume}
-      onVolume={(level) => changeVolume({ volume: level })}
       onCue={(timed: TimedCue) => playCue(timed.cue, timed.afterMs, volume)}
     />
   );

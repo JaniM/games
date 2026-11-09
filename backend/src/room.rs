@@ -163,15 +163,17 @@ impl Rooms {
         &self.shared.games
     }
 
-    /// Creates a game of the given kind with `creator` in seat 0, and loads it.
+    /// Creates a game of the given kind with `creator` in seat 0, and loads it. A `public` game
+    /// is in the public list (see `lobby`) once it has started.
     pub async fn create(
         &self,
         engine: &Arc<dyn Engine>,
         creator: Uuid,
+        public: bool,
     ) -> Result<GameId, RoomError> {
         // A game for one player has no one to wait for.
         let live = (engine.players() == 1).then(|| engine.start());
-        let game = NewGame::new(engine.as_ref(), vec![creator], live.as_deref())?;
+        let game = NewGame::new(engine.as_ref(), vec![creator], live.as_deref(), public)?;
         self.create_with(game).await
     }
 
@@ -181,6 +183,7 @@ impl Rooms {
         &self,
         engine: &Arc<dyn Engine>,
         creator: Uuid,
+        public: bool,
     ) -> Result<GameId, RoomError> {
         if !engine.has_bot() {
             return Err(RoomError::NoBot);
@@ -190,6 +193,7 @@ impl Rooms {
             engine.as_ref(),
             vec![creator, BOT_USER],
             Some(live.as_ref()),
+            public,
         )?;
         self.create_with(game).await
     }
@@ -539,6 +543,8 @@ struct Room {
     /// read back from JSON while the room is up. Null until every seat is taken.
     live: Option<Box<dyn Live>>,
     revision: i64,
+    /// Whether the game is in the public list. Its rematch is too.
+    public: bool,
     /// Whether the players have agreed to play again. Only a finished game has one.
     rematch: Option<Rematch>,
     snapshots: watch::Sender<Arc<Snapshot>>,
@@ -547,19 +553,20 @@ struct Room {
 }
 
 /// One row of the query that loads a game, in the order of its columns: kind, state version,
-/// state, revision and rematch.
-type StoredGame = (String, i32, Option<Value>, i64, Option<Value>);
+/// state, revision, rematch and whether it is public.
+type StoredGame = (String, i32, Option<Value>, i64, Option<Value>, bool);
 
 impl Room {
     async fn load(shared: &Shared, id: &GameId) -> Result<Self, RoomError> {
         let row: Option<StoredGame> = sqlx::query_as(
-            "SELECT kind, state_version, state, revision, rematch FROM games WHERE id = $1",
+            "SELECT kind, state_version, state, revision, rematch, public FROM games WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&shared.pool)
         .await
         .map_err(|err| internal(err, "could not load a game"))?;
-        let (kind, state_version, state, revision, rematch) = row.ok_or(RoomError::NotFound)?;
+        let (kind, state_version, state, revision, rematch, public) =
+            row.ok_or(RoomError::NotFound)?;
         let rematch: Option<Rematch> = rematch
             .map(serde_json::from_value)
             .transpose()
@@ -607,6 +614,7 @@ impl Room {
             who,
             live,
             revision,
+            public,
             rematch,
             // Nobody is connected yet. The receiver the channel starts with is dropped at once.
             snapshots: watch::channel(Arc::new(snapshot)).0,
@@ -837,13 +845,15 @@ impl Room {
         Ok(())
     }
 
-    /// The game that follows this one: new, for the same players in the same seats.
+    /// The game that follows this one: new, for the same players in the same seats, and as
+    /// public as this one.
     fn rematch_game(&self) -> Result<NewGame, RoomError> {
         let live = self.engine.start();
         NewGame::new(
             self.engine.as_ref(),
             self.players.clone(),
             Some(live.as_ref()),
+            self.public,
         )
     }
 
@@ -1019,6 +1029,8 @@ struct NewGame {
     /// The state as the history keeps it: there exactly when `state` is.
     record: Option<Value>,
     finished: bool,
+    /// Whether the game is in the public list once it has started.
+    public: bool,
 }
 
 impl NewGame {
@@ -1027,6 +1039,7 @@ impl NewGame {
         engine: &dyn Engine,
         players: Vec<Uuid>,
         live: Option<&dyn Live>,
+        public: bool,
     ) -> Result<Self, RoomError> {
         Ok(Self {
             kind: engine.kind(),
@@ -1035,6 +1048,7 @@ impl NewGame {
             state: to_json(live)?,
             record: to_record(live)?,
             finished: live.is_some_and(|live| live.is_over()),
+            public,
         })
     }
 }
@@ -1048,8 +1062,8 @@ async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, St
     for _ in 0..ID_ATTEMPTS {
         let candidate = GameId::random().map_err(|err| err.to_string())?;
         let inserted: Option<GameId> = sqlx::query_scalar(
-            "INSERT INTO games (id, kind, state_version, state, finished)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO games (id, kind, state_version, state, finished, public)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (id) DO NOTHING
              RETURNING id",
         )
@@ -1058,6 +1072,7 @@ async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, St
         .bind(game.state_version)
         .bind(&game.state)
         .bind(game.finished)
+        .bind(game.public)
         .fetch_optional(&mut *tx)
         .await
         .map_err(db)?;
@@ -1236,7 +1251,7 @@ mod tests {
 
     async fn waiting_game(rooms: &Rooms, creator: Uuid) -> GameId {
         let engine = rooms.games().get("tally").unwrap().clone();
-        rooms.create(&engine, creator).await.unwrap()
+        rooms.create(&engine, creator, false).await.unwrap()
     }
 
     fn add(amount: i64) -> Value {
@@ -1408,7 +1423,7 @@ mod tests {
         let player = user(&pool).await;
         // Solo is over after its third action.
         let id = rooms
-            .create(rooms.games().get("solo").unwrap(), player)
+            .create(rooms.games().get("solo").unwrap(), player, false)
             .await
             .unwrap();
         let mut connection = rooms.connect(&id, player).await.unwrap();
@@ -1648,7 +1663,10 @@ mod tests {
     /// A tally game for `creator` against the bot, which is in seat 1 and adds 1 on its turn.
     async fn bot_game(rooms: &Rooms, creator: Uuid) -> GameId {
         let engine = rooms.games().get("tally").unwrap().clone();
-        rooms.create_against_bot(&engine, creator).await.unwrap()
+        rooms
+            .create_against_bot(&engine, creator, false)
+            .await
+            .unwrap()
     }
 
     #[sqlx::test]
@@ -1671,7 +1689,7 @@ mod tests {
         let creator = user(&pool).await;
         let solo = rooms.games().get("solo").unwrap().clone();
 
-        let result = rooms.create_against_bot(&solo, creator).await;
+        let result = rooms.create_against_bot(&solo, creator, false).await;
 
         assert_eq!(result, Err(RoomError::NoBot));
     }
@@ -1796,7 +1814,7 @@ mod tests {
     /// Already over, and nobody is connected to it.
     async fn finished_game(rooms: &Rooms, first: Uuid, second: Uuid) -> GameId {
         let engine = rooms.games().get("quick").unwrap().clone();
-        let id = rooms.create(&engine, first).await.unwrap();
+        let id = rooms.create(&engine, first, false).await.unwrap();
         rooms.join(&id, second).await.unwrap();
         let connection = rooms.connect(&id, first).await.unwrap();
         connection.act(json!({})).await.unwrap();
@@ -2040,7 +2058,7 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let (ada, grace) = (user(&pool).await, user(&pool).await);
         let engine = rooms.games().get("quick").unwrap().clone();
-        let waiting = rooms.create(&engine, ada).await.unwrap();
+        let waiting = rooms.create(&engine, ada, false).await.unwrap();
         let playing = started_game(&rooms, ada, grace).await;
 
         for id in [&waiting, &playing] {
@@ -2085,7 +2103,7 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let player = user(&pool).await;
         let id = rooms
-            .create(rooms.games().get("solo").unwrap(), player)
+            .create(rooms.games().get("solo").unwrap(), player, false)
             .await
             .unwrap();
         let connection = rooms.connect(&id, player).await.unwrap();
@@ -2105,7 +2123,10 @@ mod tests {
         let rooms = rooms(&pool, tally());
         let player = user(&pool).await;
         let engine = rooms.games().get("quick").unwrap().clone();
-        let id = rooms.create_against_bot(&engine, player).await.unwrap();
+        let id = rooms
+            .create_against_bot(&engine, player, false)
+            .await
+            .unwrap();
         let mut connection = rooms.connect(&id, player).await.unwrap();
         connection.act(json!({})).await.unwrap();
         connection.latest();
@@ -2250,7 +2271,7 @@ mod tests {
         let creator = user(&pool).await;
         let solo = rooms.games().get("solo").unwrap().clone();
 
-        let alone = rooms.create(&solo, creator).await.unwrap();
+        let alone = rooms.create(&solo, creator, false).await.unwrap();
         let against_bot = bot_game(&rooms, creator).await;
 
         assert_eq!(
@@ -2393,7 +2414,7 @@ mod tests {
         );
         let (first, second) = (user(&pool).await, user(&pool).await);
         let engine = rooms.games().get("long-backgammon").unwrap().clone();
-        let id = rooms.create(&engine, first).await.unwrap();
+        let id = rooms.create(&engine, first, false).await.unwrap();
         rooms.join(&id, second).await.unwrap();
         // By seat.
         let mut players = [

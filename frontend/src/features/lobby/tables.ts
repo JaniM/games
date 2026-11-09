@@ -21,10 +21,27 @@ export const newGame = table(
     kind: z.string(),
     /** Play against the computer, not a friend who follows a link. */
     bot: z.boolean(),
+    /** Put the game in the public list once it has started. */
+    public: z.boolean(),
     error: z.string().nullable(),
   }),
   { key: "id", indexes: { byState: ["state"] } },
 );
+
+/** The singleton key of the one `lobbySettings` row. */
+export const LOBBY_SETTINGS_ID = "current";
+
+/** Whether a new game is public before the player chooses: yes, as the list is for the games. */
+export const DEFAULT_PUBLIC = true;
+
+/**
+ * What this browser remembers about making games: whether the dialog's "public game" is ticked.
+ * A single row, which the `persistLobbySettings` effect keeps in local storage. Before
+ * `startLobby` has run there is no row, and the choice is the default.
+ */
+export const lobbySettings = table(z.object({ id: z.string(), public: z.boolean() }), {
+  key: "id",
+});
 
 /** The singleton key of the one `gamesList` row. */
 export const GAMES_LIST_ID = "mine";
@@ -66,5 +83,44 @@ export const myGames = table(
   // Indexing `updatedAt` makes a range query on it (`updatedAtGte(0)` for all of them)
   // come back oldest first, so the page needs no sort of its own: it reverses the result
   // for newest first.
+  { key: "gameId", indexes: { byUpdated: ["updatedAt"] } },
+);
+
+/** The singleton key of the one `publicList` row. */
+export const PUBLIC_LIST_ID = "public";
+
+/**
+ * Whether the public list is being read. A single row; `loading` is the request the
+ * `loadPublicGamesList` effect picks up. The rows of `publicGames` stay while it reloads, so the
+ * list doesn't blink.
+ */
+export const publicList = table(
+  z.object({
+    id: z.string(),
+    state: z.enum(["loading", "loaded", "failed"]),
+    error: z.string().nullable(),
+  }),
+  { key: "id", indexes: { byState: ["state"] } },
+);
+
+/**
+ * A game in the public list, as `GET /api/public-games` lists it. Every one has started, so a
+ * game that isn't `finished` is in progress. Unlike `myGames` there is no seat: the reader may be
+ * nobody in the game.
+ */
+export const publicGames = table(
+  z.object({
+    gameId: z.string(),
+    kind: z.string(),
+    /** True once the game has ended. */
+    finished: z.boolean(),
+    /** When the game last changed, in milliseconds since the epoch. */
+    updatedAt: z.number(),
+    /** The names of the players, by seat; null for one who has no name. */
+    playerNames: z.array(z.string().nullable()),
+    /** Which of them are guests, by seat: shown with a guest indicator. */
+    playerGuests: z.array(z.boolean()),
+  }),
+  // As for `myGames`: a range query on `updatedAt` comes back oldest first.
   { key: "gameId", indexes: { byUpdated: ["updatedAt"] } },
 );
