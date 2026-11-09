@@ -5,7 +5,6 @@ import {
   barNameOf,
   frameText,
   lastThrowText,
-  lastTurnText,
   nameOf,
   rematchStage,
   resultOf,
@@ -99,34 +98,14 @@ describe("resultOf", () => {
   });
 });
 
-describe("what the last turn was", () => {
-  it("is empty before any turn", () => {
-    expect(lastTurnText(snap(), 0)).toBe("");
-  });
-
-  it("says a player could not move", () => {
-    const state = startingState({ lastTurn: { seat: 1, dice: [6, 5], played: [] } });
-    expect(lastTurnText(snap({ state }), 0)).toBe("Grace rolled 6-5 and could not move.");
-    expect(lastTurnText(snap({ state }), 1)).toBe("You rolled 6-5 and could not move.");
-  });
-
-  it("lists the moves in the numbers both players share, whoever is reading", () => {
+describe("steps", () => {
+  it("are written in the numbers both players share, whoever moves", () => {
     // Seat 0 is White. Black (seat 1) leaves its head, which is point 12, and its own
     // points 7 and 12 are 6 and 1.
-    const state = startingState({
-      lastTurn: { seat: 1, dice: [6, 5], played: [{ from: 1, die: 6 }, { from: 7, die: 5 }] },
-    });
-    expect(lastTurnText(snap({ state }), 0)).toBe("Grace rolled 6-5 and played 12→6, 6→1.");
-    expect(lastTurnText(snap({ state }), 1)).toBe("You rolled 6-5 and played 12→6, 6→1.");
-    expect(lastTurnText(snap({ state }), null)).toBe("Grace rolled 6-5 and played 12→6, 6→1.");
-  });
-
-  it("counts from the head the same way for White", () => {
-    const state = startingState({
-      lastTurn: { seat: 0, dice: [6, 5], played: [{ from: 1, die: 6 }, { from: 7, die: 5 }] },
-    });
-    expect(lastTurnText(snap({ state }), 0)).toBe("You rolled 6-5 and played 24→18, 18→13.");
-    expect(lastTurnText(snap({ state }), 1)).toBe("Ada rolled 6-5 and played 24→18, 18→13.");
+    expect(stepText({ from: 1, die: 6 }, 1, 0)).toBe("12→6");
+    expect(stepText({ from: 7, die: 5 }, 1, 0)).toBe("6→1");
+    expect(stepText({ from: 1, die: 6 }, 0, 0)).toBe("24→18");
+    expect(stepText({ from: 7, die: 5 }, 0, 0)).toBe("18→13");
   });
 
   it("writes a step that bears off as 'off'", () => {

@@ -377,7 +377,7 @@ describe("a game with both players", () => {
     expect(render(ADA, viewOf({ error: "that move is blocked" }))).toContain("that move is blocked");
   });
 
-  it("says what the last turn was, and warns about the last throw", () => {
+  it("warns about the last throw, and does not recount the last turn", () => {
     const state = startingState({
       turn: 1,
       lastThrow: true,
@@ -385,7 +385,7 @@ describe("a game with both players", () => {
     });
     const html = render(GRACE, viewOf({ snapshot: snapshotOf({ state }) }));
 
-    expect(html).toContain("Ada rolled 6-5 and could not move.");
+    expect(html).not.toContain("rolled 6-5");
     expect(html).toContain("White has borne off everything. Black gets one last throw.");
   });
 

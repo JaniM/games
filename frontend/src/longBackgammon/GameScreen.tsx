@@ -25,7 +25,6 @@ import {
   barNameOf,
   frameText,
   lastThrowText,
-  lastTurnText,
   rematchStage,
   resultOf,
   turnText,
@@ -186,9 +185,7 @@ export function GameScreen({
   const result = resultOf(snapshot, mySeat);
   // Under the line about the turn. What has gone wrong comes before what has happened.
   const alert = !connected ? "Connection lost. Reconnecting…" : view.error;
-  const aside =
-    lastTurnText(snapshot, mySeat) ||
-    (state ? "" : "Who plays White and moves first is decided when the second player joins.");
+  const aside = state ? "" : "Who plays White and moves first is decided when the second player joins.";
 
   const rematch = rematchStage(snapshot, mySeat);
   // A player's own rematch answer has gone out and the other's is not back. It shows as a snapshot.

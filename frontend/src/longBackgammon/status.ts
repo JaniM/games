@@ -111,18 +111,6 @@ export function rematchStage(snapshot: Snapshot, mySeat: Seat | null): RematchSt
   return { stage: "ask", line: turnedDown ? `${name} declined the rematch.` : "" };
 }
 
-/** What the previous turn came to, or "" if no turn has been played. */
-export function lastTurnText(snapshot: Snapshot, mySeat: Seat | null): string {
-  const last = snapshot.state?.lastTurn;
-  if (!snapshot.state || !last) return "";
-  const name = nameOf(snapshot, last.seat, mySeat);
-  const rolled = `${name} rolled ${diceText(last.dice)}`;
-  if (last.played.length === 0) return `${rolled} and could not move.`;
-  const { white } = snapshot.state;
-  const steps = last.played.map((step) => stepText(step, last.seat, white)).join(", ");
-  return `${rolled} and played ${steps}.`;
-}
-
 /** The warning that White is out and Black has one throw left, or "". */
 export function lastThrowText(state: LongBackgammonState): string {
   if (!state.lastThrow || state.phase.type === "over") return "";
