@@ -15,6 +15,7 @@ use crate::{account::Accounts, game::Games, room::Rooms};
 mod account;
 mod auth;
 mod bot;
+mod delta;
 mod error;
 mod game;
 mod game_id;

@@ -495,3 +495,52 @@ impl Game for Solo {
         })
     }
 }
+
+/// Two players take turns putting a counter on one of twenty cells, seat 0 first. Unlike
+/// [`Tally`], whose state is smaller than any change to it, a step changes one place of a state
+/// that has twenty-one, as in a board game: for testing what the history keeps of a step.
+pub struct Cells;
+
+#[derive(Serialize, Deserialize)]
+pub struct CellsState {
+    pub cells: Vec<u8>,
+    pub turn: usize,
+}
+
+#[derive(Deserialize)]
+pub struct CellsAction {
+    pub cell: usize,
+}
+
+impl Game for Cells {
+    const KIND: &'static str = "cells";
+    const PLAYERS: usize = 2;
+    const STATE_VERSION: u32 = 1;
+    type State = CellsState;
+    type Action = CellsAction;
+
+    fn start() -> CellsState {
+        CellsState {
+            cells: vec![0; 20],
+            turn: 0,
+        }
+    }
+
+    fn apply(
+        state: &CellsState,
+        seat: usize,
+        action: CellsAction,
+    ) -> Result<CellsState, Rejection> {
+        if seat != state.turn {
+            return Err(Rejection::new("not your turn"));
+        }
+        let mut cells = state.cells.clone();
+        *cells
+            .get_mut(action.cell)
+            .ok_or_else(|| Rejection::new("there is no such cell"))? += 1;
+        Ok(CellsState {
+            cells,
+            turn: 1 - seat,
+        })
+    }
+}

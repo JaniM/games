@@ -1,0 +1,13 @@
+-- A history state is kept as `json` (the text as it was written) instead of `jsonb`.
+--
+-- `jsonb` is for looking inside a value, which nothing does here: a history is only ever read
+-- back whole, oldest first. It also costs space. Each number is stored as a `numeric` with a
+-- header of its own, so a long backgammon position (48 small integers for the checkers) is
+-- some 1,100 bytes as `jsonb` and some 330 as compact text, and a game of 300 states went
+-- from about 340 kB to about 130 kB. A row is far below the 2 kB at which Postgres starts to
+-- compress, so the text isn't compressed either way.
+--
+-- Rows already written keep what `jsonb` printed, which has a space after every `:` and `,`.
+-- That is about a quarter longer than what the server writes from now on (see
+-- `history::insert`), and is the only difference between them.
+ALTER TABLE game_history ALTER COLUMN state TYPE json USING state::json;

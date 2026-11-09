@@ -548,6 +548,11 @@ struct Room {
     /// Whether the players have agreed to play again. Only a finished game has one.
     rematch: Option<Rematch>,
     snapshots: watch::Sender<Arc<Snapshot>>,
+    /// The record of the latest row this room wrote to the game's history, which is what a
+    /// delta in the next row builds on (see `history`). Null for a room that hasn't written one,
+    /// even if the game has rows from before: it can't tell what an older server wrote, so its
+    /// first row is a whole state.
+    last_record: Option<Value>,
     /// Set when a save failed: memory can't be trusted any more, so the room must stop.
     stale: bool,
 }
@@ -618,6 +623,7 @@ impl Room {
             rematch,
             // Nobody is connected yet. The receiver the channel starts with is dropped at once.
             snapshots: watch::channel(Arc::new(snapshot)).0,
+            last_record: None,
             stale: false,
         })
     }
@@ -729,13 +735,8 @@ impl Room {
         let record = to_record(live.as_deref())?;
         let finished = live.as_deref().is_some_and(|live| live.is_over());
 
-        self.save(
-            Some((seat, user)),
-            state.as_ref(),
-            record.as_ref(),
-            finished,
-        )
-        .await?;
+        self.save(Some((seat, user)), state.as_ref(), record, finished)
+            .await?;
         self.players.push(user);
         self.live = live;
         self.revision += 1;
@@ -773,7 +774,7 @@ impl Room {
         let state = to_json(Some(next.as_ref()))?;
         let record = to_record(Some(next.as_ref()))?;
 
-        self.save(None, state.as_ref(), record.as_ref(), next.is_over())
+        self.save(None, state.as_ref(), record, next.is_over())
             .await?;
         self.live = Some(next);
         self.revision += 1;
@@ -919,7 +920,7 @@ impl Room {
         &mut self,
         new_player: Option<(usize, Uuid)>,
         state: Option<&Value>,
-        record: Option<&Value>,
+        record: Option<Value>,
         finished: bool,
     ) -> Result<(), RoomError> {
         let change = Change {
@@ -928,7 +929,8 @@ impl Room {
             state_version: self.engine.state_version() as i32,
             new_player,
             state,
-            record,
+            previous: self.last_record.as_ref(),
+            record: record.as_ref(),
             finished,
         };
         // Not a method: the future may only borrow what it needs, so that a game's
@@ -937,7 +939,10 @@ impl Room {
         saved.map_err(|reason| {
             self.stale = true;
             internal(reason, "could not save a game, so dropping it from memory")
-        })
+        })?;
+        // A change that has no record adds no row, and a game that hasn't started has none.
+        self.last_record = record.or(self.last_record.take());
+        Ok(())
     }
 
     /// Tells everyone connected about the game as it now is. `state` is the game's JSON.
@@ -1092,7 +1097,7 @@ async fn insert_game(tx: &mut PgConnection, game: &NewGame) -> Result<GameId, St
             .map_err(db)?;
     }
     if let Some(record) = &game.record {
-        history::insert(tx, &id, 0, game.state_version, record).await?;
+        history::insert(tx, &id, 0, game.state_version, None, record).await?;
     }
     Ok(id)
 }
@@ -1160,6 +1165,9 @@ struct Change<'a> {
     state_version: i32,
     new_player: Option<(usize, Uuid)>,
     state: Option<&'a Value>,
+    /// The record of the latest row the game's history has, if the writer wrote it and so
+    /// knows it: what a row can hold only the difference to.
+    previous: Option<&'a Value>,
     /// The state as the history keeps it: there exactly when `state` is. It goes into the
     /// history under the revision of the change.
     record: Option<&'a Value>,
@@ -1209,6 +1217,7 @@ async fn write(pool: &PgPool, change: Change<'_>) -> Result<(), String> {
             change.game_id,
             revision,
             change.state_version,
+            change.previous,
             record,
         )
         .await?;
@@ -1221,7 +1230,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::test_util::{Quick, Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually};
+    use crate::test_util::{
+        Cells, Quick, Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually,
+    };
 
     /// Short enough to wait out in a test.
     const GRACE: Duration = Duration::from_millis(50);
@@ -2190,11 +2201,25 @@ mod tests {
 
     // --- The history ---
 
-    /// The game's history as the database holds it: revision, state version and state, oldest
-    /// first.
+    /// The game's history as the database holds it, with every delta applied: revision, state
+    /// version and state, oldest first.
     async fn history_of(pool: &PgPool, id: &GameId) -> Vec<(i64, i32, Value)> {
+        let rows: Vec<history::StoredRow> = sqlx::query_as(
+            "SELECT revision, state_version, state, delta FROM game_history
+             WHERE game_id = $1 ORDER BY revision",
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        history::unfold(rows).unwrap()
+    }
+
+    /// The rows of the game's history as they are stored: revision, state and delta, oldest
+    /// first.
+    async fn rows_of(pool: &PgPool, id: &GameId) -> Vec<(i64, Option<Value>, Option<Value>)> {
         sqlx::query_as(
-            "SELECT revision, state_version, state FROM game_history
+            "SELECT revision, state, delta FROM game_history
              WHERE game_id = $1 ORDER BY revision",
         )
         .bind(id)
@@ -2225,6 +2250,136 @@ mod tests {
         let id = started_game(&rooms, first, second).await;
 
         assert_eq!(history_of(&pool, &id).await, [(1, 1, tallied(0, 0))]);
+    }
+
+    fn cells() -> Games {
+        Games::default().with::<Cells>()
+    }
+
+    /// A game of cells with `first` in seat 0 and `second` in seat 1.
+    async fn started_cells(rooms: &Rooms, first: Uuid, second: Uuid) -> GameId {
+        let engine = rooms.games().get("cells").unwrap().clone();
+        let id = rooms.create(&engine, first, false).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
+        id
+    }
+
+    fn cell(cell: usize) -> Value {
+        json!({ "cell": cell })
+    }
+
+    /// The state of a game of cells: the counters on the cells that have any, and whose turn it is.
+    fn marked(counters: &[(usize, u8)], turn: usize) -> Value {
+        let mut cells = [0u8; 20];
+        for &(cell, count) in counters {
+            cells[cell] = count;
+        }
+        json!({ "cells": cells, "turn": turn })
+    }
+
+    #[sqlx::test]
+    async fn a_row_after_the_first_holds_only_what_changed(pool: PgPool) {
+        let rooms = rooms(&pool, cells());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_cells(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
+
+        ada.act(cell(3)).await.unwrap();
+        grace.act(cell(5)).await.unwrap();
+
+        assert_eq!(
+            rows_of(&pool, &id).await,
+            [
+                (1, Some(marked(&[], 0)), None),
+                (2, None, Some(json!([[["cells", 3], 1], [["turn"], 1]]))),
+                (3, None, Some(json!([[["cells", 5], 1], [["turn"], 0]]))),
+            ]
+        );
+        // Read back, they are the states the game was in.
+        assert_eq!(
+            history_of(&pool, &id).await,
+            [
+                (1, 1, marked(&[], 0)),
+                (2, 1, marked(&[(3, 1)], 1)),
+                (3, 1, marked(&[(3, 1), (5, 1)], 0)),
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_room_that_loads_a_game_writes_a_whole_state_first(pool: PgPool) {
+        let rooms = rooms(&pool, cells());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_cells(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
+        ada.act(cell(3)).await.unwrap();
+        grace.act(cell(5)).await.unwrap();
+        // The room goes, as it does when nobody is there. The next one has to load the game
+        // and doesn't know what the rows before hold, which an older server may have written.
+        rooms.close(std::slice::from_ref(&id));
+        eventually("the room shuts down", || !rooms.is_open(&id)).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+        let grace = rooms.connect(&id, second).await.unwrap();
+
+        ada.act(cell(7)).await.unwrap();
+        grace.act(cell(9)).await.unwrap();
+
+        let rows = rows_of(&pool, &id).await;
+        let kept: Vec<_> = rows
+            .iter()
+            .map(|(revision, state, _)| (*revision, state.is_some()))
+            .collect();
+        assert_eq!(
+            kept,
+            [(1, true), (2, false), (3, false), (4, true), (5, false)]
+        );
+        assert_eq!(
+            history_of(&pool, &id).await.last(),
+            Some(&(5, 1, marked(&[(3, 1), (5, 1), (7, 1), (9, 1)], 0)))
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_state_that_a_delta_would_not_shorten_is_kept_whole(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let id = started_game(&rooms, first, second).await;
+        let ada = rooms.connect(&id, first).await.unwrap();
+
+        ada.act(add(5)).await.unwrap();
+
+        // `{"total":5,"turn":1}` is shorter than the two changes that lead to it.
+        assert_eq!(
+            rows_of(&pool, &id).await,
+            [
+                (1, Some(tallied(0, 0)), None),
+                (2, Some(tallied(5, 1)), None)
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_state_is_kept_as_compact_json_text(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+
+        let id = started_game(&rooms, first, second).await;
+
+        // A history has a row for every step of a game, so the size of a row matters: `jsonb`
+        // would be some three times as large, and a `Value` bound as `jsonb` would come back
+        // out of its cast to `json` with spaces added.
+        let (kind, text): (String, String) = sqlx::query_as(
+            "SELECT pg_typeof(state)::text, state::text FROM game_history WHERE game_id = $1",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(kind, "json");
+        assert_eq!(text, tallied(0, 0).to_string());
+        assert!(!text.contains(' '));
     }
 
     #[sqlx::test]
