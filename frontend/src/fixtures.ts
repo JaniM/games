@@ -1,6 +1,17 @@
-// Long backgammon positions for tests: the shapes the server sends, built from small pieces.
+// Game positions for tests: the shapes the server sends, built from small pieces. Long backgammon
+// first, then ultimate tic-tac-toe.
 
-import type { LongBackgammonState, Phase, Snapshot, Step } from "./features/game";
+import {
+  LONG_BACKGAMMON,
+  type LongBackgammonSnapshot,
+  type LongBackgammonState,
+  type Phase,
+  type Seat,
+  type Step,
+  ULTIMATE_TIC_TAC_TOE,
+  type UtttSnapshot,
+  type UtttState,
+} from "./features/game";
 import { gameIdOf } from "./testing";
 
 export const GAME_ID = gameIdOf(1);
@@ -45,8 +56,9 @@ export function moving(
 }
 
 /** What a snapshot holds once the client has read it. */
-export function snapshotOf(overrides: Partial<Snapshot> = {}): Snapshot {
+export function snapshotOf(overrides: Partial<LongBackgammonSnapshot> = {}): LongBackgammonSnapshot {
   return {
+    kind: LONG_BACKGAMMON,
     revision: 1,
     players: ["user-a", "user-b"],
     playerNames: ["Ada", "Grace"],
@@ -63,9 +75,108 @@ export function snapshotMessage(overrides: Record<string, unknown> = {}) {
   return {
     type: "snapshot",
     gameId: GAME_ID,
-    kind: "long-backgammon",
     stateVersion: 1,
     ...snapshotOf(),
+    ...overrides,
+  };
+}
+
+// --- Ultimate tic-tac-toe ---
+
+/** The nine boards of nine empty cells. */
+export function emptyCells(): (Seat | null)[][] {
+  return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null));
+}
+
+/**
+ * The cells with marks on them: `{ 4: { 0: 1, 4: 0 } }` is seat 1's mark in cell 0 and seat 0's in
+ * cell 4 of board 4. Boards and cells are counted from 0.
+ */
+export function marks(placed: Record<number, Record<number, Seat>>): (Seat | null)[][] {
+  const cells = emptyCells();
+  for (const [board, inBoard] of Object.entries(placed)) {
+    for (const [cell, seat] of Object.entries(inBoard)) {
+      const row = cells[Number(board)];
+      if (row) row[Number(cell)] = seat;
+    }
+  }
+  return cells;
+}
+
+/** Every cell of `board` marked by `seat`'s line along `line`, and the rest by nobody: a board `seat` has won. */
+export function wonBoard(seat: Seat, line: [number, number, number] = [0, 1, 2]): Record<number, Seat> {
+  return Object.fromEntries(line.map((cell) => [cell, seat]));
+}
+
+const LINES = [
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
+] as const;
+
+/** The seat that has a line among `marked`, which is nine places holding a seat or null. */
+function lineOwner(marked: readonly (Seat | null)[]): Seat | null {
+  for (const [a, b, c] of LINES) {
+    const seat = marked[a as number];
+    if (seat != null && seat === marked[b as number] && seat === marked[c as number]) return seat;
+  }
+  return null;
+}
+
+/**
+ * A game of ultimate tic-tac-toe in the state the server sends, with the boards worked out from
+ * the cells, as the server does: a board is won by whoever has a line in it, drawn once it is full,
+ * open otherwise. `line` and `playable` are left to the test, which says what the position is for:
+ * by default every open board may be played, as after a mark that sent nobody anywhere in particular.
+ */
+export function utttState(overrides: Partial<UtttState> = {}): UtttState {
+  const cells = overrides.cells ?? emptyCells();
+  const boards: UtttState["boards"] = cells.map((marked) => {
+    const owner = lineOwner(marked);
+    if (owner !== null) return { type: "won", seat: owner };
+    return marked.every((cell) => cell !== null) ? { type: "drawn" } : { type: "open" };
+  });
+  const open = boards.flatMap((board, index) => (board.type === "open" ? [index] : []));
+  const over = overrides.phase?.type === "over";
+  return {
+    x: 0,
+    turn: 0,
+    last: null,
+    phase: { type: "play" },
+    line: null,
+    ...overrides,
+    cells,
+    boards: overrides.boards ?? boards,
+    playable: overrides.playable ?? (over ? [] : open),
+  };
+}
+
+/** What a snapshot of an ultimate tic-tac-toe game holds once the client has read it. */
+export function utttSnapshotOf(overrides: Partial<UtttSnapshot> = {}): UtttSnapshot {
+  return {
+    kind: ULTIMATE_TIC_TAC_TOE,
+    revision: 1,
+    players: ["user-a", "user-b"],
+    playerNames: ["Ada", "Grace"],
+    playerGuests: [false, false],
+    state: utttState(),
+    rematch: null,
+    ...overrides,
+  };
+}
+
+/** The message the server sends for an ultimate tic-tac-toe game. */
+export function utttSnapshotMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "snapshot",
+    gameId: GAME_ID,
+    stateVersion: 1,
+    ...utttSnapshotOf(),
     ...overrides,
   };
 }

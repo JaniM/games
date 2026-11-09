@@ -179,7 +179,9 @@ export function fakeServer() {
         bot?: boolean;
         public?: boolean;
       };
-      if (kind !== "long-backgammon") return new Response("unknown kind of game", { status: 422 });
+      if (kind !== "long-backgammon" && kind !== "ultimate-tic-tac-toe") {
+        return new Response("unknown kind of game", { status: 422 });
+      }
       const game = {
         id: gameIdOf(games.size + 1),
         kind,

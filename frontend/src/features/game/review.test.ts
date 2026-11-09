@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { board, moving, snapshotOf, startingState } from "../../fixtures";
+import { board, marks, moving, snapshotOf, startingState, utttSnapshotOf, utttState } from "../../fixtures";
 import {
   addFrame,
   asFrame,
+  asUtttFrame,
   atFor,
   extend,
   framesOf,
+  readFrame,
   hasMoves,
+  hasMovesIn,
   moveForKey,
   reviewAlwaysOn,
   shownIndex,
 } from "./review";
-import type { Frame } from "./schemas";
+import type { Frame, UtttState } from "./schemas";
 
 // The positions of one turn of seat 0 (White), as the server's revisions number them.
 const start = startingState();
@@ -110,7 +113,7 @@ describe("addFrame", () => {
       points: [board({ 1: 14, 10: 1 }), board({ 1: 15 })],
       ...moving([6, 3], [], [{ from: 1, die: 6 }, { from: 7, die: 3 }], []),
     });
-    let frames = [frame(1), frame(2, rolled), frame(3, afterSix), frame(4, afterBoth)];
+    let frames: Frame[] = [frame(1), frame(2, rolled), frame(3, afterSix), frame(4, afterBoth)];
 
     frames = addFrame(frames, frame(5, afterSix));
     expect(revisions(frames)).toEqual([1, 2, 3]);
@@ -123,13 +126,14 @@ describe("addFrame", () => {
       points: [board({ 1: 14, 4: 1 }), board({ 1: 15 })],
       ...moving([6, 3], [{ from: 4, die: 6 }], [{ from: 1, die: 3 }], [6]),
     });
-    let frames = [frame(1), frame(2, rolled), frame(3, afterSix)];
+    let frames: Frame[] = [frame(1), frame(2, rolled), frame(3, afterSix)];
 
     frames = addFrame(frames, frame(4, rolled));
     frames = addFrame(frames, frame(5, elsewhere));
 
     expect(revisions(frames)).toEqual([1, 2, 5]);
-    expect(frames.at(-1)?.state.points[0]).toEqual(board({ 1: 14, 4: 1 }));
+    const last = frames.at(-1);
+    expect(last?.kind === "long-backgammon" && last.state.points[0]).toEqual(board({ 1: 14, 4: 1 }));
   });
 
   it("does not take a step back that is the end of a turn: it cannot be taken back", () => {
@@ -196,7 +200,8 @@ describe("extend, for a snapshot of a game in review", () => {
   it("adds it without what the player could press, since nothing in review is played", () => {
     const more = extend(held, 2, snapshot(3, afterSix));
 
-    expect(more.type === "frames" && more.frames.at(-1)?.state.legal).toEqual([]);
+    const last = more.type === "frames" ? more.frames.at(-1) : undefined;
+    expect(last?.kind === "long-backgammon" && last.state.legal).toEqual([]);
   });
 
   it("takes a step back as the frame that was before the step, and moves on to its revision", () => {
@@ -276,7 +281,7 @@ describe("moveForKey", () => {
 
 describe("reviewAlwaysOn", () => {
   const players = ["user-a", "user-b"];
-  const snapshot = (state: ReturnType<typeof startingState> | null) => ({ players, state });
+  const snapshot = (state: ReturnType<typeof startingState> | null) => snapshotOf({ players, state });
 
   it("is on for a game that is over, for a player and for a watcher", () => {
     for (const userId of ["user-a", "user-b", "someone-else"]) {
@@ -302,5 +307,131 @@ describe("reviewAlwaysOn", () => {
   it("is off for a user who is not known yet, who would otherwise pass for a watcher", () => {
     expect(reviewAlwaysOn(snapshot(turnOver), null)).toBe(false);
     expect(reviewAlwaysOn(snapshot(over), null)).toBe(true);
+  });
+});
+
+describe("ultimate tic-tac-toe", () => {
+  const fresh = utttState();
+  const first = utttState({ turn: 1, last: { seat: 0, board: 4, cell: 4 }, cells: marks({ 4: { 4: 0 } }), playable: [4] });
+  const second = utttState({
+    turn: 0,
+    last: { seat: 1, board: 4, cell: 0 },
+    cells: marks({ 4: { 4: 0, 0: 1 } }),
+    playable: [0],
+  });
+  const ended = utttState({ ...second, phase: { type: "over", winner: 1, forfeited: true }, playable: [] });
+  const frameOf = (revision: number, state: UtttState) => asUtttFrame(revision, state);
+  const snapshot = (revision: number, state: UtttState | null) => utttSnapshotOf({ revision, state });
+  const players = ["user-a", "user-b"];
+
+  describe("a frame", () => {
+    it("is the position as it was, with the board that was to be played in next", () => {
+      const frame = asUtttFrame(7, first);
+
+      expect(frame).toEqual({ kind: "ultimate-tic-tac-toe", revision: 7, state: first });
+      expect(frame.state.playable).toEqual([4]);
+    });
+
+    it("keeps the board a position sent the player to, for a game that is over as well: none", () => {
+      expect(asUtttFrame(9, ended).state.playable).toEqual([]);
+    });
+  });
+
+  describe("readFrame", () => {
+    it("reads a position the server kept, as it was, with the board that was to be played in", () => {
+      expect(readFrame("ultimate-tic-tac-toe", 4, first)).toEqual(asUtttFrame(4, first));
+      expect(readFrame("ultimate-tic-tac-toe", 4, first)).toMatchObject({ state: { playable: [4] } });
+    });
+
+    it("refuses what is not a position of this game, or lacks what a frame shows", () => {
+      expect(readFrame("ultimate-tic-tac-toe", 4, { ...first, cells: [] })).toBeNull();
+      expect(readFrame("ultimate-tic-tac-toe", 4, { ...first, boards: undefined })).toBeNull();
+      expect(readFrame("ultimate-tic-tac-toe", 4, { ...first, playable: undefined })).toBeNull();
+      expect(readFrame("ultimate-tic-tac-toe", 4, null)).toBeNull();
+      // A long backgammon position is not one of this game, and the other way round.
+      expect(readFrame("ultimate-tic-tac-toe", 4, start)).toBeNull();
+      expect(readFrame("long-backgammon", 4, first)).toBeNull();
+    });
+  });
+
+  describe("hasMovesIn", () => {
+    it("is false before the first mark, and true after it", () => {
+      expect(hasMovesIn({ kind: "ultimate-tic-tac-toe", state: fresh })).toBe(false);
+      expect(hasMovesIn({ kind: "ultimate-tic-tac-toe", state: first })).toBe(true);
+    });
+
+    it("is true for a game that was given up before any mark, which has two positions to step through", () => {
+      const forfeited = utttState({ phase: { type: "over", winner: 1, forfeited: true } });
+
+      expect(hasMovesIn({ kind: "ultimate-tic-tac-toe", state: forfeited })).toBe(true);
+    });
+
+    it("asks the game that the frame is of", () => {
+      expect(hasMovesIn({ kind: "long-backgammon", state: start })).toBe(false);
+      expect(hasMovesIn({ kind: "long-backgammon", state: rolled })).toBe(true);
+    });
+  });
+
+  describe("addFrame", () => {
+    it("keeps every position as a frame: a mark is never taken back", () => {
+      let frames: Frame[] = [];
+      for (const [revision, state] of [[1, fresh], [2, first], [3, second], [4, ended]] as const) {
+        frames = addFrame(frames, frameOf(revision, state));
+      }
+
+      expect(frames.map((f) => f.revision)).toEqual([1, 2, 3, 4]);
+    });
+
+    it("does not mistake a mark for a step taken back, even when the board goes back to how it was", () => {
+      // Two frames of the same position, as can come of a rematch being asked: both stay.
+      const frames = addFrame([frameOf(1, fresh), frameOf(2, first)], frameOf(3, fresh));
+
+      expect(frames.map((f) => f.revision)).toEqual([1, 2, 3]);
+    });
+  });
+
+  describe("extend", () => {
+    const held = [frameOf(1, fresh), frameOf(2, first)];
+
+    it("adds the next snapshot as one more frame, with the board that was to be played in", () => {
+      const more = extend(held, 2, snapshot(3, second));
+
+      expect(more.type === "frames" && more.frames.map((f) => f.revision)).toEqual([1, 2, 3]);
+      const last = more.type === "frames" ? more.frames.at(-1) : undefined;
+      expect(last?.kind === "ultimate-tic-tac-toe" && last.state.playable).toEqual([0]);
+    });
+
+    it("asks for the positions again when some were missed", () => {
+      expect(extend(held, 2, snapshot(5, second))).toEqual({ type: "missed" });
+    });
+
+    it("adds nothing after the game has ended, or for a snapshot that is not newer", () => {
+      expect(extend([frameOf(1, fresh), frameOf(2, ended)], 2, snapshot(3, ended))).toEqual({ type: "none" });
+      expect(extend(held, 2, snapshot(2, first))).toEqual({ type: "none" });
+      expect(extend(held, 2, snapshot(3, null))).toEqual({ type: "none" });
+    });
+
+    it("begins the review at the snapshot when there are no frames", () => {
+      const more = extend([], -1, snapshot(30, second));
+
+      expect(more).toMatchObject({ type: "frames", through: 30 });
+      expect(more.type === "frames" && more.frames.map((f) => f.revision)).toEqual([30]);
+    });
+  });
+
+  describe("reviewAlwaysOn", () => {
+    it("is on for a game that is over, and for a watcher of a game that has been played", () => {
+      expect(reviewAlwaysOn(snapshot(9, ended), "user-a")).toBe(true);
+      expect(reviewAlwaysOn(snapshot(9, ended), "someone-else")).toBe(true);
+      expect(reviewAlwaysOn(snapshot(3, second), "someone-else")).toBe(true);
+    });
+
+    it("is off for the players of a game that is on, before a mark, and before the game starts", () => {
+      expect(reviewAlwaysOn(snapshot(3, second), "user-a")).toBe(false);
+      expect(reviewAlwaysOn(snapshot(1, fresh), "someone-else")).toBe(false);
+      expect(reviewAlwaysOn(snapshot(1, null), "someone-else")).toBe(false);
+      expect(reviewAlwaysOn(snapshot(3, second), null)).toBe(false);
+      expect(players).toContain("user-a");
+    });
   });
 });

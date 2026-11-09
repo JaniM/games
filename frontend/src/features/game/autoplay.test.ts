@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { moving, snapshotOf, startingState } from "../../fixtures";
+import { marks, moving, snapshotOf, startingState, utttSnapshotOf, utttState, wonBoard } from "../../fixtures";
 import { autoplayAction } from "./autoplay";
 
 // Seats: user-a is seat 0 (White, to move in a fresh game), user-b is seat 1.
@@ -78,5 +78,82 @@ describe("what auto-play does", () => {
     const state = startingState({ turn: 1 });
     expect(autoplayAction(snapshotOf({ state }), "user-b")).toEqual({ type: "roll" });
     expect(autoplayAction(snapshotOf({ state }), "user-a")).toBeNull();
+  });
+});
+
+describe("what auto-play does in ultimate tic-tac-toe", () => {
+  // Seats: user-a is seat 0 (X, to move in a fresh game), user-b is seat 1.
+  /** Seat 0 marked cell 4 of board 0, which sends seat 1 to board 4. */
+  const sent = utttSnapshotOf({
+    state: utttState({
+      turn: 1,
+      last: { seat: 0, board: 0, cell: 4 },
+      cells: marks({ 0: { 4: 0 }, 4: { 0: 0, 8: 1 } }),
+      playable: [4],
+    }),
+  });
+  /** The cells of board 4 that are empty. */
+  const empty = [1, 2, 3, 4, 5, 6, 7];
+
+  it("plays anywhere at the start of the game, when every cell is open", () => {
+    expect(autoplayAction(utttSnapshotOf(), "user-a", sequence(0))).toEqual({ type: "play", board: 0, cell: 0 });
+    expect(autoplayAction(utttSnapshotOf(), "user-a", sequence(0.99))).toEqual({
+      type: "play",
+      board: 8,
+      cell: 8,
+    });
+  });
+
+  it("plays an empty cell of the board it was sent to, each equally likely", () => {
+    const picks = empty.map((_, index) => autoplayAction(sent, "user-b", sequence((index + 0.5) / empty.length)));
+
+    expect(picks).toEqual(empty.map((cell) => ({ type: "play", board: 4, cell })));
+  });
+
+  it("only ever picks what the server allows: a listed board, a cell with no mark", () => {
+    for (let i = 0; i < 300; i++) {
+      expect(autoplayAction(sent, "user-b")).toMatchObject({ type: "play", board: 4 });
+      const action = autoplayAction(sent, "user-b") as { board: number; cell: number };
+      expect(empty).toContain(action.cell);
+    }
+  });
+
+  it("plays in any open board when the one it was sent to is decided, and never in a decided one", () => {
+    const state = utttState({
+      turn: 1,
+      last: { seat: 0, board: 0, cell: 4 },
+      cells: marks({ 4: wonBoard(0), 0: { 4: 0 }, 1: wonBoard(1) }),
+    });
+    const free = utttSnapshotOf({ state });
+    const boards = new Set<number>();
+
+    for (let i = 0; i < 500; i++) {
+      const action = autoplayAction(free, "user-b") as { board: number; cell: number };
+      boards.add(action.board);
+      expect(state.cells[action.board]?.[action.cell]).toBeNull();
+    }
+
+    expect(boards.has(4)).toBe(false);
+    expect(boards.has(1)).toBe(false);
+    expect(boards.size).toBeGreaterThan(3);
+  });
+
+  it("does nothing when it is not the player's turn, for a spectator, or before the user is known", () => {
+    expect(autoplayAction(sent, "user-a")).toBeNull();
+    expect(autoplayAction(sent, "somebody-else")).toBeNull();
+    expect(autoplayAction(sent, null)).toBeNull();
+  });
+
+  it("does nothing before the game starts, or once it is over", () => {
+    expect(autoplayAction(utttSnapshotOf({ state: null }), "user-a")).toBeNull();
+    const over = utttState({ phase: { type: "over", winner: 0, forfeited: false } });
+    expect(over.playable).toEqual([]);
+    expect(autoplayAction(utttSnapshotOf({ state: over }), "user-a")).toBeNull();
+  });
+
+  it("does nothing when the server lists nothing to play", () => {
+    const stuck = utttState({ playable: [] });
+
+    expect(autoplayAction(utttSnapshotOf({ state: stuck }), "user-a")).toBeNull();
   });
 });

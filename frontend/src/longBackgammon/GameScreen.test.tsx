@@ -171,8 +171,10 @@ describe("a game with both players", () => {
 
     expect(html).toContain("Grace (you)");
     expect(html).toContain(">Ada<");
-    expect(html).toContain(">White<");
-    expect(html).toContain(">Black<");
+    // The colours are said by the swatches. Their names are left for a screen reader.
+    expect(html).toContain('<span class="visually-hidden">White</span>');
+    expect(html).toContain('<span class="visually-hidden">Black</span>');
+    expect(html).not.toContain('class="player-colour"');
     expect(html).toContain("to move");
   });
 

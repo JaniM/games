@@ -15,7 +15,7 @@ use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::long_backgammon::LongBackgammon;
+use crate::{long_backgammon::LongBackgammon, ultimate_tic_tac_toe::UltimateTicTacToe};
 
 /// An action the rules don't allow. The reason goes back to the player who tried it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +93,20 @@ pub trait Game: 'static {
     fn record(state: &Self::State) -> Result<Value, StateError> {
         serde_json::to_value(state)
             .map_err(|err| StateError::new(format!("could not write a state as JSON: {err}")))
+    }
+
+    /// A record as a client is given it when it reads the game's history (see `history`): what
+    /// [`Game::record`] left out and a client can't do without, put back. A client draws a past
+    /// position without knowing the rules, and a record leaves out what can be worked out from the
+    /// rest, because the history keeps one for every change. Most of what a record leaves out is of
+    /// no use to a position of the past, and then this is the record as it is, which is the default.
+    /// Where it is of use, and cheap, the game works it out here, when the history is read, instead
+    /// of having it stored over and over.
+    ///
+    /// It is given the record of a state of the current layout (older ones have been brought up
+    /// to date), so it is a state that [`Engine::load`] accepts.
+    fn history_view(record: Value) -> Result<Value, StateError> {
+        Ok(record)
     }
 
     /// The state of a new game, once all the seats are taken. May use randomness, e.g. to
@@ -232,6 +246,10 @@ pub trait Engine: Send + Sync {
     /// Reads a stored state, first upgrading it to the current version. Fails if the
     /// game can't read it, so that a bad row fails when it is loaded, not on somebody's move.
     fn load(&self, stored_version: u32, state: Value) -> Result<Box<dyn Live>, StateError>;
+
+    /// A record of the current layout as a client reads it in the game's history. See
+    /// [`Game::history_view`].
+    fn history_view(&self, record: Value) -> Result<Value, StateError>;
 }
 
 struct Typed<G>(PhantomData<fn() -> G>);
@@ -271,6 +289,10 @@ impl<G: Game> Engine for Typed<G> {
             .map_err(|err| StateError::new(format!("state does not fit the game: {err}")))?;
         Ok(Box::new(Running::<G>(state)))
     }
+
+    fn history_view(&self, record: Value) -> Result<Value, StateError> {
+        G::history_view(record)
+    }
 }
 
 /// The games a server offers, by kind.
@@ -309,7 +331,9 @@ impl Games {
 
 /// The games this server offers. Register new ones here.
 pub fn registry() -> Games {
-    Games::default().with::<LongBackgammon>()
+    Games::default()
+        .with::<LongBackgammon>()
+        .with::<UltimateTicTacToe>()
 }
 
 #[cfg(test)]

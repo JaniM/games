@@ -23,4 +23,12 @@ export const GAMES: readonly GameInfo[] = [
     players: "2 players",
     bot: true,
   },
+  {
+    id: "ultimate-tic-tac-toe",
+    name: "Ultimate tic-tac-toe",
+    description:
+      "Nine tic-tac-toe boards in one. The cell you mark decides which board your opponent plays in next. Win three boards in a row.",
+    players: "2 players",
+    bot: true,
+  },
 ];

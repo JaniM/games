@@ -1,11 +1,27 @@
 import { z } from "zod";
+import { type Seat, seatSchema } from "./seat";
+import * as tictactoe from "./ultimateTicTacToe";
 
 // The state of a long backgammon game, as the server sends it. The server owns the
 // rules: the client only draws this and uses `legal` to know what may be clicked.
-// When a second game arrives, the state moves out of this file and the snapshot
-// becomes generic over it.
+// The other game's state is in `ultimateTicTacToe.ts`. A snapshot or a frame is of one kind of
+// game, named by its `kind`, and holds the state of that game: narrow on `kind` before reading it.
 
-const seatSchema = z.union([z.literal(0), z.literal(1)]);
+/** The kind of a game, as the server names it (`Game::KIND`) and the catalog in `games.ts` does. */
+export const LONG_BACKGAMMON = "long-backgammon";
+export const ULTIMATE_TIC_TAC_TOE = "ultimate-tic-tac-toe";
+
+/** The layout of each kind's `state` this client reads. */
+export const STATE_VERSIONS = {
+  [LONG_BACKGAMMON]: 1,
+  [ULTIMATE_TIC_TAC_TOE]: 1,
+} as const;
+export type GameKind = keyof typeof STATE_VERSIONS;
+
+/** Whether this client has a board for `kind`. A game of another kind is not for this site's pages. */
+export function isGameKind(kind: string): kind is GameKind {
+  return Object.hasOwn(STATE_VERSIONS, kind);
+}
 
 /**
  * One die played by one checker: the checker on the mover's own point `from`
@@ -72,7 +88,12 @@ export const stateSchema = z.object({
     .nullable(),
 });
 export type LongBackgammonState = z.infer<typeof stateSchema>;
-export type Seat = 0 | 1;
+export type { Seat };
+
+/** The state of an ultimate tic-tac-toe game. */
+export type UtttState = tictactoe.UtttState;
+export type UtttPhase = tictactoe.UtttPhase;
+export type BoardResult = tictactoe.BoardResult;
 
 /**
  * A position as the server keeps it in a game's history: the state without what the server
@@ -83,11 +104,22 @@ export const positionSchema = stateSchema.omit({ legal: true, combos: true });
 export type Position = z.infer<typeof positionSchema>;
 
 /**
- * One position of a game in review: the state the game was in, and the revision of the
- * snapshot that showed it. Nothing in it is playable: `legal` and `combos` are empty.
+ * One position of a game in review: the kind of game, the state the game was in, and the
+ * revision of the snapshot that showed it. Nothing in it is playable: in long backgammon `legal`
+ * and `combos` are empty. (In ultimate tic-tac-toe `playable` stays: it says which board was to be
+ * played in, which a frame shows as the game does. The board of a review is not pressed.)
  */
-export const frameSchema = z.object({ revision: z.number().int(), state: stateSchema });
+export const frameSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal(LONG_BACKGAMMON), revision: z.number().int(), state: stateSchema }),
+  z.object({
+    kind: z.literal(ULTIMATE_TIC_TAC_TOE),
+    revision: z.number().int(),
+    state: tictactoe.stateSchema,
+  }),
+]);
 export type Frame = z.infer<typeof frameSchema>;
+export type LongBackgammonFrame = Extract<Frame, { kind: typeof LONG_BACKGAMMON }>;
+export type UtttFrame = Extract<Frame, { kind: typeof ULTIMATE_TIC_TAC_TOE }>;
 
 /**
  * What `GET /api/games/{id}/history` answers, with the positions still unread so that a bad
@@ -115,12 +147,6 @@ export const rematchSchema = z.discriminatedUnion("type", [
 ]);
 export type Rematch = z.infer<typeof rematchSchema>;
 
-/** The only kind of game this client plays. A snapshot of any other kind is not for this page. */
-export const KIND = "long-backgammon";
-
-/** The only layout of `state` this client reads. */
-export const STATE_VERSION = 1;
-
 /** What a snapshot message carries, with the state still unread so a bad one can be reported. */
 export const incomingSnapshotSchema = z.object({
   type: z.literal("snapshot"),
@@ -137,8 +163,8 @@ export const incomingSnapshotSchema = z.object({
   rematch: rematchSchema.nullish(),
 });
 
-/** What the client keeps of a snapshot. `state` is null until both seats are taken. */
-export const snapshotSchema = z.object({
+/** What every snapshot has, whatever the game: who plays, and where the rematch stands. */
+const snapshotParts = {
   revision: z.number().int(),
   /** User ids by seat. */
   players: z.array(z.string()),
@@ -152,11 +178,28 @@ export const snapshotSchema = z.object({
    * indicator (see `playerName`); the bot and a player who has deleted themselves are not guests.
    */
   playerGuests: z.array(z.boolean()),
-  state: stateSchema.nullable(),
   /** Null until a player of the finished game asks to play it again. */
   rematch: rematchSchema.nullable(),
-});
+};
+
+/**
+ * What the client keeps of a snapshot. `state` is null until both seats are taken. It is of the
+ * game the snapshot's `kind` names.
+ */
+export const snapshotSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal(LONG_BACKGAMMON), ...snapshotParts, state: stateSchema.nullable() }),
+  z.object({
+    kind: z.literal(ULTIMATE_TIC_TAC_TOE),
+    ...snapshotParts,
+    state: tictactoe.stateSchema.nullable(),
+  }),
+]);
 export type Snapshot = z.infer<typeof snapshotSchema>;
+export type LongBackgammonSnapshot = Extract<Snapshot, { kind: typeof LONG_BACKGAMMON }>;
+export type UtttSnapshot = Extract<Snapshot, { kind: typeof ULTIMATE_TIC_TAC_TOE }>;
+
+/** What a snapshot says of the people in a game, whatever the game. The words about them need no more. */
+export type Players = Pick<Snapshot, "players" | "playerNames" | "playerGuests" | "rematch">;
 
 export const errorMessageSchema = z.object({
   type: z.literal("error"),
@@ -170,6 +213,8 @@ export const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("move"), from: z.number().int(), die: z.number().int() }),
   /** Takes back the last step of the turn in progress, and gives its die back. */
   z.object({ type: z.literal("undo") }),
+  /** Marks a cell in ultimate tic-tac-toe. */
+  tictactoe.actionSchema,
   /**
    * Gives up the game (D10). Not an action of the game: the server has a message of its own
    * for it, which `sendActions` sends in its place. It is here so that it goes out the way

@@ -1,27 +1,24 @@
-import type { RowOf } from "millpond";
-import { useRef, useState } from "react";
-import { Link } from "../Link";
-import { copyText } from "../copyText";
 import {
+  LONG_BACKGAMMON,
+  type LongBackgammonSnapshot,
   type Seat,
   type Step,
-  type gameViews,
-  type joinRequests,
-  type rematchRequests,
-  type reviews,
   hasMoves,
+  hasMovesIn,
   isFull,
   reviewAlwaysOn,
   seatOf,
   shownIndex,
 } from "../features/game";
-import { gamePath } from "../features/router";
+import { ForfeitControl } from "../gameUi/ForfeitControl";
+import { InviteBox } from "../gameUi/InviteBox";
+import { GameShell, JoinPanel, ResultSection, gameNotice } from "../gameUi/Panels";
+import { ReviewPanel } from "../gameUi/ReviewPanel";
+import type { AnyGameViewRow, JoinRequestRow, RematchRequestRow, ReviewRow } from "../gameUi/rows";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
-import { ForfeitControl } from "./ForfeitControl";
 import { type Colour, colourOf } from "./layout";
-import { ReviewPanel } from "./ReviewPanel";
 import {
   barNameOf,
   frameText,
@@ -33,10 +30,15 @@ import {
   viewerSeat,
 } from "./status";
 
-export type GameViewRow = RowOf<typeof gameViews>;
-export type JoinRequestRow = RowOf<typeof joinRequests>;
-export type RematchRequestRow = RowOf<typeof rematchRequests>;
-export type ReviewRow = RowOf<typeof reviews>;
+export type { JoinRequestRow, RematchRequestRow, ReviewRow };
+
+/** A game page's row, once it is known that the game is long backgammon (or that there is none yet). */
+export type GameViewRow = Omit<AnyGameViewRow, "snapshot"> & { snapshot: LongBackgammonSnapshot | null };
+
+/** Whether `view` is a long backgammon game's, so that this screen may show it. */
+export function isLongBackgammonView(view: AnyGameViewRow): view is GameViewRow {
+  return view.snapshot === null || view.snapshot.kind === LONG_BACKGAMMON;
+}
 
 export interface GameScreenProps {
   /** The game page's row, or undefined for the moment before the page has opened it. */
@@ -80,16 +82,9 @@ export interface GameScreenProps {
   onCue: (cue: TimedCue) => void;
 }
 
-const HOME = "/";
-
 function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="page game-page">
-      {/* The nav says where you are, and the board what the game is: only a screen reader gets a title. */}
-      <h1 className="visually-hidden">Long backgammon</h1>
-      {children}
-    </main>
-  );
+  // The nav says where you are, and the board what the game is: only a screen reader gets a title.
+  return <GameShell title="Long backgammon">{children}</GameShell>;
 }
 
 /**
@@ -120,28 +115,11 @@ export function GameScreen({
   onMove,
   onCue,
 }: GameScreenProps) {
-  if (view?.connection === "missing") {
-    return (
-      <Shell>
-        <p role="alert">There is no game at this link. Check the link, or start a new game.</p>
-      </Shell>
-    );
-  }
-  if (view?.problem) {
-    return (
-      <Shell>
-        <p role="alert">{view.problem}</p>
-      </Shell>
-    );
-  }
+  const notice = gameNotice(view);
+  if (notice) return notice;
   const snapshot = view?.snapshot;
-  if (!view || !snapshot) {
-    return (
-      <Shell>
-        <p role="status">Connecting to the game…</p>
-      </Shell>
-    );
-  }
+  // The notice has said what there is to say when there is no snapshot: this is for the types.
+  if (!view || !snapshot) return null;
 
   const state = snapshot.state;
   const mySeat = seatOf(snapshot, userId);
@@ -157,7 +135,9 @@ export function GameScreen({
   // The position on the board: the one picked in the review, else the game as it stands. While the
   // positions are on their way, the game as it stands is all there is to show.
   const shown = review ? shownIndex(review.frames.length, review.at) : null;
-  const frame = review && shown !== null ? review.frames[shown] : undefined;
+  const shownFrame = review && shown !== null ? review.frames[shown] : undefined;
+  // A review holds the frames of this game, so they are all of this kind.
+  const frame = shownFrame?.kind === LONG_BACKGAMMON ? shownFrame : undefined;
   const board = frame?.state ?? state;
   const canReview = state !== null && hasMoves(state);
   // A game that is over, and one the user only watches, is always in review: there is nothing to open.
@@ -193,7 +173,7 @@ export function GameScreen({
       count={review.frames.length}
       index={shown}
       text={frame ? frameText(snapshot, frame.state, mySeat) : null}
-      partial={review.frames[0] !== undefined && hasMoves(review.frames[0].state)}
+      partial={review.frames[0] !== undefined && hasMovesIn(review.frames[0])}
       live={over ? "" : `In the game: ${turnText(snapshot, mySeat)}`}
       onShow={onShowFrame}
       onStep={onStepFrame}
@@ -203,68 +183,15 @@ export function GameScreen({
   ) : null;
 
   const status = result ? (
-    <section className={result.won ? "result result-won" : "result"} aria-label="Result">
-      <div>
-        <p className="result-kicker">Game over</p>
-        <p className="result-title" role="status">
-          {result.title}
-        </p>
-        {result.detail && <p className="result-detail">{result.detail}</p>}
-        {/* Always there, so that a screen reader hears it when the other player answers. */}
-        <p
-          className={rematch.stage === "answer" ? "result-rematch result-rematch-due" : "result-rematch"}
-          role="status"
-        >
-          {rematch.line}
-        </p>
-        {rematchProblem && (
-          <p className="result-rematch result-rematch-due" role="alert">
-            {rematchProblem}
-          </p>
-        )}
-      </div>
-      <div className="result-actions">
-        {rematch.stage === "ask" && (
-          <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
-            Rematch
-          </button>
-        )}
-        {rematch.stage === "answer" && (
-          <>
-            <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
-              Accept
-            </button>
-            <button
-              className="button button-quiet"
-              type="button"
-              disabled={!connected || answering}
-              onClick={onDeclineRematch}
-            >
-              Decline
-            </button>
-          </>
-        )}
-        {rematch.stage === "waiting" && (
-          <button
-            className="button button-quiet"
-            type="button"
-            disabled={!connected || answering}
-            onClick={onDeclineRematch}
-          >
-            Cancel
-          </button>
-        )}
-        {rematch.stage === "started" && (
-          <Link className="button" to={gamePath(rematch.gameId)}>
-            Go to the rematch
-          </Link>
-        )}
-        {/* The way out is the main button only when there is nothing else to do. */}
-        <Link className={rematch.stage === "closed" ? "button" : "button button-quiet"} to={HOME}>
-          All games
-        </Link>
-      </div>
-    </section>
+    <ResultSection
+      result={result}
+      rematch={rematch}
+      connected={connected}
+      answering={answering}
+      rematchProblem={rematchProblem}
+      onRematch={onRematch}
+      onDeclineRematch={onDeclineRematch}
+    />
   ) : (
     <section className="status-band" aria-label="Turn" data-turn={myTurn ? "mine" : "wait"}>
       <p className="status-main" role="status" aria-live="polite">
@@ -308,20 +235,7 @@ export function GameScreen({
 
   return (
     <Shell>
-      {canJoin && (
-        <section className="panel" aria-label="Join this game">
-          <p>This game is waiting for a second player.</p>
-          <button className="button" type="button" disabled={!connected || join?.state === "joining"} onClick={onJoin}>
-            {join?.state === "joining" ? "Joining…" : "Join game"}
-          </button>
-          {join?.state === "failed" && (
-            <p className="error" role="alert">
-              {`Could not join: ${join.error}`}
-            </p>
-          )}
-          <p className="muted">Or just watch: anyone with this link can.</p>
-        </section>
-      )}
+      {canJoin && <JoinPanel connected={connected} join={join} onJoin={onJoin} />}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
 
       {/* The viewer is on top: the board is turned to put their head in the top right corner. */}
@@ -394,62 +308,10 @@ function PlayerBar({ edge, name, colour, off, toMove, empty }: PlayerBarProps) {
     <div className={`player-bar player-bar-${edge}${toMove ? " player-bar-active" : ""}`}>
       <span className={`swatch swatch-${colour ?? "none"}`} aria-hidden="true" />
       <span className={empty ? "player-name muted" : "player-name"}>{name}</span>
-      {colour && <span className="player-colour">{colour === "white" ? "White" : "Black"}</span>}
+      {/* The swatch says it to the eye; the name of the colour is for a screen reader. */}
+      {colour && <span className="visually-hidden">{colour === "white" ? "White" : "Black"}</span>}
       {toMove && <span className="player-turn">to move</span>}
       {off > 0 && <span className="player-off">{off} borne off</span>}
     </div>
   );
-}
-
-/** The link to share, with a way to copy it. */
-function InviteBox({ url }: { url: string }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [copied, setCopied] = useState<"yes" | "manual" | null>(null);
-
-  async function copy() {
-    if (await copyText(url)) {
-      setCopied("yes");
-      return;
-    }
-    // Neither way of copying worked (or the person said no): select the link for them.
-    if (input.current) selectAll(input.current);
-    setCopied("manual");
-  }
-
-  return (
-    <section className="panel" aria-label="Invite">
-      <p>Send this link to the person you want to play with. Anyone who opens it can also watch.</p>
-      <div className="invite">
-        <input
-          ref={input}
-          className="invite-url"
-          readOnly
-          value={url}
-          aria-label="Game link"
-          onFocus={(event) => selectAll(event.currentTarget)}
-        />
-        <button className="button" type="button" onClick={copy}>
-          Copy link
-        </button>
-      </div>
-      <p className="muted" role="status">
-        {copied === "yes" ? "Link copied." : copied === "manual" ? manualCopyHint() : ""}
-      </p>
-    </section>
-  );
-}
-
-/** Selects all of a field's text. Safari on iOS ignores `select()` on a read-only field, but not a range. */
-function selectAll(field: HTMLInputElement) {
-  field.focus();
-  field.select();
-  field.setSelectionRange(0, field.value.length);
-}
-
-/** What to do to copy the selected link by hand: a touch screen has no Ctrl+C. */
-function manualCopyHint(): string {
-  const touch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
-  return touch
-    ? "Touch and hold the selected link, then choose Copy."
-    : "Press Ctrl+C (⌘C) to copy the selected link.";
 }

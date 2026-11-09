@@ -106,18 +106,27 @@ export {
   submitAction,
   submitMoves,
 } from "./ops";
-export { hasMoves, moveForKey, reviewAlwaysOn, shownIndex } from "./review";
+export { hasMoves, hasMovesIn, moveForKey, positionOf, reviewAlwaysOn, shownIndex } from "./review";
 export type { ReviewMove } from "./review";
 export { isFull, landing, seatOf } from "./selectors";
 export type { Landing } from "./selectors";
+export { LONG_BACKGAMMON, ULTIMATE_TIC_TAC_TOE } from "./schemas";
 export type {
   Action,
+  BoardResult,
   Frame,
+  LongBackgammonFrame,
+  LongBackgammonSnapshot,
   LongBackgammonState,
   Phase,
+  Players,
   Rematch,
   Seat,
   Snapshot,
   Step,
+  UtttFrame,
+  UtttPhase,
+  UtttSnapshot,
+  UtttState,
 } from "./schemas";
 export { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";

@@ -1,7 +1,7 @@
 import { type Tx, op } from "millpond";
 import { SESSION_ID, sessionState } from "../session";
 import { atFor, extend, framesOf, reviewAlwaysOn, shownIndex } from "./review";
-import type { Action, Frame, Snapshot, Step } from "./schemas";
+import { type Action, type Frame, LONG_BACKGAMMON, type Snapshot, type Step } from "./schemas";
 import { landing, seatOf } from "./selectors";
 import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
 
@@ -120,18 +120,23 @@ function followReview(tx: Tx, gameId: string, snapshot: Snapshot) {
   }
 }
 
-/** `point` if the user may start a step from it in `snapshot`, on their own turn, else null. */
+/**
+ * `point` if the user may start a step from it in `snapshot`, on their own turn, else null.
+ * Only long backgammon has steps and a selected point.
+ */
 function startable(snapshot: Snapshot | null, userId: string | null, point: number | null) {
-  const state = snapshot?.state;
-  if (point === null || !snapshot || !state) return null;
+  if (snapshot?.kind !== LONG_BACKGAMMON) return null;
+  const state = snapshot.state;
+  if (point === null || !state) return null;
   if (seatOf(snapshot, userId) !== state.turn) return null;
   return state.legal.some((step) => step.from === point) ? point : null;
 }
 
 /** Whether the user may play `step` now, in `snapshot`: it is their turn and the server lists it. */
 function playable(snapshot: Snapshot | null, userId: string | null, step: Step): boolean {
-  const state = snapshot?.state;
-  if (!snapshot || !state || seatOf(snapshot, userId) !== state.turn) return false;
+  if (snapshot?.kind !== LONG_BACKGAMMON) return false;
+  const state = snapshot.state;
+  if (!state || seatOf(snapshot, userId) !== state.turn) return false;
   return state.legal.some((legal) => legal.from === step.from && legal.die === step.die);
 }
 

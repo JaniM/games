@@ -779,6 +779,57 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn a_person_and_the_bot_take_turns_at_ultimate_tic_tac_toe_over_the_socket(pool: PgPool) {
+        let app = TestApp::new(pool, crate::game::registry());
+        let server = app.serve().await;
+        let (_, token) = app.register_user().await;
+        let created = app.create_bot_game(&token, "ultimate-tic-tac-toe").await;
+        let game_id = created.json["gameId"].as_str().unwrap().to_owned();
+        let mut client = Client::sign_in(&server, &game_id, &token).await;
+
+        // How many cells a seat has marked.
+        let marks = |state: &Value, seat: u64| {
+            state["cells"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|board| board.as_array().unwrap())
+                .filter(|cell| cell.as_u64() == Some(seat))
+                .count()
+        };
+
+        // The person marks three cells, always the first empty one of the first board the
+        // server offers. Whenever it is their turn they do it; otherwise the bot is playing,
+        // and the next snapshot is its doing.
+        let mut snapshot = client.next().await;
+        for _ in 0..200 {
+            let state = &snapshot["state"];
+            if marks(state, 0) >= 3 {
+                break;
+            }
+            assert_eq!(state["phase"]["type"], "play", "the game ended too soon");
+            if state["turn"] == 0 {
+                let board = state["playable"][0].as_u64().unwrap() as usize;
+                let cell = (0..9)
+                    .find(|&cell| state["cells"][board][cell].is_null())
+                    .unwrap();
+                client
+                    .act(json!({ "type": "play", "board": board, "cell": cell }))
+                    .await;
+            }
+            snapshot = client.next().await;
+        }
+
+        let state = &snapshot["state"];
+        assert_eq!(marks(state, 0), 3, "the person marked three cells");
+        // The bot answered every one of them, and began if it was X.
+        let bot_marks = marks(state, 1);
+        assert!(bot_marks >= 2, "the bot marked only {bot_marks} cells");
+        assert_eq!(snapshot["players"][1], crate::bot::BOT_USER.to_string());
+        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+    }
+
+    #[sqlx::test]
     async fn a_rematch_reaches_the_other_player_as_a_snapshot_on_the_socket_they_have(
         pool: PgPool,
     ) {

@@ -1,6 +1,7 @@
 import { useOp, useQuery } from "millpond/react";
 import { useEffect } from "react";
 import {
+  ULTIMATE_TIC_TAC_TOE,
   askRematch,
   closeGame,
   closeReview,
@@ -26,10 +27,15 @@ import { gamePath } from "../features/router";
 import { SESSION_ID, sessionState } from "../features/session";
 import { DEFAULT_VOLUME, SOUND_ID, soundSettings } from "../features/sound";
 import type { TimedCue } from "../longBackgammon/cues";
-import { GameScreen } from "../longBackgammon/GameScreen";
+import { GameScreen, isLongBackgammonView } from "../longBackgammon/GameScreen";
 import { playCue, unlockOnGesture } from "../longBackgammon/sounds";
+import { GameScreen as UtttGameScreen, isUtttView } from "../ultimateTicTacToe/GameScreen";
 
-/** Connects a long backgammon game to the page: opens it while the page is up and turns clicks into ops. */
+/**
+ * Connects a game to the page: opens it while the page is up and turns clicks into ops. The game's
+ * link doesn't say what game it is, so the page waits for the first snapshot, which does, and then
+ * draws the board of that kind of game.
+ */
 export function GamePage({ gameId }: { gameId: string }) {
   const view = useQuery(gameViews.get(gameId));
   const join = useQuery(joinRequests.get(gameId));
@@ -75,31 +81,49 @@ export function GamePage({ gameId }: { gameId: string }) {
     return () => close({ gameId });
   }, [gameId, open, close]);
 
-  return (
-    <GameScreen
-      view={view}
-      userId={session?.userId ?? null}
-      join={join}
-      rematchRequest={rematch}
-      review={review}
-      inviteUrl={`${location.origin}${gamePath(gameId)}`}
-      onJoin={() => requestJoin({ gameId })}
-      onRematch={() => requestRematch({ gameId })}
-      onDeclineRematch={() => declineOffer({ gameId })}
-      onReview={() => startReview({ gameId })}
-      onCloseReview={() => endReview({ gameId })}
-      onRetryReview={() => askAgain({ gameId })}
-      onShowFrame={(index) => showPosition({ gameId, index })}
-      onStepFrame={(by) => stepPosition({ gameId, by })}
-      onRoll={() => submit({ gameId, action: { type: "roll" } })}
-      onUndo={() => submit({ gameId, action: { type: "undo" } })}
-      onForfeit={() => forfeit({ gameId })}
-      onAutoplay={(on) => autoplay({ gameId, on })}
-      // Only in development: `import.meta.env.DEV` is false in `vite build`, and the button is left out.
-      showAutoplay={import.meta.env.DEV}
-      onSelect={(point) => select({ gameId, point })}
-      onMove={(steps) => submitMove({ gameId, steps })}
-      onCue={(timed: TimedCue) => playCue(timed.cue, timed.afterMs, volume)}
-    />
-  );
+  // What every kind of game's screen is given. A kind has more of its own: the dice, the marks.
+  const common = {
+    userId,
+    join,
+    rematchRequest: rematch,
+    review,
+    inviteUrl: `${location.origin}${gamePath(gameId)}`,
+    onJoin: () => requestJoin({ gameId }),
+    onRematch: () => requestRematch({ gameId }),
+    onDeclineRematch: () => declineOffer({ gameId }),
+    onReview: () => startReview({ gameId }),
+    onCloseReview: () => endReview({ gameId }),
+    onRetryReview: () => askAgain({ gameId }),
+    onShowFrame: (index: number) => showPosition({ gameId, index }),
+    onStepFrame: (by: number) => stepPosition({ gameId, by }),
+    onForfeit: () => forfeit({ gameId }),
+    onAutoplay: (on: boolean) => autoplay({ gameId, on }),
+    // Only in development: `import.meta.env.DEV` is false in `vite build`, and the button is left out.
+    showAutoplay: import.meta.env.DEV,
+    onCue: (timed: TimedCue) => playCue(timed.cue, timed.afterMs, volume),
+  };
+
+  if (view && view.snapshot?.kind === ULTIMATE_TIC_TAC_TOE && isUtttView(view)) {
+    return (
+      <UtttGameScreen
+        view={view}
+        {...common}
+        onPlay={(board, cell) => submit({ gameId, action: { type: "play", board, cell } })}
+      />
+    );
+  }
+  // Long backgammon, which is also what shows the page until the first snapshot says what it is.
+  if (view === undefined || isLongBackgammonView(view)) {
+    return (
+      <GameScreen
+        view={view}
+        {...common}
+        onRoll={() => submit({ gameId, action: { type: "roll" } })}
+        onUndo={() => submit({ gameId, action: { type: "undo" } })}
+        onSelect={(point) => select({ gameId, point })}
+        onMove={(steps) => submitMove({ gameId, steps })}
+      />
+    );
+  }
+  return null;
 }

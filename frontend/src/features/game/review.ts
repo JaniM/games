@@ -1,5 +1,18 @@
-import type { Frame, LongBackgammonState, Position, Snapshot } from "./schemas";
+import {
+  type Frame,
+  type GameKind,
+  LONG_BACKGAMMON,
+  type LongBackgammonFrame,
+  type LongBackgammonState,
+  type Position,
+  type Snapshot,
+  ULTIMATE_TIC_TAC_TOE,
+  type UtttFrame,
+  type UtttState,
+  positionSchema,
+} from "./schemas";
 import { seatOf } from "./selectors";
+import { stateSchema as utttStateSchema } from "./ultimateTicTacToe";
 
 // Reviewing a game: stepping through the positions it has been in. The server keeps every
 // position (`GET /api/games/{id}/history`), the client keeps them as frames, and a game that
@@ -7,16 +20,80 @@ import { seatOf } from "./selectors";
 // for that, apart from any db, so that each can be tested alone.
 
 /**
- * A state as a frame: the position and the revision that showed it. The lists of what may be
- * played are emptied, because a position of the past is looked at, not played from.
+ * A long backgammon state as a frame: the position and the revision that showed it. The lists of
+ * what may be played are emptied, because a position of the past is looked at, not played from.
  */
-export function asFrame(revision: number, state: Position): Frame {
-  return { revision, state: { ...state, legal: [], combos: [] } };
+export function asFrame(revision: number, state: Position): LongBackgammonFrame {
+  return { kind: LONG_BACKGAMMON, revision, state: { ...state, legal: [], combos: [] } };
+}
+
+/**
+ * An ultimate tic-tac-toe state as a frame. Nothing is left out: `playable` says which board was
+ * to be played in, which is part of how the position looked, and is shown. A frame is not pressed,
+ * which the screen sees to (the board of a review is not interactive).
+ */
+export function asUtttFrame(revision: number, state: UtttState): UtttFrame {
+  return { kind: ULTIMATE_TIC_TAC_TOE, revision, state };
+}
+
+/** A state with the kind of game it is a state of: what a snapshot and a frame both hold. */
+export type Positioned = Pick<LongBackgammonFrame, "kind" | "state"> | Pick<UtttFrame, "kind" | "state">;
+
+/** The state of a snapshot with its kind, or null for a game that has no state yet. */
+export function positionOf(snapshot: Snapshot): Positioned | null {
+  switch (snapshot.kind) {
+    case LONG_BACKGAMMON:
+      return snapshot.state && { kind: snapshot.kind, state: snapshot.state };
+    case ULTIMATE_TIC_TAC_TOE:
+      return snapshot.state && { kind: snapshot.kind, state: snapshot.state };
+  }
+}
+
+/** The frame that shows `position`, as the game was at `revision`. */
+export function frameOf(revision: number, position: Positioned): Frame {
+  switch (position.kind) {
+    case LONG_BACKGAMMON:
+      return asFrame(revision, position.state);
+    case ULTIMATE_TIC_TAC_TOE:
+      return asUtttFrame(revision, position.state);
+  }
+}
+
+/**
+ * A position from the server's history as a frame, or null if it is not a position of a game of
+ * `kind` in the layout this client reads.
+ */
+export function readFrame(kind: GameKind, revision: number, state: unknown): Frame | null {
+  switch (kind) {
+    case LONG_BACKGAMMON: {
+      const position = positionSchema.safeParse(state);
+      return position.success ? asFrame(revision, position.data) : null;
+    }
+    case ULTIMATE_TIC_TAC_TOE: {
+      const position = utttStateSchema.safeParse(state);
+      return position.success ? asUtttFrame(revision, position.data) : null;
+    }
+  }
 }
 
 /** Whether anything has been played yet: a roll, or a finished turn. Before it there is nothing to step through. */
 export function hasMoves(state: LongBackgammonState): boolean {
   return state.phase.type !== "roll" || state.lastTurn !== null;
+}
+
+/** Whether anything has been played yet: a mark, or a forfeit. */
+export function utttHasMoves(state: UtttState): boolean {
+  return state.last !== null || state.phase.type !== "play";
+}
+
+/** Whether anything has been played yet in a game of either kind. */
+export function hasMovesIn(game: Positioned): boolean {
+  switch (game.kind) {
+    case LONG_BACKGAMMON:
+      return hasMoves(game.state);
+    case ULTIMATE_TIC_TAC_TOE:
+      return utttHasMoves(game.state);
+  }
 }
 
 /**
@@ -26,10 +103,10 @@ export function hasMoves(state: LongBackgammonState): boolean {
  * review when they want to look back. Not before anything has been played, and not for a user
  * who isn't known yet, who would be taken for a watcher.
  */
-export function reviewAlwaysOn(snapshot: Pick<Snapshot, "players" | "state">, userId: string | null): boolean {
-  const { state } = snapshot;
-  if (state === null || !hasMoves(state)) return false;
-  if (state.phase.type === "over") return true;
+export function reviewAlwaysOn(snapshot: Snapshot, userId: string | null): boolean {
+  const position = positionOf(snapshot);
+  if (position === null || !hasMovesIn(position)) return false;
+  if (position.state.phase.type === "over") return true;
   return userId !== null && seatOf(snapshot, userId) === null;
 }
 
@@ -63,11 +140,20 @@ function sameBoard(a: LongBackgammonState, b: LongBackgammonState): boolean {
  * It looks before it takes anything out. A history that begins in the middle of a turn (a
  * game that was going when positions began to be kept) has no frame to go back to, and then
  * `next` is kept as a frame of its own.
+ *
+ * Only long backgammon has steps to take back. In ultimate tic-tac-toe a mark is final (D9), so
+ * every position is a frame.
  */
 export function addFrame(frames: readonly Frame[], next: Frame): Frame[] {
   const last = frames.at(-1);
   const before = frames.at(-2);
-  if (last && before && isTakenBack(last.state, next.state) && sameBoard(before.state, next.state)) {
+  if (
+    last?.kind === LONG_BACKGAMMON &&
+    before?.kind === LONG_BACKGAMMON &&
+    next.kind === LONG_BACKGAMMON &&
+    isTakenBack(last.state, next.state) &&
+    sameBoard(before.state, next.state)
+  ) {
     return frames.slice(0, -1);
   }
   return [...frames, next];
@@ -99,13 +185,14 @@ export type Extension =
  * is where the review begins.
  */
 export function extend(frames: readonly Frame[], through: number, snapshot: Snapshot): Extension {
-  const { state, revision } = snapshot;
-  if (!state || revision <= through) return { type: "none" };
+  const { revision } = snapshot;
+  const position = positionOf(snapshot);
+  if (!position || revision <= through) return { type: "none" };
   const last = frames.at(-1);
   if (last?.state.phase.type === "over") return { type: "none" };
-  if (!last) return { type: "frames", frames: [asFrame(revision, state)], through: revision };
+  if (!last) return { type: "frames", frames: [frameOf(revision, position)], through: revision };
   if (revision !== through + 1) return { type: "missed" };
-  return { type: "frames", frames: addFrame(frames, asFrame(revision, state)), through: revision };
+  return { type: "frames", frames: addFrame(frames, frameOf(revision, position)), through: revision };
 }
 
 /** The index of the frame to show: the one picked, else the newest. Null when there are no frames. */

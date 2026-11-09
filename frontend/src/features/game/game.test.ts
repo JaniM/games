@@ -1583,7 +1583,7 @@ describe("reviewing a game", () => {
       keep(server, kept([1, startingState()], [2, rolled]));
       await opened(db, 2, rolled);
 
-      const states = review(db)?.frames.map((frame) => frame.state) ?? [];
+      const states = review(db)?.frames.flatMap((frame) => (frame.kind === "long-backgammon" ? [frame.state] : [])) ?? [];
       expect(states).toHaveLength(2);
       expect(states.every((state) => state.legal.length === 0 && state.combos.length === 0)).toBe(true);
     });

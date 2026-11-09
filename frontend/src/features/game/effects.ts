@@ -27,18 +27,17 @@ import {
   snapshotReceived,
   submitAction,
 } from "./ops";
-import { asFrame } from "./review";
+import { readFrame } from "./review";
 import {
   type Action,
   type Frame,
-  KIND,
-  STATE_VERSION,
+  STATE_VERSIONS,
   errorMessageSchema,
   incomingHistorySchema,
   incomingSnapshotSchema,
-  positionSchema,
+  isGameKind,
   seatReplySchema,
-  stateSchema,
+  snapshotSchema,
 } from "./schemas";
 import { registerSocket, socketOf, unregisterSocket } from "./sockets";
 import { gameActions, gameViews, joinRequests, rematchRequests, reviews } from "./tables";
@@ -167,22 +166,21 @@ function handleMessage(ctx: TaskContext, gameId: string, text: string): boolean 
     return false;
   }
   if (incoming.data.gameId !== gameId) return false;
-  // A game's link doesn't say what game it is, so the server does. State of another game
-  // would not fit the board; a game still waiting for a player has no state to show it.
-  if (incoming.data.kind !== KIND) {
+  // A game's link doesn't say what game it is, so the server does. A game the site has no board
+  // for can't be shown. A game still waiting for a player has no state, which is as it should be.
+  const { kind, rematch, ...rest } = incoming.data;
+  if (!isGameKind(kind)) {
     ctx.run(gameProblem, { gameId, problem: OTHER_GAME });
     return false;
   }
-  const { revision, stateVersion, players, playerNames, playerGuests, state, rematch } = incoming.data;
-  const parsed = state === null ? { success: true as const, data: null } : stateSchema.safeParse(state);
-  if (stateVersion !== STATE_VERSION || !parsed.success) {
+  // The state is read as the state of the game the kind names, so that one of another game, or of
+  // a layout this client doesn't know, is a problem to show and not a board that is drawn wrong.
+  const snapshot = snapshotSchema.safeParse({ kind, ...rest, rematch: rematch ?? null });
+  if (rest.stateVersion !== STATE_VERSIONS[kind] || !snapshot.success) {
     ctx.run(gameProblem, { gameId, problem: NEWER_VERSION });
     return false;
   }
-  ctx.run(snapshotReceived, {
-    gameId,
-    snapshot: { revision, players, playerNames, playerGuests, state: parsed.data, rematch: rematch ?? null },
-  });
+  ctx.run(snapshotReceived, { gameId, snapshot: snapshot.data });
   return true;
 }
 
@@ -231,7 +229,7 @@ export const sendActions = effect({
 /**
  * Plays the user's turns in every game where auto-play is on. Each time the game
  * is waiting for the user, a task pauses (so that the last thing can be followed on the
- * board) and then sends one action: the roll, or one of the legal steps (see `autoplayAction`).
+ * board) and then sends one action: what `autoplayAction` picks for the kind of game.
  * The answer is a new snapshot, which starts the next pause.
  *
  * A task is dropped and made again when the switch, the wait for an answer, the connection or
@@ -465,13 +463,14 @@ export const loadReview = effect({
 function readHistory(gameId: string, body: unknown): Frame[] | string {
   const history = incomingHistorySchema.safeParse(body);
   if (!history.success || history.data.gameId !== gameId) return GENERIC_ERROR;
-  if (history.data.kind !== KIND) return OTHER_GAME;
-  if (history.data.stateVersion !== STATE_VERSION) return NEWER_VERSION;
+  const { kind, stateVersion, positions } = history.data;
+  if (!isGameKind(kind)) return OTHER_GAME;
+  if (stateVersion !== STATE_VERSIONS[kind]) return NEWER_VERSION;
   const frames: Frame[] = [];
-  for (const { revision, state } of history.data.positions) {
-    const position = positionSchema.safeParse(state);
-    if (!position.success) return NEWER_VERSION;
-    frames.push(asFrame(revision, position.data));
+  for (const { revision, state } of positions) {
+    const frame = readFrame(kind, revision, state);
+    if (!frame) return NEWER_VERSION;
+    frames.push(frame);
   }
   return frames;
 }

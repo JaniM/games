@@ -416,6 +416,30 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn the_server_offers_ultimate_tic_tac_toe_under_the_id_of_the_front_end_catalog(
+        pool: PgPool,
+    ) {
+        let app = TestApp::new(pool.clone(), game::registry());
+        let (_, creator) = app.register_user().await;
+        let (_, joiner) = app.register_user().await;
+
+        let game_id = app.create_game(&creator, "ultimate-tic-tac-toe").await;
+        let (_, _, waiting, _) = stored(&pool, &game_id).await;
+        assert_eq!(waiting, None);
+        app.join_game(&joiner, &game_id).await;
+
+        // The second player's arrival starts the game: nothing marked, and X to play anywhere.
+        let (revision, _, state, players) = stored(&pool, &game_id).await;
+        let state = state.expect("the game has started");
+        assert_eq!((revision, players.len()), (1, 2));
+        assert_eq!(state["phase"], json!({ "type": "play" }));
+        assert_eq!(state["turn"], state["x"]);
+        assert_eq!(state["last"], json!(null));
+        assert_eq!(state["playable"], json!([0, 1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(state["cells"], json!(vec![vec![json!(null); 9]; 9]));
+    }
+
+    #[sqlx::test]
     async fn game_ids_are_short_and_random(pool: PgPool) {
         let app = app(pool);
         let (_, token) = app.register_user().await;

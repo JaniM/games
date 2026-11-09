@@ -169,7 +169,8 @@ pub struct History {
 pub struct Position {
     /// The `revision` that a snapshot of the game had while it was in this state.
     revision: i64,
-    /// The game's record of the state (see [`crate::game::Game::record`]).
+    /// The game's record of the state (see [`crate::game::Game::record`]), as a client is given it
+    /// (see [`crate::game::Game::history_view`]).
     state: Value,
 }
 
@@ -231,6 +232,12 @@ pub async fn game_history(
                     ApiError::Internal
                 })?
         };
+        // What a record leaves out and a client needs to draw the position, put back (for most
+        // games there is none: see `Game::history_view`).
+        let state = engine.history_view(state).map_err(|err| {
+            tracing::error!(%err, game = %game_id, revision, "could not show a state of a game's history");
+            ApiError::Internal
+        })?;
         positions.push(Position { revision, state });
     }
     Ok(Json(History {
@@ -250,6 +257,7 @@ mod tests {
     use crate::{
         game::Games,
         test_util::{Client, Reply, Tally, TallyV2, TestApp},
+        ultimate_tic_tac_toe::UltimateTicTacToe,
     };
 
     /// A row that holds a state, as `unfold` reads it.
@@ -477,6 +485,85 @@ mod tests {
         .unwrap();
     }
 
+    #[sqlx::test]
+    async fn what_a_record_leaves_out_is_put_back_by_the_game_when_the_history_is_read(
+        pool: PgPool,
+    ) {
+        let app = TestApp::new(
+            pool.clone(),
+            Games::default().with::<UltimateTicTacToe>().with::<Tally>(),
+        );
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let game = app.create_game(&first, "ultimate-tic-tac-toe").await;
+        app.join_game(&second, &game).await;
+        // The start of the game is stored as a record. A position one mark on is stored beside
+        // it, as a delta or a state would be: this one has X's mark in cell 5 of board 1.
+        let stored: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT state FROM game_history WHERE game_id = $1 AND revision = 1",
+        )
+        .bind(&game)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let start = stored.expect("the start of the game is stored as a state");
+        let x = start["x"].as_u64().unwrap();
+        let mut marked = start.clone();
+        marked["cells"][0][4] = json!(x);
+        marked["last"] = json!({ "seat": x, "board": 0, "cell": 4 });
+        marked["turn"] = json!(1 - x);
+        store(&pool, &game, 2, 1, &marked.to_string()).await;
+
+        let reply = app.history(Some(&first), &game).await;
+
+        assert_eq!(reply.status, StatusCode::OK);
+        // The rows hold no `playable`, which is what keeps them short...
+        assert!(start.get("playable").is_none());
+        assert!(marked.get("playable").is_none());
+        // ...and the reply has it, worked out for each position from the position.
+        let listed = positions(&reply);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].1["playable"], json!([0, 1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(listed[1].1["playable"], json!([4]));
+        // Everything else in a position is what was stored.
+        for ((_, shown), kept) in listed.iter().zip([&start, &marked]) {
+            let mut shown = shown.clone();
+            shown.as_object_mut().unwrap().remove("playable");
+            assert_eq!(&shown, kept);
+        }
+    }
+
+    #[sqlx::test]
+    async fn a_game_that_puts_nothing_back_has_its_records_listed_as_they_are(pool: PgPool) {
+        let app = app(pool.clone());
+        let (game, [first, _]) = started(&app).await;
+        store(&pool, &game, 2, 1, r#"{"total":5,"turn":1}"#).await;
+
+        let reply = app.history(Some(&first), &game).await;
+
+        assert_eq!(
+            positions(&reply),
+            [
+                (1, json!({ "total": 0, "turn": 0 })),
+                (2, json!({ "total": 5, "turn": 1 })),
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_record_the_game_cannot_show_fails_the_whole_history(pool: PgPool) {
+        let app = TestApp::new(pool.clone(), Games::default().with::<UltimateTicTacToe>());
+        let (_, first) = app.register_user().await;
+        let (_, second) = app.register_user().await;
+        let game = app.create_game(&first, "ultimate-tic-tac-toe").await;
+        app.join_game(&second, &game).await;
+        // A record the game can not read as one of its states.
+        store(&pool, &game, 2, 1, r#"{"x":0,"cells":"none"}"#).await;
+
+        let reply = app.history(Some(&first), &game).await;
+
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
     #[sqlx::test]
     async fn the_history_gives_the_state_a_delta_leads_to(pool: PgPool) {
         let app = app(pool.clone());

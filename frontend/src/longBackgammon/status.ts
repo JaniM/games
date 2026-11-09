@@ -1,31 +1,25 @@
-import type { LongBackgammonState, Seat, Snapshot, Step } from "../features/game";
-import { playerName } from "../playerName";
+import type { LongBackgammonSnapshot, LongBackgammonState, Seat, Step } from "../features/game";
+import {
+  type FrameText,
+  type RematchStage,
+  type Result,
+  barNameOf,
+  inSentence,
+  nameOf,
+  rematchStage,
+} from "../gameUi/people";
 import { landing, pointNumber } from "./layout";
 
 // The words on the page, derived from a snapshot. Kept apart from the components so that
-// every sentence can be tested.
+// every sentence can be tested. The words about the people (names, the rematch) are the same for
+// every game: they are in `gameUi/people.ts`, and come out of here too.
+
+export { barNameOf, nameOf, rematchStage };
+export type { FrameText, RematchStage, Result };
 
 /** The seat the page is drawn for: the user's own, or White's for someone who is watching. */
 export function viewerSeat(mySeat: Seat | null, state: LongBackgammonState | null): Seat {
   return mySeat ?? state?.white ?? 0;
-}
-
-/**
- * A seat in a sentence: "You", the player's name ("Grace (guest)" for a guest, see `playerName`),
- * or "Player 2" if they have none.
- */
-export function nameOf(snapshot: Snapshot, seat: Seat, mySeat: Seat | null): string {
-  if (seat === mySeat) return "You";
-  return playerName(snapshot.playerNames[seat], snapshot.playerGuests[seat] ?? false, seat);
-}
-
-/** A seat for the bar above or below the board. An empty seat is waiting. */
-export function barNameOf(snapshot: Snapshot, seat: Seat, mySeat: Seat | null): string {
-  if (seat >= snapshot.players.length) return "Waiting for an opponent…";
-  const name = snapshot.playerNames[seat];
-  // Your own seat says "(you)", which says it all: you know whether you are a guest.
-  if (seat === mySeat) return name ? `${name} (you)` : "You";
-  return playerName(name, snapshot.playerGuests[seat] ?? false, seat);
 }
 
 /** "6-5". */
@@ -44,7 +38,7 @@ export function stepText(step: Step, mover: Seat, white: Seat): string {
 }
 
 /** What the player to move should do next, or who we wait for. Empty when the game is over. */
-export function turnText(snapshot: Snapshot, mySeat: Seat | null): string {
+export function turnText(snapshot: LongBackgammonSnapshot, mySeat: Seat | null): string {
   const state = snapshot.state;
   if (!state) return "Waiting for an opponent to join.";
   if (state.phase.type === "over") return "";
@@ -60,20 +54,8 @@ export function turnText(snapshot: Snapshot, mySeat: Seat | null): string {
   return `Waiting for ${name} to move.`;
 }
 
-/** How a game ended, in two parts: who won, and what it was worth. */
-export interface Result {
-  /** "You won", "Ada won" or "Draw". */
-  title: string;
-  /** "1 point", "Mars: 2 points", "Grace forfeited", or "" for a draw. */
-  detail: string;
-  /** The loser gave up, so `detail` says who. */
-  forfeited: boolean;
-  /** The viewer is a player, and it was them. */
-  won: boolean;
-}
-
 /** The result, once the game is over; null while it is on. */
-export function resultOf(snapshot: Snapshot, mySeat: Seat | null): Result | null {
+export function resultOf(snapshot: LongBackgammonSnapshot, mySeat: Seat | null): Result | null {
   const phase = snapshot.state?.phase;
   if (phase?.type !== "over") return null;
   if (phase.winner === null) return { title: "Draw", detail: "", forfeited: false, won: false };
@@ -88,62 +70,10 @@ export function resultOf(snapshot: Snapshot, mySeat: Seat | null): Result | null
   return { title, detail, forfeited: false, won };
 }
 
-/**
- * What the viewer can do about the rematch of a finished game, and what to tell them:
- *
- * - `closed`: nothing. They only watch, and there is no rematch yet.
- * - `ask`: they can ask for one. `line` says so if their last ask was turned down.
- * - `waiting`: they have asked, and the other player has not answered. They can take it back.
- * - `answer`: the other player has asked. They can say yes or no.
- * - `started`: the new game exists. Anyone can go there.
- */
-export type RematchStage =
-  | { stage: "closed"; line: "" }
-  | { stage: "ask"; line: string }
-  | { stage: "waiting"; line: string }
-  | { stage: "answer"; line: string }
-  | { stage: "started"; line: string; gameId: string };
-
-/** Where the rematch stands for the viewer. Only meaningful once the game is over. */
-export function rematchStage(snapshot: Snapshot, mySeat: Seat | null): RematchStage {
-  const rematch = snapshot.rematch;
-  if (rematch?.type === "accepted") {
-    return { stage: "started", line: "The rematch has started.", gameId: rematch.gameId };
-  }
-  if (mySeat === null || snapshot.players.length < 2) return { stage: "closed", line: "" };
-
-  const other = (1 - mySeat) as Seat;
-  const name = nameOf(snapshot, other, mySeat);
-  if (rematch?.type === "offered") {
-    return rematch.by === mySeat
-      ? { stage: "waiting", line: `Waiting for ${name} to accept the rematch…` }
-      : { stage: "answer", line: `${name} wants a rematch.` };
-  }
-  // A `declined` is news only to the one who was turned down. The one who said no knows.
-  const turnedDown = rematch?.type === "declined" && rematch.by === mySeat;
-  return { stage: "ask", line: turnedDown ? `${name} declined the rematch.` : "" };
-}
-
 /** The warning that White is out and Black has one throw left, or "". */
 export function lastThrowText(state: LongBackgammonState): string {
   if (!state.lastThrow || state.phase.type === "over") return "";
   return "White has borne off everything. Black gets one last throw.";
-}
-
-/**
- * A result's detail in the middle of a sentence: "mars: 2 points", "you forfeited". A name
- * keeps its capital: "Grace forfeited".
- */
-function inSentence(result: Result): string {
-  return result.forfeited ? result.detail.replace(/^You\b/, "you") : result.detail.toLowerCase();
-}
-
-/** What a position of a game in review says about itself, in two lines. */
-export interface FrameText {
-  /** What led to the position: the roll or the step that was just played. */
-  title: string;
-  /** What else is worth knowing about it: that the game is over, and how it ended, or that it is the last throw. */
-  detail: string;
 }
 
 /**
@@ -152,7 +82,7 @@ export interface FrameText {
  * a step is the last of the turn's, and a step that ended the turn is the turn before in
  * `lastTurn`, since the turn has passed on by then.
  */
-export function frameText(snapshot: Snapshot, state: LongBackgammonState, mySeat: Seat | null): FrameText {
+export function frameText(snapshot: LongBackgammonSnapshot, state: LongBackgammonState, mySeat: Seat | null): FrameText {
   const result = resultOf({ ...snapshot, state }, mySeat);
   const detail = result
     ? `Game over. ${result.title}${result.detail ? `, ${inSentence(result)}` : ""}.`

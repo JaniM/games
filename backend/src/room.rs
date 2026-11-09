@@ -2599,22 +2599,105 @@ mod tests {
             assert!(actions < 5000, "the game does not end");
         }
 
-        // The start of the game, and a state for each action after it.
-        let history = history_of(&pool, &id).await;
+        // The record leaves out what the game works out again.
+        assert_history_loads(
+            &pool,
+            &engine,
+            &id,
+            actions,
+            &["legal", "combos"],
+            players[0].latest().state.clone(),
+        )
+        .await;
+    }
+
+    #[sqlx::test]
+    async fn a_whole_ultimate_tic_tac_toe_game_leaves_a_history_the_server_can_load(pool: PgPool) {
+        let rooms = rooms(
+            &pool,
+            Games::default().with::<crate::ultimate_tic_tac_toe::UltimateTicTacToe>(),
+        );
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let engine = rooms.games().get("ultimate-tic-tac-toe").unwrap().clone();
+        let id = rooms.create(&engine, first, false).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
+        // By seat.
+        let mut players = [
+            rooms.connect(&id, first).await.unwrap(),
+            rooms.connect(&id, second).await.unwrap(),
+        ];
+
+        // Whoever is to move marks the first empty cell of the first board the server lists.
+        let mut actions = 0;
+        loop {
+            let state = players[0]
+                .latest()
+                .state
+                .clone()
+                .expect("the game has started");
+            if state["phase"]["type"] != "play" {
+                break;
+            }
+            let board = state["playable"][0].as_u64().unwrap() as usize;
+            let cell = (0..9)
+                .find(|&cell| state["cells"][board][cell].is_null())
+                .expect("a playable board has an empty cell");
+            let seat = state["turn"].as_u64().unwrap() as usize;
+            players[seat]
+                .act(json!({ "type": "play", "board": board, "cell": cell }))
+                .await
+                .unwrap();
+            actions += 1;
+            assert!(actions <= 81, "the game does not end");
+        }
+        assert!(actions >= 9, "a game is at least nine marks long");
+
+        // The record keeps what a client needs to draw a past position, and only the boards the
+        // player to move may play in are left out (the history puts them back, see `history`).
+        assert_history_loads(
+            &pool,
+            &engine,
+            &id,
+            actions,
+            &["playable"],
+            players[0].latest().state.clone(),
+        )
+        .await;
+        for (_, _, state) in history_of(&pool, &id).await {
+            assert!(state.get("boards").is_some() && state.get("line").is_some());
+        }
+    }
+
+    /// Checks the history of a finished game that took `actions` actions: a state for the start
+    /// of the game and one for each action, each without the `left_out` fields of a state, each
+    /// loading to what the game records for it, and the last one being the game as it ended, as
+    /// the players were told (`told`).
+    async fn assert_history_loads(
+        pool: &PgPool,
+        engine: &Arc<dyn Engine>,
+        id: &GameId,
+        actions: usize,
+        left_out: &[&str],
+        told: Option<Value>,
+    ) {
+        let history = history_of(pool, id).await;
         assert_eq!(history.len(), actions + 1);
         for (n, (revision, version, state)) in history.iter().enumerate() {
             assert_eq!(*revision, n as i64 + 1);
-            // The record leaves out what the game works out again.
-            assert!(state.get("legal").is_none() && state.get("combos").is_none());
+            for field in left_out {
+                assert!(
+                    state.get(field).is_none(),
+                    "revision {revision} has {field}"
+                );
+            }
             let live = engine
                 .load(*version as u32, state.clone())
                 .expect("a recorded state loads");
             assert_eq!(live.to_record().as_ref(), Ok(state), "revision {revision}");
         }
-        // The last one is the game as it ended, as the players were told.
         let (_, version, last) = history.last().unwrap();
         let live = engine.load(*version as u32, last.clone()).unwrap();
         assert!(live.is_over());
-        assert_eq!(Some(live.to_json().unwrap()), players[0].latest().state);
+        assert_eq!(Some(live.to_json().unwrap()), told);
     }
 }

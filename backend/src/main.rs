@@ -28,6 +28,7 @@ mod room;
 mod socket;
 #[cfg(test)]
 mod test_util;
+mod ultimate_tic_tac_toe;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

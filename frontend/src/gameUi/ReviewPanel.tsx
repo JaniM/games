@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect } from "react";
 import { type ReviewMove, moveForKey } from "../features/game";
-import type { FrameText } from "./status";
+import type { FrameText } from "./people";
 
 export interface ReviewPanelProps {
   /** The positions are being asked for. With none shown yet, that is all there is to say. */
