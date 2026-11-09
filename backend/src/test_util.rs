@@ -20,6 +20,7 @@ use crate::{
     account::Accounts,
     app,
     game::{Game, Games, Rejection, StateError},
+    preview::Pages,
     room::Rooms,
 };
 
@@ -30,6 +31,8 @@ pub const TEST_BOT_PAUSE: Duration = Duration::from_millis(20);
 pub struct Reply {
     pub status: StatusCode,
     pub headers: HeaderMap,
+    /// The body as it came.
+    pub body: Vec<u8>,
     /// The JSON body, or `Null` if there isn't one.
     pub json: Value,
 }
@@ -41,6 +44,11 @@ pub struct TestApp {
 
 impl TestApp {
     pub fn new(pool: PgPool, games: Games) -> Self {
+        Self::with_pages(pool, games, Pages::default())
+    }
+
+    /// An app that serves the pages of games too (see `preview`), which `new` doesn't.
+    pub fn with_pages(pool: PgPool, games: Games, pages: Pages) -> Self {
         // Rooms hold a clone of the pool, and `#[sqlx::test]` only gets its connections back
         // for cleaning up once every clone is gone. So rooms must not linger after a test.
         let rooms = Rooms::with_timing(
@@ -53,6 +61,7 @@ impl TestApp {
             pool,
             rooms,
             accounts: Accounts::new(),
+            pages,
         });
         Self { router }
     }
@@ -88,6 +97,7 @@ impl TestApp {
             status: parts.status,
             headers: parts.headers,
             json: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            body: bytes.to_vec(),
         }
     }
 
@@ -359,6 +369,7 @@ fn tally_turn(turn: usize, seat: usize, amount: i64) -> Result<usize, Rejection>
 
 impl Game for Tally {
     const KIND: &'static str = "tally";
+    const NAME: &'static str = "Tally";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
     const BOT: bool = true;
@@ -398,6 +409,7 @@ pub struct TallyV2State {
 
 impl Game for TallyV2 {
     const KIND: &'static str = "tally";
+    const NAME: &'static str = "Tally";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 2;
     type State = TallyV2State;
@@ -446,6 +458,7 @@ pub struct QuickState {
 
 impl Game for Quick {
     const KIND: &'static str = "quick";
+    const NAME: &'static str = "Quick";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
     const BOT: bool = true;
@@ -475,6 +488,7 @@ pub struct SoloState {
 
 impl Game for Solo {
     const KIND: &'static str = "solo";
+    const NAME: &'static str = "Solo";
     const PLAYERS: usize = 1;
     const STATE_VERSION: u32 = 1;
     type State = SoloState;
@@ -514,6 +528,7 @@ pub struct CellsAction {
 
 impl Game for Cells {
     const KIND: &'static str = "cells";
+    const NAME: &'static str = "Cells";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
     type State = CellsState;

@@ -188,11 +188,19 @@ describe("the privacy policy", () => {
   });
 
   it("says when it was last updated", () => {
-    expect(privacy()).toContain("Last updated November 9, 2026");
+    expect(privacy()).toContain("Last updated November 10, 2026");
   });
 
   it("says that a game can only be opened with its link", () => {
     expect(privacy()).toContain("A game can only be opened by someone who has its link.");
+  });
+
+  it("says what a link to a game shows where it is pasted, and that the site that fetched it may keep it", () => {
+    const html = privacy();
+
+    expect(html).toContain("A chat or social site you paste a link to a game into");
+    expect(html).toContain("a picture of the board as it stands");
+    expect(html).toContain("what it keeps is out of our hands");
   });
 
   it("links back to the games", () => {

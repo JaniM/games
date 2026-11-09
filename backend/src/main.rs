@@ -10,7 +10,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::EnvFilter;
 
-use crate::{account::Accounts, game::Games, room::Rooms};
+use crate::{account::Accounts, game::Games, preview::Pages, room::Rooms};
 
 mod account;
 mod auth;
@@ -22,6 +22,7 @@ mod game_id;
 mod history;
 mod lobby;
 mod long_backgammon;
+mod preview;
 mod profile;
 mod rematch;
 mod room;
@@ -55,22 +56,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .map_err(|err| format!("could not run database migrations: {err}"))?;
 
+    let pages = pages_from_env()?;
+
     let listener = TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app(AppState::new(pool, game::registry())))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app(AppState::new(pool, game::registry()).with_pages(pages)),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
-/// What handlers share. They take the parts they need with `State<PgPool>`, `State<Rooms>` or
-/// `State<Accounts>`.
+/// The page the server serves for a game, so that a link to it unfolds into a preview (see
+/// `preview`). It needs the front end's built `index.html` (`FRONTEND_INDEX`) and the address
+/// of the site (`PUBLIC_URL`, e.g. `https://games.example`), and has neither when a developer
+/// runs the server beside Vite, which serves the site itself. Only one of them is a mistake.
+fn pages_from_env() -> Result<Pages, String> {
+    match (env::var("FRONTEND_INDEX"), env::var("PUBLIC_URL")) {
+        (Ok(index), Ok(url)) => {
+            let pages =
+                Pages::new(index.into(), &url).map_err(|err| format!("FRONTEND_INDEX: {err}"))?;
+            tracing::info!("serving game pages with previews, for {url}");
+            Ok(pages)
+        }
+        (Err(_), Err(_)) => {
+            tracing::info!("FRONTEND_INDEX and PUBLIC_URL are not set: not serving game pages");
+            Ok(Pages::default())
+        }
+        _ => Err("FRONTEND_INDEX and PUBLIC_URL must be set together".to_owned()),
+    }
+}
+
+/// What handlers share. They take the parts they need with `State<PgPool>`, `State<Rooms>`,
+/// `State<Accounts>` or `State<Pages>`.
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
     rooms: Rooms,
     accounts: Accounts,
+    pages: Pages,
 }
 
 impl AppState {
@@ -78,8 +105,13 @@ impl AppState {
         Self {
             rooms: Rooms::new(pool.clone(), games),
             accounts: Accounts::new(),
+            pages: Pages::default(),
             pool,
         }
+    }
+
+    fn with_pages(self, pages: Pages) -> Self {
+        Self { pages, ..self }
     }
 }
 
@@ -98,6 +130,12 @@ impl FromRef<AppState> for Rooms {
 impl FromRef<AppState> for Accounts {
     fn from_ref(state: &AppState) -> Self {
         state.accounts.clone()
+    }
+}
+
+impl FromRef<AppState> for Pages {
+    fn from_ref(state: &AppState) -> Self {
+        state.pages.clone()
     }
 }
 
@@ -125,7 +163,10 @@ fn app(state: AppState) -> Router {
             post(lobby::ask_rematch).delete(lobby::decline_rematch),
         )
         .route("/api/games/{id}/history", get(history::game_history))
+        .route("/api/games/{id}/preview.png", get(preview::picture))
         .route("/api/games/{id}/ws", get(socket::connect))
+        // Not an API: the address of a game's page, which Caddy hands over (see `preview`).
+        .route("/games/{*path}", get(preview::page))
         .with_state(state)
 }
 

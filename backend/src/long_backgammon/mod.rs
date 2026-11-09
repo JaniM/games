@@ -66,6 +66,7 @@
 //! message (D10), which is allowed on either turn.
 
 mod bot;
+mod picture;
 mod rules;
 
 use serde::{Deserialize, Serialize};
@@ -487,6 +488,7 @@ impl Position {
 
 impl Game for LongBackgammon {
     const KIND: &'static str = "long-backgammon";
+    const NAME: &'static str = "Long backgammon";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
     const BOT: bool = true;
@@ -495,6 +497,10 @@ impl Game for LongBackgammon {
 
     fn is_over(state: &State) -> bool {
         matches!(state.position.phase, Phase::Over { .. })
+    }
+
+    fn picture(state: Option<&State>) -> Option<String> {
+        Some(picture::picture(state))
     }
 
     /// The position alone. `legal` and `combos` are worked out again from it when a state is

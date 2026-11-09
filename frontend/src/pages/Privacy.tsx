@@ -8,7 +8,7 @@ export interface PrivacyProps {
 }
 
 /** When the text below last changed. Change it with the text. */
-const UPDATED = "November 9, 2026";
+const UPDATED = "November 10, 2026";
 
 /** The numbered sections, in order: the table of contents and the headings both come from here. */
 const SECTIONS = [
@@ -471,6 +471,13 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
           <strong>Your opponent, and anyone who has the link to a game,</strong> can see your
           display name (or “Player 1” and “Player 2” if you have none) and every move in that game.
           Anyone with the link can watch, so share it only with people you are happy to have watch.
+        </li>
+        <li>
+          <strong>A chat or social site you paste a link to a game into</strong> usually fetches the
+          link to show a preview of it. We give it, as we give anyone who has the link, with no
+          sign-in, the name of the game, the names of its players as they are in the game, and a
+          picture of the board as it stands. A game still waiting for an opponent shows its first
+          player’s name. The site may keep what it fetched, and what it keeps is out of our hands.
         </li>
         <li>
           If you have an account, your username is shown as your name. A guest’s name is shown with

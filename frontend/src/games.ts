@@ -2,6 +2,7 @@
 export interface GameInfo {
   /** URL slug: its games live at `/games/<id>/<game id>`. */
   id: string;
+  /** Also `Game::NAME` in the backend, which puts it in the preview of a link to a game: keep the two the same. */
   name: string;
   /** One or two sentences for the front page card. */
   description: string;

@@ -62,6 +62,7 @@
 //! which is allowed on either turn.
 
 mod bot;
+mod picture;
 mod rules;
 
 use serde::{Deserialize, Serialize};
@@ -346,6 +347,7 @@ impl State {
 
 impl Game for UltimateTicTacToe {
     const KIND: &'static str = "ultimate-tic-tac-toe";
+    const NAME: &'static str = "Ultimate tic-tac-toe";
     const PLAYERS: usize = 2;
     const STATE_VERSION: u32 = 1;
     const BOT: bool = true;
@@ -354,6 +356,10 @@ impl Game for UltimateTicTacToe {
 
     fn is_over(state: &State) -> bool {
         matches!(state.position.phase, Phase::Over { .. })
+    }
+
+    fn picture(state: Option<&State>) -> Option<String> {
+        Some(picture::picture(state))
     }
 
     /// The state without `playable`, which a state read back works out again from the position and

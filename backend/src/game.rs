@@ -56,6 +56,10 @@ pub trait Game: 'static {
     /// Use the id of the game in the front end's catalog.
     const KIND: &'static str;
 
+    /// The game's name as people read it, e.g. in the preview of a link to a game (see
+    /// `preview`). Use the name in the front end's catalog.
+    const NAME: &'static str;
+
     /// How many players a game has. Each takes a seat, numbered from 0 in the order they
     /// join, and the game starts when the last seat is taken.
     const PLAYERS: usize;
@@ -107,6 +111,19 @@ pub trait Game: 'static {
     /// to date), so it is a state that [`Engine::load`] accepts.
     fn history_view(record: Value) -> Result<Value, StateError> {
         Ok(record)
+    }
+
+    /// A picture of the board for the preview of a link to the game (see `preview`): an SVG
+    /// document, as wide and tall as the board, which is scaled to fit the preview. `None` for
+    /// `state` is a game that hasn't started, and is the board as it is at the start, which has
+    /// no randomness in it: what [`Game::start`] picks is not decided yet. Looks the same however
+    /// the viewer sits, because there is no viewer; seat 0's side is the near one.
+    ///
+    /// The SVG is rendered without text (there are no fonts on the server), so the picture must
+    /// say everything with shapes. The default is no picture, and the preview has only words.
+    fn picture(state: Option<&Self::State>) -> Option<String> {
+        let _ = state;
+        None
     }
 
     /// The state of a new game, once all the seats are taken. May use randomness, e.g. to
@@ -180,6 +197,9 @@ pub trait Live: Send {
     /// Whether the game has ended. See [`Game::is_over`].
     fn is_over(&self) -> bool;
 
+    /// A picture of the board as it stands. See [`Game::picture`].
+    fn picture(&self) -> Option<String>;
+
     /// The game after the computer opponent plays for `seat`, or `None` if it has nothing to
     /// play (see [`Game::bot_action`]).
     fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>>;
@@ -213,6 +233,10 @@ impl<G: Game> Live for Running<G> {
         G::is_over(&self.0)
     }
 
+    fn picture(&self) -> Option<String> {
+        G::picture(Some(&self.0))
+    }
+
     fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>> {
         let action = G::bot_action(&self.0, seat)?;
         match G::apply(&self.0, seat, action) {
@@ -234,6 +258,8 @@ impl<G: Game> Live for Running<G> {
 /// kinds in one place. Every `Game` is an `Engine`.
 pub trait Engine: Send + Sync {
     fn kind(&self) -> &'static str;
+    /// See [`Game::NAME`].
+    fn name(&self) -> &'static str;
     fn players(&self) -> usize;
     fn state_version(&self) -> u32;
 
@@ -242,6 +268,9 @@ pub trait Engine: Send + Sync {
 
     /// A new game.
     fn start(&self) -> Box<dyn Live>;
+
+    /// A picture of the board of a game that hasn't started. See [`Game::picture`].
+    fn unstarted_picture(&self) -> Option<String>;
 
     /// Reads a stored state, first upgrading it to the current version. Fails if the
     /// game can't read it, so that a bad row fails when it is loaded, not on somebody's move.
@@ -259,6 +288,10 @@ impl<G: Game> Engine for Typed<G> {
         G::KIND
     }
 
+    fn name(&self) -> &'static str {
+        G::NAME
+    }
+
     fn players(&self) -> usize {
         G::PLAYERS
     }
@@ -273,6 +306,10 @@ impl<G: Game> Engine for Typed<G> {
 
     fn start(&self) -> Box<dyn Live> {
         Box::new(Running::<G>(G::start()))
+    }
+
+    fn unstarted_picture(&self) -> Option<String> {
+        G::picture(None)
     }
 
     fn load(&self, stored_version: u32, mut state: Value) -> Result<Box<dyn Live>, StateError> {
@@ -459,6 +496,7 @@ mod tests {
 
     impl Game for Counted {
         const KIND: &'static str = "counted";
+        const NAME: &'static str = "Counted";
         const PLAYERS: usize = 1;
         const STATE_VERSION: u32 = 1;
         type State = CountedState;

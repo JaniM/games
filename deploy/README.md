@@ -3,7 +3,11 @@
 Production is one VM running NixOS, deployed with [Colmena](https://github.com/zhaofengli/colmena).
 Nothing runs in a container: Nix builds the backend and the frontend, systemd runs the backend, and
 NixOS runs Postgres and Caddy as ordinary services. Caddy serves the frontend at
-`games.seequ.dev` and proxies `/api` (WebSockets included) to the backend.
+`games.seequ.dev` and proxies `/api` (WebSockets included) to the backend. It hands the address of
+a game (`/games/<id>`) to the backend too, which answers with the frontend's page and the tags that
+make a link to the game unfold into a preview (the game's name, its players and a picture of the
+board) in a chat or on a social site. The backend reads that page from `/etc/games/frontend`, which
+always points at the current build.
 
 ```
 flake.nix                            inputs, plus the outputs imported from deploy/
@@ -34,7 +38,8 @@ machine, through a local Linux builder (below), not on the VM, which is too smal
 `games-backend` restarts when its binary or config changes, so the API is down for a second or two
 and open game sockets drop (clients reconnect). The unit fails if the backend doesn't answer
 `/api/health` within 60 seconds, which fails `colmena apply`. Frontend and Caddy config changes
-don't touch the backend.
+don't touch the backend: it reads the frontend's page again for every game page it serves, so it
+needs no restart for a new build.
 
 On the VM:
 

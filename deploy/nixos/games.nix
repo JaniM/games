@@ -51,6 +51,12 @@ in
   };
   users.groups.games = { };
 
+  # The built frontend at a path that stays the same from one build to the next. The backend reads
+  # the page from here for every game page it serves (see backend/src/preview.rs), and so serves
+  # the current build without a restart. Were the store path in its environment instead, every
+  # frontend change would restart the backend and drop the open game sockets.
+  environment.etc."games/frontend".source = frontend;
+
   # The packages by name, to build one alone:
   # nix build .#nixosConfigurations.games.config.system.build.gamesFrontend
   system.build = {
@@ -76,6 +82,10 @@ in
       DATABASE_URL = "postgres:///games?host=/run/postgresql&user=games";
       BIND_ADDR = backendAddr;
       RUST_LOG = "warn,games_backend=info";
+      # What the backend needs to serve the page of a game with the tags that make a link to it
+      # unfold into a preview: the page, and where the site is (the tags need whole addresses).
+      FRONTEND_INDEX = "/etc/games/frontend/index.html";
+      PUBLIC_URL = "https://${domain}";
     };
 
     serviceConfig = {
@@ -125,6 +135,17 @@ in
 
       # The game sockets (/api/games/<id>/ws) go through here too. Left out of `encode` on purpose.
       handle /api/* {
+        reverse_proxy ${backendAddr}
+      }
+
+      # The address of a game, `/games/<id>` or the older `/games/<kind>/<id>`, is a page of the
+      # single-page app like any other, but the backend serves it, with tags added that tell
+      # programs that unfold links (chats, social sites) what the game is. Those programs don't
+      # run the app's script, so the static page would tell them nothing. The backend answers
+      # every address of this shape, and with the page as it is for one that is no game.
+      # `/games` and `/games/`, the list of public games, stay static, as does anything deeper.
+      @game path_regexp ^/games/[^/]+(/[^/]*)?$
+      handle @game {
         reverse_proxy ${backendAddr}
       }
 
