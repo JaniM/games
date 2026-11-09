@@ -861,14 +861,14 @@ form.name-control .button {
  *
  * The board is as wide as the page, so the page is as wide as the board should be: the width
  * at which its height (the board is 720 by 520, see `geometry.ts`) is what is left of the screen
- * after everything above and below it (`--game-chrome`: both player bars, the status under the
- * board, and the line that says a viewer is watching), plus the page's own padding. Never wider than the window, and not
+ * after everything above and below it (`--game-chrome`: both player bars and the status under
+ * the board), plus the page's own padding. Never wider than the window, and not
  * narrower than 40rem, so that a short window gets a board it can read and scrolls, as it
  * always did, instead of a small one. Err on the high side: too much chrome leaves a little
  * room, too little scrolls.
  */
 .game-page {
-  --game-chrome: 15.5rem;
+  --game-chrome: 14.5rem;
   max-width: min(100%, max(40rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 3rem)));
   /* Room for the nav and the name along the top, and not more. */
   padding-top: 3.25rem;
@@ -888,13 +888,6 @@ form.name-control .button {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
   }
-}
-
-/* What the viewer is to the game, above the board, if not a player. */
-.game-caption {
-  margin: 0 0 0.75rem;
-  font-size: var(--text-sm);
-  color: var(--muted);
 }
 
 /* The invitation and the join button: the point of the page until the second player is in. */

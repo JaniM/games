@@ -132,10 +132,9 @@ describe("a game that is waiting for an opponent", () => {
 });
 
 describe("a game with both players", () => {
-  it("tells a spectator they are watching, without a join button or roll button", () => {
+  it("shows a spectator the game, without a join button or roll button", () => {
     const html = render(STRANGER, viewOf());
 
-    expect(html).toContain("You are watching this game.");
     expect(html).not.toContain("Join game");
     expect(html).not.toContain("Roll dice");
     expect(html).not.toContain("Copy link");
@@ -639,15 +638,11 @@ describe("the top of the page", () => {
     expect(html).not.toContain("type=\"range\"");
   });
 
-  it("says a viewer is watching on a line of its own above the board, with no title beside it", () => {
-    const html = render(STRANGER, view);
-
-    expect(html).toContain('<p class="game-caption">You are watching this game.</p>');
-    expect(html.indexOf("game-caption")).toBeLessThan(html.indexOf("Waiting for Ada to roll."));
-  });
-
-  it("says nothing of the sort to a player", () => {
-    expect(render(ADA, view)).not.toContain("game-caption");
+  it("does not say a viewer is watching, to a viewer or to a player: the board is the same", () => {
+    for (const html of [render(STRANGER, view), render(ADA, view)]) {
+      expect(html).not.toContain("You are watching this game");
+      expect(html).not.toContain("game-caption");
+    }
   });
 });
 

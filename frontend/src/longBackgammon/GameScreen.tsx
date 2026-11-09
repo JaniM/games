@@ -81,18 +81,11 @@ export interface GameScreenProps {
 
 const HOME = "/";
 
-interface ShellProps {
-  /** What the viewer is to the game, if they are not a player. */
-  caption?: string;
-  children: React.ReactNode;
-}
-
-function Shell({ caption, children }: ShellProps) {
+function Shell({ children }: { children: React.ReactNode }) {
   return (
     <main className="page game-page">
       {/* The nav says where you are, and the board what the game is: only a screen reader gets a title. */}
       <h1 className="visually-hidden">Long backgammon</h1>
-      {caption && <p className="game-caption">{caption}</p>}
       {children}
     </main>
   );
@@ -309,9 +302,7 @@ export function GameScreen({
   );
 
   return (
-    <Shell
-      caption={mySeat === null && userId !== null && !canJoin ? "You are watching this game." : undefined}
-    >
+    <Shell>
       {canJoin && (
         <section className="panel" aria-label="Join this game">
           <p>This game is waiting for a second player.</p>
