@@ -17,7 +17,7 @@ The package is `0.0.0` and the API may still move. **It has been unpublished fro
 pnpm add github:JaniM/millpond#a0c96a59cd4677fed5ac6ee2ec0da75a2c13e5c7 zod react react-dom
 ```
 
-pnpm needs the **full 40-character commit hash**; a short hash fails with "Could not resolve ... to a commit". pnpm downloads git dependencies from `codeload.github.com`, which the jail does not allow, so installing this package works only outside the jail. Any Standard Schema library works for schemas (Zod, Valibot, ArkType). React >= 18 is an optional peer dependency. Imports: core from `"millpond"`, React bindings from `"millpond/react"`.
+pnpm needs the **full 40-character commit hash**; a short hash fails with "Could not resolve ... to a commit". Any Standard Schema library works for schemas (Zod, Valibot, ArkType). React >= 18 is an optional peer dependency. Imports: core from `"millpond"`, React bindings from `"millpond/react"`.
 
 ## Mental model
 
