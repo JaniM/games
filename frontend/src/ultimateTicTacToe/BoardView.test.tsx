@@ -1,17 +1,26 @@
+import { DbProvider } from "millpond/react";
 import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { marks, utttState, wonBoard } from "../fixtures";
-import { BoardView } from "./Board";
+import { afterAll, describe, expect, it } from "vitest";
+import { GAME_ID, marks, utttState, wonBoard } from "../fixtures";
+import { componentDb } from "../testing";
+import { BoardView, OpenCell } from "./Board";
 
 // The board is a function of its props, so it is rendered to a string. A click can't be made
-// without a DOM, so the tree it returns is searched for the buttons, and their `onClick` called.
+// without a DOM, so the tree it returns is searched for the cells that can be pressed, and what
+// each of them plays is read from its props.
 
 type Props = Parameters<typeof BoardView>[0];
 
+// A cell that can be pressed calls the game's op, so it needs a db. Nothing is pressed here: an empty one does.
+const { db } = componentDb({});
+afterAll(() => db.dispose());
+
 const render = (props: Partial<Props> = {}) =>
   renderToStaticMarkup(
-    <BoardView state={utttState()} interactive={false} placed={null} onPlay={() => {}} {...props} />,
+    <DbProvider db={db}>
+      <BoardView gameId={GAME_ID} state={utttState()} interactive={false} placed={null} {...props} />
+    </DbProvider>,
   );
 
 /** Every element in a tree of elements that `matches`, in order. */
@@ -98,19 +107,21 @@ describe("where the next mark goes", () => {
 describe("pressing a cell", () => {
   const sent = utttState({ turn: 1, last: { seat: 0, board: 0, cell: 4 }, playable: [4], cells: marks({ 0: { 4: 0 }, 4: { 0: 1 } }) });
   const buttons = (props: Partial<Props>) =>
-    find(BoardView({ state: sent, interactive: true, placed: null, onPlay: () => {}, ...props }), (el) => el.type === "button");
+    find(
+      BoardView({ gameId: GAME_ID, state: sent, interactive: true, placed: null, ...props }),
+      (el) => el.type === OpenCell,
+    );
 
   it("is possible only in the board the player was sent to, in the cells that are empty", () => {
     expect(buttons({})).toHaveLength(8);
     expect(count(render({ state: sent, interactive: true }), "<button")).toBe(8);
   });
 
-  it("plays the board and the cell of the one pressed", () => {
-    const onPlay = vi.fn();
+  it("plays the board and the cell of the one pressed, in this game", () => {
+    const cells = buttons({});
 
-    for (const button of buttons({ onPlay })) (button.props.onClick as () => void)();
-
-    expect(onPlay.mock.calls.map(([board, cell]) => `${board}.${cell}`)).toEqual(
+    expect(cells.every((button) => button.props.gameId === GAME_ID)).toBe(true);
+    expect(cells.map((button) => `${button.props.board}.${button.props.cell}`)).toEqual(
       ["1", "2", "3", "4", "5", "6", "7", "8"].map((cell) => `4.${cell}`),
     );
   });
@@ -132,7 +143,7 @@ describe("pressing a cell", () => {
   });
 
   it("names each button by its cell", () => {
-    const labels = buttons({}).map((button) => button.props["aria-label"]);
+    const labels = buttons({}).map((button) => button.props.label);
 
     // Cell 1 of board 5 holds seat 1's mark, so it is not a button.
     expect(labels[0]).toBe("cell 2 of board 5, empty");
@@ -164,8 +175,11 @@ describe("a board that is decided", () => {
   it("has no buttons, even for a player who may play anywhere", () => {
     const state = utttState({ cells: marks({ 3: wonBoard(1) }) });
 
-    const board = find(BoardView({ state, interactive: true, placed: null, onPlay: () => {} }), (el) => el.type === "button");
-    const labels = board.map((button) => String(button.props["aria-label"]));
+    const board = find(
+      BoardView({ gameId: GAME_ID, state, interactive: true, placed: null }),
+      (el) => el.type === OpenCell,
+    );
+    const labels = board.map((button) => String(button.props.label));
     expect(labels.some((label) => label.includes("of board 4"))).toBe(false);
   });
 });

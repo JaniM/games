@@ -1,22 +1,26 @@
+import { useOp, useQuery } from "millpond/react";
 import {
   LONG_BACKGAMMON,
   type LongBackgammonSnapshot,
   type Seat,
-  type Step,
+  gameViews,
   hasMoves,
-  hasMovesIn,
   isFull,
+  openReview,
   reviewAlwaysOn,
+  reviews,
   seatOf,
+  setAutoplay,
   shownIndex,
+  submitAction,
 } from "../features/game";
+import { SESSION_ID, sessionState } from "../features/session";
 import { ForfeitControl } from "../components/game/ForfeitControl";
 import { InviteBox } from "../components/game/InviteBox";
 import { GameShell, JoinPanel, ResultSection, gameNotice } from "../components/game/Panels";
 import { ReviewPanel } from "../components/game/ReviewPanel";
 import type { AnyGameViewRow, JoinRequestRow, RematchRequestRow, ReviewRow } from "../components/game/rows";
 import { Board } from "./Board";
-import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
 import { type Colour, colourOf } from "./layout";
 import {
@@ -41,45 +45,12 @@ export function isLongBackgammonView(view: AnyGameViewRow): view is GameViewRow 
 }
 
 export interface GameScreenProps {
-  /** The game page's row, or undefined for the moment before the page has opened it. */
-  view: GameViewRow | undefined;
-  /** Who the browser is, or null while the session is being set up. */
-  userId: string | null;
-  join: JoinRequestRow | undefined;
-  /** An answer about the rematch that is on its way, or has failed; undefined if there is none. */
-  rematchRequest: RematchRequestRow | undefined;
-  /** The page is stepping through the game's positions, or is about to: undefined if it is not. */
-  review: ReviewRow | undefined;
+  /** The game to show. Until the page has opened it, the screen says it is connecting. */
+  gameId: string;
   /** The link to give to the opponent. It is also how anyone else can watch. */
   inviteUrl: string;
-  onJoin: () => void;
-  /** Asks for a rematch of the finished game, or says yes to the other player's ask. */
-  onRematch: () => void;
-  /** Takes back one's own ask for a rematch, or says no to the other player's. */
-  onDeclineRematch: () => void;
-  /** Starts stepping through the game's positions. */
-  onReview: () => void;
-  onCloseReview: () => void;
-  /** Asks again for the positions, after that failed. */
-  onRetryReview: () => void;
-  /** Shows the position at this index of the review. */
-  onShowFrame: (index: number) => void;
-  /** Shows the position this many places on in the review: 1 for the next, -1 for the one before. */
-  onStepFrame: (by: number) => void;
-  onRoll: () => void;
-  /** Takes back the last step of the turn in progress. */
-  onUndo: () => void;
-  /** Gives up the game. The screen asks the player to confirm first. */
-  onForfeit: () => void;
-  /** Turns auto-play (this player's turns, played for them) on or off. */
-  onAutoplay: (on: boolean) => void;
   /** Whether to offer auto-play at all. It is a development aid, so release builds leave it out. */
   showAutoplay: boolean;
-  onSelect: (point: number | null) => void;
-  /** Plays steps one after the other: one for a single die, more for a combined move by one checker. */
-  onMove: (steps: Step[]) => void;
-  /** Plays a sound. The caller applies the volume, and may play nothing. */
-  onCue: (cue: TimedCue) => void;
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -88,33 +59,21 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * One long backgammon game, for a player or a spectator. Everything it shows comes
- * from its props, so it can be rendered without a db.
+ * One long backgammon game, for a player or a spectator. It reads the game from the db, and
+ * what is pressed on it goes to the game's ops.
  */
-export function GameScreen({
-  view,
-  userId,
-  join,
-  rematchRequest,
-  review,
-  inviteUrl,
-  onJoin,
-  onRematch,
-  onDeclineRematch,
-  onReview,
-  onCloseReview,
-  onRetryReview,
-  onShowFrame,
-  onStepFrame,
-  onRoll,
-  onUndo,
-  onForfeit,
-  onAutoplay,
-  showAutoplay,
-  onSelect,
-  onMove,
-  onCue,
-}: GameScreenProps) {
+export function GameScreen({ gameId, inviteUrl, showAutoplay }: GameScreenProps) {
+  const view = useQuery(gameViews.get(gameId));
+  // Who the browser is, or null while the session is being set up.
+  const userId = useQuery(sessionState.get(SESSION_ID))?.userId ?? null;
+  // The page is stepping through the game's positions, or is about to: undefined if it is not.
+  const review = useQuery(reviews.get(gameId));
+  const submit = useOp(submitAction);
+  const startReview = useOp(openReview);
+  const autoplay = useOp(setAutoplay);
+
+  // The page shows this screen only for long backgammon, or before a snapshot says what the game is.
+  if (view && !isLongBackgammonView(view)) return null;
   const notice = gameNotice(view);
   if (notice) return notice;
   const snapshot = view?.snapshot;
@@ -158,9 +117,6 @@ export function GameScreen({
   const aside = state ? "" : "Who plays White and moves first is decided when the second player joins.";
 
   const rematch = rematchStage(snapshot, mySeat);
-  // A player's own rematch answer has gone out and the other's is not back. It shows as a snapshot.
-  const answering = rematchRequest?.state === "sending";
-  const rematchProblem = rematchRequest?.state === "failed" ? rematchRequest.error : null;
 
   // Takes the place of the status under the board, while the user steps through the game, and goes
   // above the result of a game that is over, whose rematch is still wanted. A review nobody opened,
@@ -168,32 +124,48 @@ export function GameScreen({
   const nothingToStep = review?.load === "ready" && review.frames.length === 0;
   const reviewPanel = review && !(reviewAlways && nothingToStep) ? (
     <ReviewPanel
-      loading={review.load === "loading"}
-      error={review.load === "failed" ? review.error : null}
-      count={review.frames.length}
-      index={shown}
+      gameId={gameId}
       text={frame ? frameText(snapshot, frame.state, mySeat) : null}
-      partial={review.frames[0] !== undefined && hasMovesIn(review.frames[0])}
       live={over ? "" : `In the game: ${turnText(snapshot, mySeat)}`}
-      onShow={onShowFrame}
-      onStep={onStepFrame}
-      onRetry={onRetryReview}
-      onClose={reviewAlways ? null : onCloseReview}
+      closable={!reviewAlways}
     />
   ) : null;
 
   const status = result ? (
-    <ResultSection
-      result={result}
-      rematch={rematch}
-      connected={connected}
-      answering={answering}
-      rematchProblem={rematchProblem}
-      onRematch={onRematch}
-      onDeclineRematch={onDeclineRematch}
-    />
+    <ResultSection gameId={gameId} result={result} rematch={rematch} connected={connected} />
   ) : (
     <section className="status-band" aria-label="Turn" data-turn={myTurn ? "mine" : "wait"}>
+      {(canReviewMoves || canForfeit || (showAutoplay && mySeat !== null && state)) && (
+        <div className="status-actions">
+          {canReviewMoves && (
+            <button
+              className="button button-quiet button-small"
+              type="button"
+              onClick={() => startReview({ gameId })}
+            >
+              Review moves
+            </button>
+          )}
+          {canForfeit && (
+            <ForfeitControl
+              gameId={gameId}
+              opponent={nameOf(snapshot, opponent, mySeat)}
+              disabled={!connected || view.busy}
+            />
+          )}
+          {showAutoplay && mySeat !== null && state && (
+            <button
+              className="button button-quiet button-small"
+              type="button"
+              aria-pressed={view.auto}
+              title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
+              onClick={() => autoplay({ gameId, on: !view.auto })}
+            >
+              Auto-play
+            </button>
+          )}
+        </div>
+      )}
       <p className="status-main" role="status" aria-live="polite">
         {turnText(snapshot, mySeat)}
       </p>
@@ -203,39 +175,12 @@ export function GameScreen({
         </p>
       )}
       {lastThrow && <p className="status-warning">{lastThrow}</p>}
-      {(canReviewMoves || canForfeit || (showAutoplay && mySeat !== null && state)) && (
-        <div className="status-actions">
-          {canReviewMoves && (
-            <button className="button button-quiet button-small" type="button" onClick={onReview}>
-              Review moves
-            </button>
-          )}
-          {canForfeit && (
-            <ForfeitControl
-              opponent={nameOf(snapshot, opponent, mySeat)}
-              disabled={!connected || view.busy}
-              onForfeit={onForfeit}
-            />
-          )}
-          {showAutoplay && mySeat !== null && state && (
-            <button
-              className="button button-quiet button-small"
-              type="button"
-              aria-pressed={view.auto}
-              title="Plays your turns: a checker off the head when it can, otherwise a random legal move"
-              onClick={() => onAutoplay(!view.auto)}
-            >
-              Auto-play
-            </button>
-          )}
-        </div>
-      )}
     </section>
   );
 
   return (
     <Shell>
-      {canJoin && <JoinPanel connected={connected} join={join} onJoin={onJoin} />}
+      {canJoin && <JoinPanel gameId={gameId} connected={connected} />}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
 
       {/* Both players are in one row over the board, to leave the height to the board. The viewer is
@@ -256,20 +201,23 @@ export function GameScreen({
       </div>
       <div className="board-wrap">
         <Board
+          gameId={gameId}
           state={board}
           revision={frame?.revision ?? snapshot.revision}
           viewer={viewer}
           selected={reviewing ? null : view.selected}
           interactive={canAct}
           player={mySeat !== null}
-          onSelect={onSelect}
-          onMove={onMove}
-          onCue={onCue}
         />
         {/* Roll goes under the dice: nothing can be moved until they are thrown. Undo is there
             while checkers are being moved, so it goes between the trays, where it covers no stack. */}
         {canAct && state?.phase.type === "roll" && (
-          <button className="button under-dice" type="button" style={underDiceSpot()} onClick={onRoll}>
+          <button
+            className="button under-dice"
+            type="button"
+            style={underDiceSpot()}
+            onClick={() => submit({ gameId, action: { type: "roll" } })}
+          >
             Roll dice
           </button>
         )}
@@ -278,7 +226,7 @@ export function GameScreen({
             className="button button-quiet between-trays"
             type="button"
             style={betweenTraysSpot()}
-            onClick={onUndo}
+            onClick={() => submit({ gameId, action: { type: "undo" } })}
           >
             Undo
           </button>

@@ -1,6 +1,8 @@
+import { useOp, useQuery } from "millpond/react";
 import { type CSSProperties, type KeyboardEvent, type MouseEvent, useEffect, useRef } from "react";
-import type { LongBackgammonState, Seat, Step } from "../features/game";
-import { type TimedCue, cuesFor } from "./cues";
+import { type LongBackgammonState, type Seat, type Step, selectPoint, submitMoves } from "../features/game";
+import { DEFAULT_VOLUME, SOUND_ID, soundSettings } from "../features/sound";
+import { cuesFor } from "./cues";
 import { Dice } from "./Dice";
 import {
   BAR_WIDTH,
@@ -29,6 +31,7 @@ import {
   type Colour,
   type Destination,
   type PointView,
+  type Press,
   colourOf,
   bearOffSteps,
   destinations,
@@ -42,6 +45,7 @@ import {
   viewerPoints,
 } from "./layout";
 import type { Motion, Place } from "./motion";
+import { playCue } from "./sounds";
 import { useMotion } from "./useMotion";
 
 // The board is an SVG in its own units (see `geometry`), scaled to the width of the page.
@@ -52,6 +56,8 @@ import { useMotion } from "./useMotion";
 type MoveMotion = Extract<Motion, { type: "move" }>;
 
 interface BoardProps {
+  /** The game whose checkers the board moves: a press selects a point (`selectPoint`) or plays (`submitMoves`). */
+  gameId: string;
   /** Null before the game starts: the board then shows the starting position. */
   state: LongBackgammonState | null;
   /** The server's number for this position. A new one means something happened. */
@@ -63,16 +69,13 @@ interface BoardProps {
   interactive: boolean;
   /** The viewer plays in this game, rather than watches it: only then is a result a win or a loss. */
   player: boolean;
-  onSelect: (point: number | null) => void;
-  /** Play these steps, one after the other: one for a single die, more for a combined move. */
-  onMove: (steps: Step[]) => void;
-  /** A sound goes with what just happened. The caller plays it, or not. */
-  onCue: (cue: TimedCue) => void;
 }
 
-export function Board({ player, onCue, ...props }: BoardProps) {
+export function Board({ player, ...props }: BoardProps) {
   const { state, revision, viewer } = props;
   const { motion, rolls, ended } = useMotion(state, revision, viewer);
+  // At the volume set in the menu, which may be off.
+  const volume = useQuery(soundSettings.get(SOUND_ID))?.volume ?? DEFAULT_VOLUME;
 
   // The sounds go with the motion, once per position. The one the board opened on has none,
   // and nor does the same position again with new labels.
@@ -80,13 +83,13 @@ export function Board({ player, onCue, ...props }: BoardProps) {
   useEffect(() => {
     if (heard.current === revision) return;
     heard.current = revision;
-    for (const timed of cuesFor({ motion, ended, state, viewer, player })) onCue(timed);
-  }, [revision, motion, ended, state, viewer, player, onCue]);
+    for (const { cue, afterMs } of cuesFor({ motion, ended, state, viewer, player })) playCue(cue, afterMs, volume);
+  }, [revision, motion, ended, state, viewer, player, volume]);
 
   return <BoardView {...props} motion={motion} rolls={rolls} />;
 }
 
-interface BoardViewProps extends Omit<BoardProps, "player" | "onCue"> {
+interface BoardViewProps extends Omit<BoardProps, "player"> {
   /** What led to this position, if it can be followed with the eye. */
   motion: Motion | null;
   /** How many rolls this board has seen; 0 on a board that opened mid-game, whose dice lie still. */
@@ -94,17 +97,8 @@ interface BoardViewProps extends Omit<BoardProps, "player" | "onCue"> {
 }
 
 /** The board as a drawing of its props. `Board` works out the motion; this only draws it. */
-export function BoardView({
-  state,
-  revision,
-  viewer,
-  selected,
-  interactive,
-  motion,
-  rolls,
-  onSelect,
-  onMove,
-}: BoardViewProps) {
+export function BoardView({ gameId, state, revision, viewer, selected, interactive, motion, rolls }: BoardViewProps) {
+  const select = useOp(selectPoint);
   const points = viewerPoints(state, viewer);
   const other = (1 - viewer) as Seat;
   const colours = {
@@ -126,13 +120,6 @@ export function BoardView({
   const bearOff =
     picked !== null ? bearOffSteps(picked, ways) : active ? farthestBearOff(state) : null;
 
-  function press(on: "piece" | "background", point: number) {
-    const outcome = pressOutcome(on, point, picked, ways, sources);
-    if (outcome.type === "move") onMove(outcome.steps);
-    else if (outcome.type === "select") onSelect(outcome.point);
-    else onSelect(null);
-  }
-
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: clicking away is a mouse shortcut; the keyboard deselects by pressing the selected point again
     // biome-ignore lint/a11y/useSemanticElements: a <fieldset> groups form controls; this is a drawing with buttons in it
@@ -141,7 +128,7 @@ export function BoardView({
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       role="group"
       aria-label="Board"
-      onClick={() => picked !== null && onSelect(null)}
+      onClick={() => picked !== null && select({ gameId, point: null })}
     >
       <rect className="board-frame" x="0" y="0" width={WIDTH} height={HEIGHT} rx="4" />
       {/* A fine line inside the edge, as on a made board. */}
@@ -163,6 +150,7 @@ export function BoardView({
       {points.map((point) => (
         <Point
           key={point.index}
+          gameId={gameId}
           point={point}
           number={pointNumber(point.index, viewer, white)}
           colours={colours}
@@ -170,10 +158,12 @@ export function BoardView({
           selected={point.index === picked}
           target={targets.get(point.index) ?? null}
           arriving={move?.to.at === point.index ? move.to.count - 1 : null}
-          onPress={press}
+          piecesPress={pressOutcome("piece", point.index, picked, ways, sources)}
+          backgroundPress={pressOutcome("background", point.index, picked, ways, sources)}
         />
       ))}
       <Tray
+        gameId={gameId}
         top
         count={state?.off[other] ?? 0}
         colour={colours.them}
@@ -181,11 +171,11 @@ export function BoardView({
         arriving={move?.to.at === "off" && move.seat === other ? move.to.count - 1 : null}
       />
       <Tray
+        gameId={gameId}
         count={state?.off[viewer] ?? 0}
         colour={colours.me}
         label="Your checkers borne off"
-        canBearOff={bearOff !== null}
-        onBearOff={() => bearOff && onMove(bearOff)}
+        bearOff={bearOff}
         arriving={move?.to.at === "off" && move.seat === viewer ? move.to.count - 1 : null}
       />
       {state && <Dice key={rolls} faces={diceFaces(state)} rolling={rolls > 0} />}
@@ -223,6 +213,7 @@ function pressable(label: string, press: () => void) {
 }
 
 interface PointProps {
+  gameId: string;
   point: PointView;
   /** What both players call this point. */
   number: number;
@@ -234,11 +225,30 @@ interface PointProps {
   target: Destination | null;
   /** The slot of a checker still flying in, which is not drawn until it lands, or null. */
   arriving: number | null;
-  /** A press on the point's pieces, or on the rest of it. See `pressOutcome`. */
-  onPress: (on: "piece" | "background", point: number) => void;
+  /** What a press on the point's pieces does, and a press on the rest of it. See `pressOutcome`. */
+  piecesPress: Press;
+  backgroundPress: Press;
 }
 
-function Point({ point, number, colours, source, selected, target, arriving, onPress }: PointProps) {
+function Point({
+  gameId,
+  point,
+  number,
+  colours,
+  source,
+  selected,
+  target,
+  arriving,
+  piecesPress,
+  backgroundPress,
+}: PointProps) {
+  const select = useOp(selectPoint);
+  const moveChecker = useOp(submitMoves);
+  // A press that does nothing else takes back the selection.
+  const press = (outcome: Press) => {
+    if (outcome.type === "move") moveChecker({ gameId, steps: outcome.steps });
+    else select({ gameId, point: outcome.type === "select" ? outcome.point : null });
+  };
   const { row, column } = pointSlot(point.index);
   const x = columnX(column);
   const top = row === "top";
@@ -250,17 +260,15 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
   const colour = point.owner === "them" ? colours.them : colours.me;
   // The background is a button where a checker can land. Where one can only start, it still
   // selects with the mouse, but the pieces are the button for the keyboard.
-  const onBackground = (event: MouseEvent) => {
+  const clickBackground = (event: MouseEvent) => {
     event.stopPropagation();
-    onPress("background", point.index);
+    press(backgroundPress);
   };
   const background =
     target !== null
-      ? pressable(`Move to point ${number} with ${diceWords(target.steps)}`, () =>
-          onPress("background", point.index),
-        )
+      ? pressable(`Move to point ${number} with ${diceWords(target.steps)}`, () => press(backgroundPress))
       : source
-        ? { onClick: onBackground }
+        ? { onClick: clickBackground }
         : {};
 
   const className = [
@@ -290,7 +298,7 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
       </g>
       <g
         className={source ? "point-pieces point-pieces-active" : "point-pieces"}
-        {...(source ? pressable(`Move a checker from point ${number}`, () => onPress("piece", point.index)) : {})}
+        {...(source ? pressable(`Move a checker from point ${number}`, () => press(piecesPress)) : {})}
       >
         {Array.from({ length: point.count }, (_, i) => (
           <circle
@@ -320,7 +328,7 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
         // the die; for a combined move (several dice by this checker, one after the other) it
         // says them added up, is drawn with a solid line, and a tooltip spells them out.
         // biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only copy of the background button, which is the keyboard's
-        <g className={target.steps.length > 1 ? "ghost ghost-combo" : "ghost"} onClick={onBackground}>
+        <g className={target.steps.length > 1 ? "ghost ghost-combo" : "ghost"} onClick={clickBackground}>
           {target.steps.length > 1 && (
             <title>{`${target.steps.map((step) => step.die).join(" + ")} = ${target.pips}`}</title>
           )}
@@ -354,25 +362,29 @@ function Point({ point, number, colours, source, selected, target, arriving, onP
 }
 
 interface TrayProps {
+  gameId: string;
   /** Drawn in the top right (the opponent's) rather than the bottom right. */
   top?: boolean;
   count: number;
   colour: Colour;
   label: string;
-  /** A checker can be borne off from here (the selected one, or with none selected the farthest): the tray is its button. */
-  canBearOff?: boolean;
+  /**
+   * The steps that bear a checker off to here (the selected one, or with none selected the
+   * farthest), or null if none can be: then the tray is no button.
+   */
+  bearOff?: Step[] | null;
   /** The slot of a checker still flying in, which is not drawn until it lands, or null. */
   arriving: number | null;
-  onBearOff?: () => void;
 }
 
-function Tray({ top = false, count, colour, label, canBearOff = false, arriving, onBearOff }: TrayProps) {
+function Tray({ gameId, top = false, count, colour, label, bearOff = null, arriving }: TrayProps) {
+  const moveChecker = useOp(submitMoves);
   const y = trayY(top);
   return (
     <g className="tray">
       <title>{`${label}: ${count}`}</title>
       <rect
-        className={canBearOff ? "tray-box tray-box-active" : "tray-box"}
+        className={bearOff !== null ? "tray-box tray-box-active" : "tray-box"}
         x={TRAY_X}
         y={y}
         width={TRAY_WIDTH}
@@ -391,10 +403,10 @@ function Tray({ top = false, count, colour, label, canBearOff = false, arriving,
           rx="3"
         />
       ))}
-      {canBearOff && (
+      {bearOff !== null && (
         // The whole tray is the button, over its borne-off checkers too, so that it is as easy to
         // hit as a point is; the label says what it does.
-        <g className="bear-off" {...pressable("Bear off", () => onBearOff?.())}>
+        <g className="bear-off" {...pressable("Bear off", () => moveChecker({ gameId, steps: bearOff }))}>
           <rect className="bear-off-hit" x={TRAY_X} y={y} width={TRAY_WIDTH} height={POINT_HEIGHT} rx="4" />
           <g transform={`translate(${TRAY_X + 8} ${y + 14})`}>
             <rect className="bear-off-label" width={TRAY_WIDTH - 16} height="36" rx="4" />

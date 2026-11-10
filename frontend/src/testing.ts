@@ -1,5 +1,43 @@
 // Stand-ins for the browser and the backend, shared by the feature tests.
 
+import { type Feature, type Table, createDb, feature, op } from "millpond";
+import { SESSION_ID } from "./features/session";
+
+/** Puts rows in a table as they are. Only `componentDb` registers it: the app has no such op. */
+const putRow = op((tx, args: { table: Table; row: unknown }) => {
+  tx.upsert(args.table, args.row);
+});
+
+/**
+ * A db for rendering components that read it. The test fills `tables` with `put`, and nothing
+ * reacts to that: those tables are registered without their features, so no effect watches them.
+ * `features` are registered whole, for what the components use but the test doesn't fill (the
+ * router, for a link). A table can't be in both.
+ */
+export function componentDb(tables: Record<string, Table>, features: Record<string, Feature> = {}) {
+  const db = createDb({ features: { ...features, componentTest: feature({ tables, ops: { putRow } }) } });
+  return {
+    db,
+    /** Puts `row` in `table`, in place of the row with its key if there is one. */
+    put<Row>(table: Table<Row>, row: Row) {
+      db.run(putRow, { table, row });
+    },
+  };
+}
+
+/** The `sessionState` row of a session that is ready, as `userId`; with no `userId`, one still registering. */
+export function sessionRow(userId: string | null, username: string | null = null) {
+  return {
+    id: SESSION_ID,
+    state: userId === null ? ("registering" as const) : ("ready" as const),
+    userId,
+    accessToken: userId === null ? null : `token-of-${userId}`,
+    username,
+    error: null,
+    rejected: null,
+  };
+}
+
 /** Effect tasks run after the flush; one macrotask lets the whole chain settle. */
 export const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 

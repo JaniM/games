@@ -1,19 +1,27 @@
-import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Snapshot } from "../features/game";
+import { type Snapshot, gameViews, joinRequests, rematchRequests, reviews } from "../features/game";
 import { GAME_ID, board, moving, snapshotOf, startingState } from "../fixtures";
 import { router } from "../features/router";
+import { sessionState } from "../features/session";
+import { soundSettings } from "../features/sound";
 import { asFrame } from "../features/game/review";
-import { GameScreen, type GameScreenProps, type GameViewRow, type ReviewRow } from "./GameScreen";
+import { componentDb, sessionRow } from "../testing";
+import {
+  GameScreen,
+  type GameViewRow,
+  type JoinRequestRow,
+  type RematchRequestRow,
+  type ReviewRow,
+} from "./GameScreen";
 
 // Rendering to a string shows the first moment, before the loading text has waited its second.
 // This one says it at once, which shows whether the page is waiting (see components/immediateLoading.tsx).
 vi.mock("../components/Loading", () => import("../components/immediateLoading"));
 
-// What a page shows is a function of its props, so these render it to a string.
-// (There is no DOM here: clicks are covered by the helpers and ops they call.)
+// What a page shows is a function of what is in the db, so these put the rows in and render it to
+// a string. (There is no DOM here: clicks are covered by the helpers and ops they call.)
 
 const ADA = "user-a";
 const GRACE = "user-b";
@@ -41,37 +49,29 @@ function viewOf(overrides: Partial<GameViewRow> = {}): GameViewRow {
   };
 }
 
-function render(userId: string | null, view: GameViewRow | undefined, extra: Partial<GameScreenProps> = {}) {
-  const db = createDb({ features: { router } });
+/** The rows of the page besides the game's, and whether it offers auto-play (it does, unless told not to). */
+interface Extra {
+  join?: JoinRequestRow;
+  rematchRequest?: RematchRequestRow;
+  review?: ReviewRow;
+  showAutoplay?: boolean;
+}
+
+/** The page as `userId` sees it (null: before the session is set up), with `view` its game's row. */
+function render(userId: string | null, view: GameViewRow | undefined, extra: Extra = {}) {
+  const { db, put } = componentDb(
+    { gameViews, joinRequests, rematchRequests, reviews, sessionState, soundSettings },
+    { router },
+  );
   dbs.push(db);
-  const noop = () => {};
+  put(sessionState, sessionRow(userId));
+  if (view) put(gameViews, view);
+  if (extra.join) put(joinRequests, extra.join);
+  if (extra.rematchRequest) put(rematchRequests, extra.rematchRequest);
+  if (extra.review) put(reviews, extra.review);
   return renderToString(
     <DbProvider db={db}>
-      <GameScreen
-        view={view}
-        userId={userId}
-        join={undefined}
-        rematchRequest={undefined}
-        review={undefined}
-        inviteUrl={URL}
-        onJoin={noop}
-        onRematch={noop}
-        onDeclineRematch={noop}
-        onReview={noop}
-        onCloseReview={noop}
-        onRetryReview={noop}
-        onShowFrame={noop}
-        onStepFrame={noop}
-        onRoll={noop}
-        onUndo={noop}
-        onForfeit={noop}
-        onAutoplay={noop}
-        showAutoplay={true}
-        onSelect={noop}
-        onMove={noop}
-        onCue={noop}
-        {...extra}
-      />
+      <GameScreen gameId={GAME_ID} inviteUrl={URL} showAutoplay={extra.showAutoplay ?? true} />
     </DbProvider>,
   );
 }

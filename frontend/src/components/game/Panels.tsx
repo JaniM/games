@@ -1,9 +1,11 @@
+import { useOp, useQuery } from "millpond/react";
 import type { ReactElement, ReactNode } from "react";
 import { Link } from "../Link";
 import { Loading } from "../Loading";
+import { askRematch, declineRematch, joinGame, joinRequests, rematchRequests } from "../../features/game";
 import { gamePath } from "../../features/router";
 import type { RematchStage, Result } from "./people";
-import type { AnyGameViewRow, JoinRequestRow } from "./rows";
+import type { AnyGameViewRow } from "./rows";
 
 /** The page of a game: a screen reader gets the title, because the nav and the board say the rest. */
 export function GameShell({ title, shape, children }: { title: string; shape?: "square"; children: ReactNode }) {
@@ -46,17 +48,23 @@ export function gameNotice(view: AnyGameViewRow | undefined): ReactElement | nul
 }
 
 interface JoinPanelProps {
+  gameId: string;
   connected: boolean;
-  join: JoinRequestRow | undefined;
-  onJoin: () => void;
 }
 
 /** The free seat, and the button to take it. The point of the page for a visitor until the game is full. */
-export function JoinPanel({ connected, join, onJoin }: JoinPanelProps) {
+export function JoinPanel({ gameId, connected }: JoinPanelProps) {
+  const join = useQuery(joinRequests.get(gameId));
+  const requestJoin = useOp(joinGame);
   return (
     <section className="panel" aria-label="Join this game">
       <p>This game is waiting for a second player.</p>
-      <button className="button" type="button" disabled={!connected || join?.state === "joining"} onClick={onJoin}>
+      <button
+        className="button"
+        type="button"
+        disabled={!connected || join?.state === "joining"}
+        onClick={() => requestJoin({ gameId })}
+      >
         {join?.state === "joining" ? "Joining…" : "Join game"}
       </button>
       {join?.state === "failed" && (
@@ -70,27 +78,26 @@ export function JoinPanel({ connected, join, onJoin }: JoinPanelProps) {
 }
 
 interface ResultSectionProps {
+  gameId: string;
   result: Result;
   rematch: RematchStage;
   connected: boolean;
-  /** The player's own answer about the rematch has gone out, and the other's is not back. */
-  answering: boolean;
-  /** Why the last answer about the rematch did not go through, if it did not. */
-  rematchProblem: string | null;
-  onRematch: () => void;
-  onDeclineRematch: () => void;
 }
 
-/** The game over block: who won, and what the players can do next: ask for a rematch. */
-export function ResultSection({
-  result,
-  rematch,
-  connected,
-  answering,
-  rematchProblem,
-  onRematch,
-  onDeclineRematch,
-}: ResultSectionProps) {
+/**
+ * The game over block: who won, and what the players can do next: ask for a rematch. The buttons
+ * ask for one, or say yes to the other player's ask (`askRematch`), and take back one's own ask,
+ * or say no to the other's (`declineRematch`).
+ */
+export function ResultSection({ gameId, result, rematch, connected }: ResultSectionProps) {
+  // An answer about the rematch that is on its way, or has failed; undefined if there is none.
+  const request = useQuery(rematchRequests.get(gameId));
+  const ask = useOp(askRematch);
+  const decline = useOp(declineRematch);
+  // The player's own answer has gone out and the other's is not back. It shows as a snapshot.
+  const answering = request?.state === "sending";
+  // Why the last answer did not go through, if it did not.
+  const rematchProblem = request?.state === "failed" ? request.error : null;
   return (
     <section className={result.won ? "result result-won" : "result"} aria-label="Result">
       <div>
@@ -126,20 +133,30 @@ export function ResultSection({
       {rematch.stage !== "closed" && (
         <div className="result-actions">
           {rematch.stage === "ask" && (
-            <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
+            <button
+              className="button"
+              type="button"
+              disabled={!connected || answering}
+              onClick={() => ask({ gameId })}
+            >
               Rematch
             </button>
           )}
           {rematch.stage === "answer" && (
             <>
-              <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
+              <button
+                className="button"
+                type="button"
+                disabled={!connected || answering}
+                onClick={() => ask({ gameId })}
+              >
                 Accept
               </button>
               <button
                 className="button button-quiet"
                 type="button"
                 disabled={!connected || answering}
-                onClick={onDeclineRematch}
+                onClick={() => decline({ gameId })}
               >
                 Decline
               </button>
@@ -150,7 +167,7 @@ export function ResultSection({
               className="button button-quiet"
               type="button"
               disabled={!connected || answering}
-              onClick={onDeclineRematch}
+              onClick={() => decline({ gameId })}
             >
               Cancel
             </button>

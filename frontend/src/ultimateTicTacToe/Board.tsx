@@ -1,11 +1,15 @@
+import { useOp, useQuery } from "millpond/react";
 import { useEffect, useRef } from "react";
-import type { BoardResult, Seat, UtttState } from "../features/game";
-import type { TimedCue } from "../longBackgammon/cues";
+import { type BoardResult, type Seat, type UtttState, submitAction } from "../features/game";
+import { DEFAULT_VOLUME, SOUND_ID, soundSettings } from "../features/sound";
+import { playCue } from "../longBackgammon/sounds";
 import { type Placed, cuesFor, useHeld } from "./cues";
 import { MarkIcon } from "./Mark";
 import { boardLabel, cellLabel, markOf } from "./status";
 
 export interface BoardProps {
+  /** The game a cell is marked in: a press on one plays it (`submitAction`). */
+  gameId: string;
   /** The game as it stands, or in a review the position shown. Null before the game starts. */
   state: UtttState | null;
   /** The revision that showed `state`: a new one is a new position, which is heard and animated. */
@@ -16,14 +20,12 @@ export interface BoardProps {
   interactive: boolean;
   /** The viewer plays in this game, rather than watches it: only then is a result a win or a loss. */
   player: boolean;
-  onPlay: (board: number, cell: number) => void;
-  /** A sound goes with what just happened. The caller plays it, or not. */
-  onCue: (cue: TimedCue) => void;
 }
 
-export function Board({ player, onCue, ...props }: BoardProps) {
-  const { state, revision, viewer } = props;
+export function Board({ gameId, state, revision, viewer, interactive, player }: BoardProps) {
   const held = useHeld(state, revision);
+  // At the volume set in the menu, which may be off.
+  const volume = useQuery(soundSettings.get(SOUND_ID))?.volume ?? DEFAULT_VOLUME;
 
   // The sounds go with the mark, once per position. The one the board opened on has none, and
   // nor does the same position again with new labels.
@@ -32,25 +34,25 @@ export function Board({ player, onCue, ...props }: BoardProps) {
   useEffect(() => {
     if (heard.current === revision) return;
     heard.current = revision;
-    for (const timed of cuesFor({ placed, ended, state, viewer, player })) onCue(timed);
-  }, [revision, placed, ended, state, viewer, player, onCue]);
+    for (const { cue, afterMs } of cuesFor({ placed, ended, state, viewer, player })) playCue(cue, afterMs, volume);
+  }, [revision, placed, ended, state, viewer, player, volume]);
 
-  return <BoardView state={state} interactive={props.interactive} placed={placed} onPlay={props.onPlay} />;
+  return <BoardView gameId={gameId} state={state} interactive={interactive} placed={placed} />;
 }
 
 interface BoardViewProps {
+  gameId: string;
   state: UtttState | null;
   interactive: boolean;
   /** The mark that led to this position, if it can be followed with the eye. It is drawn in. */
   placed: Placed | null;
-  onPlay: (board: number, cell: number) => void;
 }
 
 const OPEN: BoardResult = { type: "open" };
 const NINE = Array.from({ length: 9 }, (_, index) => index);
 
 /** The board as a drawing of its props. `Board` works out what just happened; this only draws it. */
-export function BoardView({ state, interactive, placed, onPlay }: BoardViewProps) {
+export function BoardView({ gameId, state, interactive, placed }: BoardViewProps) {
   const playing = state?.phase.type === "play";
   // Where the next mark must go. Shown to everyone, but it is the player's to do only on their turn.
   const targets = new Set(playing ? state.playable : []);
@@ -98,12 +100,12 @@ export function BoardView({ state, interactive, placed, onPlay }: BoardViewProps
               // Only a cell that may be marked is a button: the others are not worth a stop on the way.
               if (state && interactive && target) {
                 return (
-                  <button
+                  <OpenCell
                     key={cell}
-                    className="ttt-cell ttt-cell-open"
-                    type="button"
-                    aria-label={cellLabel(state, board, cell)}
-                    onClick={() => onPlay(board, cell)}
+                    gameId={gameId}
+                    board={board}
+                    cell={cell}
+                    label={cellLabel(state, board, cell)}
                   />
                 );
               }
@@ -121,5 +123,26 @@ export function BoardView({ state, interactive, placed, onPlay }: BoardViewProps
         );
       })}
     </div>
+  );
+}
+
+interface OpenCellProps {
+  gameId: string;
+  board: number;
+  cell: number;
+  /** What a screen reader calls the cell. */
+  label: string;
+}
+
+/** An empty cell the player may mark now. Pressing it marks it, which is final: there is no taking it back. */
+export function OpenCell({ gameId, board, cell, label }: OpenCellProps) {
+  const submit = useOp(submitAction);
+  return (
+    <button
+      className="ttt-cell ttt-cell-open"
+      type="button"
+      aria-label={label}
+      onClick={() => submit({ gameId, action: { type: "play", board, cell } })}
+    />
   );
 }

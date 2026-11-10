@@ -2,22 +2,16 @@ import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  AccountDialogs,
-  AccountForm,
-  type AccountFormProps,
-  type AccountRequestRow,
-  SignedOutNotice,
-} from "./AccountDialogs";
-import { account } from "../features/account";
+import { AccountDialogs, AccountForm, type AccountRequestRow, SignedOutNotice } from "./AccountDialogs";
+import { ACCOUNT_ID, account, accountRequest } from "../features/account";
 import { lobby } from "../features/lobby";
 import { profile } from "../features/profile";
 import { router } from "../features/router";
-import { session } from "../features/session";
-import { fakeServer, fakeStorage, settle } from "../testing";
+import { SESSION_ID, session, sessionFlags, sessionState } from "../features/session";
+import { componentDb, fakeServer, fakeStorage, sessionRow, settle } from "../testing";
 
-// What a dialog shows is a function of its props, so these render it to a string.
-// (There is no DOM here: what a press does is covered by the ops, in the account tests.)
+// What a dialog shows is a function of what is in the db, so these put the rows in and render it
+// to a string. (There is no DOM here: what a press does is covered by the ops, in the account tests.)
 
 const dbs: { dispose(): void }[] = [];
 afterEach(() => {
@@ -29,14 +23,20 @@ type Form = "create" | "signIn" | "delete";
 
 type Overrides = Partial<Omit<AccountRequestRow, "form">>;
 
-function requestOf(form: Form, overrides: Overrides = {}): AccountFormProps["request"] {
-  return { id: "current", form, state: "editing", username: "", password: null, error: null, ...overrides };
+function requestOf(form: Form, overrides: Overrides = {}): AccountRequestRow {
+  return { id: ACCOUNT_ID, form, state: "editing", username: "", password: null, error: null, ...overrides };
 }
 
-function render(form: Form, extra: Partial<AccountFormProps> = {}, overrides: Overrides = {}) {
-  const noop = () => {};
+/** The form that is open, for a guest unless `isAccount`, with its request as `overrides` say. */
+function render(form: Form, { isAccount = false }: { isAccount?: boolean } = {}, overrides: Overrides = {}) {
+  const { db, put } = componentDb({ accountRequest, sessionState });
+  dbs.push(db);
+  put(accountRequest, requestOf(form, overrides));
+  put(sessionState, sessionRow("user-a", isAccount ? "ada" : null));
   return renderToString(
-    <AccountForm request={requestOf(form, overrides)} isAccount={false} onSubmit={noop} onClose={noop} {...extra} />,
+    <DbProvider db={db}>
+      <AccountForm />
+    </DbProvider>,
   );
 }
 
@@ -163,7 +163,15 @@ describe("after a refusal", () => {
 
 describe("the notice that the user was signed out", () => {
   it("says whose session ended and what to do", () => {
-    const html = renderToString(<SignedOutNotice username="ada" onSignIn={() => {}} onDismiss={() => {}} />);
+    const { db, put } = componentDb({ sessionFlags });
+    dbs.push(db);
+    put(sessionFlags, { id: SESSION_ID, upgrading: false, signedOutAs: "ada" });
+
+    const html = renderToString(
+      <DbProvider db={db}>
+        <SignedOutNotice />
+      </DbProvider>,
+    );
 
     expect(html).toContain(">You were signed out<");
     expect(html).toContain("<strong>ada</strong>");

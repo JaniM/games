@@ -1,12 +1,14 @@
+import { useOp } from "millpond/react";
 import { useState } from "react";
 import { Modal } from "../Modal";
+import { forfeitGame } from "../../features/game";
 
 interface ForfeitControlProps {
+  gameId: string;
   /** Who wins if the player gives up, as a sentence names them: "Grace", "Player 2". */
   opponent: string;
   /** Giving up is not possible right now, e.g. an action is waiting for its answer. */
   disabled: boolean;
-  onForfeit: () => void;
 }
 
 /**
@@ -14,7 +16,8 @@ interface ForfeitControlProps {
  * and can't be taken back. The focus starts on "Keep playing", so that a stray Enter doesn't
  * give the game away.
  */
-export function ForfeitControl({ opponent, disabled, onForfeit }: ForfeitControlProps) {
+export function ForfeitControl({ gameId, opponent, disabled }: ForfeitControlProps) {
+  const forfeit = useOp(forfeitGame);
   const [asking, setAsking] = useState(false);
   return (
     <>
@@ -38,7 +41,7 @@ export function ForfeitControl({ opponent, disabled, onForfeit }: ForfeitControl
               type="button"
               onClick={() => {
                 setAsking(false);
-                onForfeit();
+                forfeit({ gameId });
               }}
             >
               Forfeit

@@ -1,8 +1,8 @@
 import type { RowOf } from "millpond";
 import type { gameViews, joinRequests, rematchRequests, reviews } from "../../features/game";
 
-// The rows a game screen is drawn from. A screen gets them as props, so that it can be
-// rendered without a db.
+// The rows a game screen is drawn from, as types. The screen and its parts read them from the db
+// by the game's id.
 
 /** A game page's row. Its snapshot is of any kind of game: a screen narrows it to its own. */
 export type AnyGameViewRow = RowOf<typeof gameViews>;

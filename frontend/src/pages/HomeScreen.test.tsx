@@ -1,14 +1,13 @@
-import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gamesList, myGames, newGame } from "../features/lobby";
 import { router } from "../features/router";
-import { GAMES } from "../games";
-import { gameIdOf } from "../testing";
+import { GAMES, type GameInfo } from "../games";
+import { componentDb, gameIdOf } from "../testing";
 import {
   type GamesListRow,
   HomeScreen,
-  type HomeScreenProps,
   type MyGameRow,
   type NewGameRow,
   gameStateText,
@@ -19,34 +18,42 @@ import {
 // This one says it at once, which shows whether the page is waiting (see components/immediateLoading.tsx).
 vi.mock("../components/Loading", () => import("../components/immediateLoading"));
 
-// What the page shows is a function of its props, so these render it to a string.
-// (There is no DOM here: clicks are covered by the ops they call, in the lobby tests.)
+// What the page shows is a function of what is in the lobby, so these put the rows in and render
+// it to a string. (There is no DOM here: clicks are covered by the ops they call, in the lobby tests.)
 
 const dbs: { dispose(): void }[] = [];
 afterEach(() => {
   for (const db of dbs.splice(0)) db.dispose();
 });
 
-function render(overrides: Partial<HomeScreenProps> = {}) {
-  const db = createDb({ features: { router } });
+interface Page {
+  /** The games the site offers. */
+  games: readonly GameInfo[];
+  /** The games the user is in, in any order: the page puts the newest first. */
+  mine: readonly MyGameRow[];
+  /** Whether `mine` is being read; undefined before the first read starts. */
+  list: GamesListRow | undefined;
+  /** The dialog for creating a game; undefined while it is closed. */
+  request: NewGameRow | undefined;
+}
+
+/** The page, with the user's games read and the dialog closed, unless `overrides` say otherwise. */
+function render(overrides: Partial<Page> = {}) {
+  const page: Page = {
+    games: GAMES,
+    mine: [],
+    list: { id: "mine", state: "loaded", error: null },
+    request: undefined,
+    ...overrides,
+  };
+  const { db, put } = componentDb({ gamesList, myGames, newGame }, { router });
   dbs.push(db);
-  const noop = () => { };
+  for (const game of page.mine) put(myGames, game);
+  if (page.list) put(gamesList, page.list);
+  if (page.request) put(newGame, page.request);
   return renderToString(
     <DbProvider db={db}>
-      <HomeScreen
-        games={GAMES}
-        mine={[]}
-        list={{ id: "mine", state: "loaded", error: null }}
-        request={undefined}
-        onNewGame={noop}
-        onOpponent={noop}
-        onLevel={noop}
-        onPublic={noop}
-        onCreate={noop}
-        onClose={noop}
-        onReload={noop}
-        {...overrides}
-      />
+      <HomeScreen games={page.games} />
     </DbProvider>,
   );
 }

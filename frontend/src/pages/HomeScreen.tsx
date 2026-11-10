@@ -1,8 +1,25 @@
 import type { RowOf } from "millpond";
+import { useOp, useQuery } from "millpond/react";
+import { useMemo } from "react";
 import { GAME_STATE_TEXT, GameRow, gameState } from "../components/GameRow";
 import { Loading } from "../components/Loading";
 import { Modal } from "../components/Modal";
-import { BOT_LEVELS, type BotLevel, type gamesList, type myGames, type newGame } from "../features/lobby";
+import {
+  BOT_LEVELS,
+  type BotLevel,
+  GAMES_LIST_ID,
+  NEW_GAME_ID,
+  chooseLevel,
+  chooseOpponent,
+  choosePublic,
+  closeNewGame,
+  createGame,
+  gamesList,
+  loadGames,
+  myGames,
+  newGame,
+  openNewGame,
+} from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";
 
@@ -13,43 +30,15 @@ export type NewGameRow = RowOf<typeof newGame>;
 export interface HomeScreenProps {
   /** The games the site offers. */
   games: readonly GameInfo[];
-  /** The games the user is in, newest first. */
-  mine: readonly MyGameRow[];
-  /** Whether `mine` is being read; undefined before the first read starts. */
-  list: GamesListRow | undefined;
-  /** The dialog for creating a game; undefined while it is closed. */
-  request: NewGameRow | undefined;
-  onNewGame: (kind: string) => void;
-  /** Picks the opponent in the dialog: the computer (true), or a friend. */
-  onOpponent: (bot: boolean) => void;
-  /** Picks how well the computer plays, which the dialog offers once it is the opponent. */
-  onLevel: (level: BotLevel) => void;
-  /** Ticks or unticks "public game" in the dialog. */
-  onPublic: (isPublic: boolean) => void;
-  onCreate: () => void;
-  onClose: () => void;
-  onReload: () => void;
 }
 
 /**
  * The front page: the user's games at the left edge, the games to start in the middle, and the
- * dialog for starting one. Everything it shows comes from its props, so it can be
- * rendered without a db.
+ * dialog for starting one. Each part reads what it shows from the lobby, and its buttons call the
+ * lobby's ops.
  */
-export function HomeScreen({
-  games,
-  mine,
-  list,
-  request,
-  onNewGame,
-  onOpponent,
-  onLevel,
-  onPublic,
-  onCreate,
-  onClose,
-  onReload,
-}: HomeScreenProps) {
-  const requestInfo = request && games.find((game) => game.id === request.kind);
+export function HomeScreen({ games }: HomeScreenProps) {
+  const open = useOp(openNewGame);
 
   return (
     <main className="page page-home">
@@ -57,7 +46,7 @@ export function HomeScreen({
       <h1 className="visually-hidden">Games</h1>
 
       <div className="home">
-        <MyGames games={games} mine={mine} list={list} onReload={onReload} />
+        <MyGames games={games} />
 
         <section className="home-catalog" aria-labelledby="catalog-title">
           <h2 id="catalog-title" className="section-title">
@@ -66,7 +55,7 @@ export function HomeScreen({
           <ul className="game-list">
             {games.map((game) => (
               <li key={game.id}>
-                <button className="game-card" type="button" onClick={() => onNewGame(game.id)}>
+                <button className="game-card" type="button" onClick={() => open({ kind: game.id })}>
                   <span className="game-card-title">{game.name}</span>
                   <span className="game-card-text">{game.description}</span>
                   <span className="game-card-footer">
@@ -82,23 +71,7 @@ export function HomeScreen({
         </section>
       </div>
 
-      {request && (
-        <Modal
-          title={`${requestInfo?.name ?? request.kind}`}
-          locked={request.state === "creating"}
-          onClose={onClose}
-        >
-          <NewGameForm
-            request={request}
-            info={requestInfo}
-            onOpponent={onOpponent}
-            onLevel={onLevel}
-            onPublic={onPublic}
-            onCreate={onCreate}
-            onClose={onClose}
-          />
-        </Modal>
-      )}
+      <NewGameDialog games={games} />
     </main>
   );
 }
@@ -122,15 +95,14 @@ export function gameStateText(game: Pick<MyGameRow, "started" | "finished">): st
   return GAME_STATE_TEXT[gameState(game)];
 }
 
-interface MyGamesProps {
-  games: readonly GameInfo[];
-  mine: readonly MyGameRow[];
-  list: GamesListRow | undefined;
-  onReload: () => void;
-}
-
 /** The user's games, as links to their pages. A game of a kind the site doesn't know has no page, so it is left out. */
-function MyGames({ games, mine, list, onReload }: MyGamesProps) {
+function MyGames({ games }: { games: readonly GameInfo[] }) {
+  // Whether the games are being read; undefined before the first read starts.
+  const list = useQuery(gamesList.get(GAMES_LIST_ID));
+  // Every kind of game, oldest first: the index on `updatedAt`.
+  const oldestFirst = useQuery(myGames.byUpdated.updatedAtGte(0));
+  const mine = useMemo(() => [...oldestFirst].reverse(), [oldestFirst]);
+  const load = useOp(loadGames);
   const shown = mine.flatMap((game) => {
     const info = games.find((info) => info.id === game.kind);
     return info ? [{ game, info }] : [];
@@ -145,7 +117,7 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
       {list?.state === "failed" && (
         <div role="alert">
           <p className="error">Could not load your games: {list.error}</p>
-          <button className="button button-quiet" type="button" onClick={onReload}>
+          <button className="button button-quiet" type="button" onClick={() => load()}>
             Try again
           </button>
         </div>
@@ -169,41 +141,40 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
   );
 }
 
-interface NewGameFormProps {
-  request: NewGameRow;
-  /** The catalog entry for the kind, if the site has one. */
-  info: GameInfo | undefined;
-  onOpponent: (bot: boolean) => void;
-  onLevel: (level: BotLevel) => void;
-  onPublic: (isPublic: boolean) => void;
-  onCreate: () => void;
-  onClose: () => void;
-}
-
 /** What each level of the bot is called in the dialog. */
 const LEVEL_NAMES: Record<BotLevel, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
 
 /**
- * What goes in the dialog: what the game is, who to play (if the game has a computer opponent
- * to choose) and, against the computer, how well it plays, whether the game is public, and the
- * buttons.
+ * The dialog for creating a game, while the user has one open: what the game is, who to play (if
+ * the game has a computer opponent to choose) and, against the computer, how well it plays,
+ * whether the game is public, and the buttons.
  */
-function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, onClose }: NewGameFormProps) {
+function NewGameDialog({ games }: { games: readonly GameInfo[] }) {
+  const request = useQuery(newGame.get(NEW_GAME_ID));
+  const opponent = useOp(chooseOpponent);
+  const level = useOp(chooseLevel);
+  const makePublic = useOp(choosePublic);
+  const create = useOp(createGame);
+  const close = useOp(closeNewGame);
+  if (!request) return null;
+
+  // The catalog entry for the kind, if the site has one.
+  const info = games.find((game) => game.id === request.kind);
   const creating = request.state === "creating";
   // Only a game the catalog knows can say it has a bot. Without one, a friend is the only choice.
   const bot = info?.bot === true && request.bot;
   return (
-    <>
+    <Modal title={info?.name ?? request.kind} locked={creating} onClose={() => close()}>
       {info && <p>{info.description}</p>}
       {info?.bot ? (
         <fieldset className="choice" disabled={creating}>
           <legend className="visually-hidden">Opponent</legend>
           <label className="choice-option">
-            <input type="radio" name="opponent" checked={!bot} onChange={() => onOpponent(false)} />
+            <input type="radio" name="opponent" checked={!bot} onChange={() => opponent({ bot: false })} />
             <span className="choice-name">Play vs a friend</span>
           </label>
           <label className="choice-option">
-            <input type="radio" name="opponent" checked={bot} onChange={() => onOpponent(true)} />
+            <input type="radio" name="opponent" checked={bot} onChange={() => opponent({ bot: true })} />
             <span className="choice-name">Play vs a bot</span>
           </label>
         </fieldset>
@@ -216,16 +187,16 @@ function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, o
       {bot && (
         <fieldset className="segmented" disabled={creating}>
           <legend className="visually-hidden">Level</legend>
-          {BOT_LEVELS.map((level) => (
-            <label key={level} className="segmented-option">
+          {BOT_LEVELS.map((choice) => (
+            <label key={choice} className="segmented-option">
               <input
                 className="visually-hidden"
                 type="radio"
                 name="level"
-                checked={request.level === level}
-                onChange={() => onLevel(level)}
+                checked={request.level === choice}
+                onChange={() => level({ level: choice })}
               />
-              <span className="segmented-name">{LEVEL_NAMES[level]}</span>
+              <span className="segmented-name">{LEVEL_NAMES[choice]}</span>
             </label>
           ))}
         </fieldset>
@@ -235,7 +206,7 @@ function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, o
           type="checkbox"
           checked={request.public}
           disabled={creating}
-          onChange={(event) => onPublic(event.target.checked)}
+          onChange={(event) => makePublic({ public: event.target.checked })}
         />
         <span>
           <span className="check-name">Public game</span>
@@ -248,7 +219,7 @@ function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, o
         </p>
       )}
       <div className="modal-actions">
-        <button className="button button-quiet" type="button" disabled={creating} onClick={onClose}>
+        <button className="button button-quiet" type="button" disabled={creating} onClick={() => close()}>
           Cancel
         </button>
         <button
@@ -257,11 +228,11 @@ function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, o
           data-autofocus
           disabled={creating}
           aria-busy={creating}
-          onClick={onCreate}
+          onClick={() => create()}
         >
           {creating ? "Creating…" : "Create game"}
         </button>
       </div>
-    </>
+    </Modal>
   );
 }

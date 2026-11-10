@@ -31,23 +31,23 @@ const COPY: Record<"create" | "signIn" | "delete", FormCopy> = {
   delete: { title: "Delete account", action: "Delete", busy: "Deleting…" },
 };
 
-export interface AccountFormProps {
-  /** The form that is open, and where its request stands. Never the sign-out, which has no form. */
-  request: AccountRequestRow & { form: "create" | "signIn" | "delete" };
-  /** The user has an account, which is what a deletion asks the password of. */
-  isAccount: boolean;
-  onSubmit: (username: string, password: string) => void;
-  onClose: () => void;
-}
-
 /**
- * The dialog for making an account, signing in, or deleting the user. The fields are the
- * form's own until it is sent; the password goes nowhere else, and isn't kept once the request
- * is done. Everything it shows comes from its props, so it can be rendered without a db.
+ * The dialog for making an account, signing in, or deleting the user: the form that is open, if
+ * one is. The fields are the form's own until it is sent; the password goes nowhere else, and
+ * isn't kept once the request is done. It starts with the username the request has, so it is
+ * keyed by the form (see `AccountDialogs`).
  */
-export function AccountForm({ request, isAccount, onSubmit, onClose }: AccountFormProps) {
-  const [username, setUsername] = useState(request.username);
+export function AccountForm() {
+  const request = useQuery(accountRequest.get(ACCOUNT_ID));
+  // The user has an account, which is what a deletion asks the password of.
+  const isAccount = useQuery(sessionState.get(SESSION_ID))?.username != null;
+  const send = useOp(submitAccountForm);
+  const close = useOp(closeAccountForm);
+  const [username, setUsername] = useState(request?.username ?? "");
   const [password, setPassword] = useState("");
+  // The sign-out has no form.
+  if (!request || request.form === "signOut") return null;
+
   const { form } = request;
   const submitting = request.state === "submitting";
   const copy = form === "delete" && !isAccount ? { ...COPY.delete, title: "Delete my data" } : COPY[form];
@@ -56,11 +56,11 @@ export function AccountForm({ request, isAccount, onSubmit, onClose }: AccountFo
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!submitting) onSubmit(username, password);
+    if (!submitting) send({ username, password });
   }
 
   return (
-    <Modal title={copy.title} locked={submitting} onClose={onClose}>
+    <Modal title={copy.title} locked={submitting} onClose={() => close()}>
       <form className="account-form" onSubmit={submit}>
         <FormText form={form} isAccount={isAccount} />
         {asksName && (
@@ -106,7 +106,7 @@ export function AccountForm({ request, isAccount, onSubmit, onClose }: AccountFo
           </p>
         )}
         <div className="modal-actions">
-          <button className="button button-quiet" type="button" disabled={submitting} onClick={onClose}>
+          <button className="button button-quiet" type="button" disabled={submitting} onClick={() => close()}>
             Cancel
           </button>
           <button className="button" type="submit" disabled={submitting} aria-busy={submitting}>
@@ -151,29 +151,37 @@ function FormText({ form, isAccount }: { form: "create" | "signIn" | "delete"; i
   );
 }
 
-export interface SignedOutNoticeProps {
-  /** The account whose session ended. */
-  username: string;
-  onSignIn: () => void;
-  onDismiss: () => void;
-}
-
 /**
  * Says that the session of an account ended without the user asking, so that they know why they
  * are a guest and don't see their games. Without it they would find the site empty and not know why.
+ * Signing in from here opens the form with the account's username in it.
  */
-export function SignedOutNotice({ username, onSignIn, onDismiss }: SignedOutNoticeProps) {
+export function SignedOutNotice() {
+  // The account whose session ended, if one did.
+  const username = useQuery(sessionFlags.get(SESSION_ID))?.signedOutAs;
+  const open = useOp(openAccountForm);
+  const dismiss = useOp(signedOutNoticeDismissed);
+  if (!username) return null;
+
   return (
-    <Modal title="You were signed out" onClose={onDismiss}>
+    <Modal title="You were signed out" onClose={() => dismiss()}>
       <p>
         Your session as <strong>{username}</strong> has ended, so you are playing as a guest. Sign in again to get
         your games back.
       </p>
       <div className="modal-actions">
-        <button className="button button-quiet" type="button" onClick={onDismiss}>
+        <button className="button button-quiet" type="button" onClick={() => dismiss()}>
           Not now
         </button>
-        <button className="button" type="button" data-autofocus onClick={onSignIn}>
+        <button
+          className="button"
+          type="button"
+          data-autofocus
+          onClick={() => {
+            open({ form: "signIn", username });
+            dismiss();
+          }}
+        >
           Sign in
         </button>
       </div>
@@ -181,40 +189,13 @@ export function SignedOutNotice({ username, onSignIn, onDismiss }: SignedOutNoti
   );
 }
 
-/** Connects the forms and the notice to the db. At most one dialog is open: a form comes before the notice. */
+/** The account forms and the notice. At most one dialog is open: a form comes before the notice. */
 export function AccountDialogs() {
   const request = useQuery(accountRequest.get(ACCOUNT_ID));
-  const session = useQuery(sessionState.get(SESSION_ID));
-  const flags = useQuery(sessionFlags.get(SESSION_ID));
-  const submit = useOp(submitAccountForm);
-  const close = useOp(closeAccountForm);
-  const open = useOp(openAccountForm);
-  const dismiss = useOp(signedOutNoticeDismissed);
+  const signedOutAs = useQuery(sessionFlags.get(SESSION_ID))?.signedOutAs;
 
-  if (request && request.form !== "signOut") {
-    // Keyed by the form, so that moving from one to another starts with empty fields.
-    return (
-      <AccountForm
-        key={request.form}
-        request={{ ...request, form: request.form }}
-        isAccount={session?.username != null}
-        onSubmit={(username, password) => submit({ username, password })}
-        onClose={() => close()}
-      />
-    );
-  }
-  const signedOutAs = flags?.signedOutAs;
-  if (signedOutAs && !request) {
-    return (
-      <SignedOutNotice
-        username={signedOutAs}
-        onSignIn={() => {
-          open({ form: "signIn", username: signedOutAs });
-          dismiss();
-        }}
-        onDismiss={() => dismiss()}
-      />
-    );
-  }
+  // Keyed by the form, so that moving from one to another starts with empty fields.
+  if (request && request.form !== "signOut") return <AccountForm key={request.form} />;
+  if (signedOutAs && !request) return <SignedOutNotice />;
   return null;
 }

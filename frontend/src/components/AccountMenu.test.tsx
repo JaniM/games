@@ -1,38 +1,58 @@
-import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { AccountMenuView, type AccountMenuViewProps } from "./AccountMenu";
-import { profile } from "../features/profile";
-import { session } from "../features/session";
+import { AccountMenu } from "./AccountMenu";
+import { ACCOUNT_ID, accountRequest } from "../features/account";
+import { PROFILE_ID, profileState } from "../features/profile";
+import { sessionState } from "../features/session";
+import { SOUND_ID, soundSettings } from "../features/sound";
+import { THEME_ID, type Theme, themeSettings } from "../features/theme";
+import { componentDb, sessionRow } from "../testing";
 
-// What the menu shows is a function of its props (the name field aside, which reads the profile),
-// so these render it to a string. There is no DOM here: what the buttons do is covered by the ops
-// they call, in the account tests, and the key that closes the menu by `closesMenu`.
+// What the menu shows is a function of what is in the db, so these put the rows in and render it
+// to a string. There is no DOM here: what the buttons do is covered by the ops they call, in the
+// account tests, and the key that closes the menu by `closesMenu`.
 
 const dbs: { dispose(): void }[] = [];
 afterEach(() => {
   for (const db of dbs.splice(0)) db.dispose();
 });
 
-function render(overrides: Partial<AccountMenuViewProps> = {}) {
-  const db = createDb({ features: { session, profile } });
+interface Menu {
+  /** A guest's display name, null for none. An account's name is its username. */
+  name: string | null;
+  /** An account's username; null for a guest. */
+  username: string | null;
+  /** A request about the account is on its way. */
+  busy: boolean;
+  /** The volume, on a page with sound (a game's); null for a page with none. */
+  volume: number | null;
+  theme: Theme;
+}
+
+/** The menu of Ada, a guest, on a page without sound, unless `overrides` say otherwise. */
+function render(overrides: Partial<Menu> = {}) {
+  const menu: Menu = { name: "Ada", username: null, busy: false, volume: null, theme: "system", ...overrides };
+  const { db, put } = componentDb({ accountRequest, profileState, sessionState, soundSettings, themeSettings });
   dbs.push(db);
-  const noop = () => {};
+  put(sessionState, sessionRow("user-a", menu.username));
+  // As loaded: the name button can be pressed.
+  put(profileState, { id: PROFILE_ID, name: menu.name, state: "idle", pending: null, error: null });
+  if (menu.busy) {
+    put(accountRequest, {
+      id: ACCOUNT_ID,
+      form: "signOut",
+      state: "submitting",
+      username: "",
+      password: null,
+      error: null,
+    });
+  }
+  if (menu.volume !== null) put(soundSettings, { id: SOUND_ID, volume: menu.volume });
+  put(themeSettings, { id: THEME_ID, theme: menu.theme });
   return renderToString(
     <DbProvider db={db}>
-      <AccountMenuView
-        name="Ada"
-        username={null}
-        busy={false}
-        sound={null}
-        theme={{ theme: "system", onChange: noop }}
-        onCreate={noop}
-        onSignIn={noop}
-        onSignOut={noop}
-        onDelete={noop}
-        {...overrides}
-      />
+      <AccountMenu showSound={menu.volume !== null} />
     </DbProvider>,
   );
 }
@@ -60,7 +80,6 @@ describe("the panel", () => {
 
     expect(html).toContain('class="options-panel options-panel-end"');
     expect(html).toContain("Display name");
-    // The name field is the profile's, which has not loaded here.
     expect(html).toContain('class="name-button"');
   });
 
@@ -113,14 +132,11 @@ describe("the panel", () => {
     const html = render({ username: null, busy: true });
 
     expect(html.match(/<button class="menu-item" type="button" disabled=""/g)).toHaveLength(3);
-    // (The name button is held back until the profile loads, which it hasn't here.)
     expect(render({ username: null })).not.toMatch(/class="menu-item"[^>]*disabled/);
   });
 });
 
 describe("the volume", () => {
-  const sound = (volume: number) => ({ volume, onChange: () => {}, onSettle: () => {} });
-
   it("has no slider on a page with no sound", () => {
     const html = render();
 
@@ -129,7 +145,7 @@ describe("the volume", () => {
   });
 
   it("is a slider in the panel, set to the volume it is given, closed until the menu is opened", () => {
-    const html = render({ sound: sound(0.5) });
+    const html = render({ volume: 0.5 });
 
     expect(html).not.toMatch(/<details[^>]*\sopen/);
     expect(html.indexOf("<details")).toBeLessThan(html.indexOf("volume-slider"));
@@ -140,11 +156,11 @@ describe("the volume", () => {
   });
 
   it("calls the left end of the slider Off", () => {
-    expect(render({ sound: sound(0) })).toContain("aria-valuetext=\"Off\"");
+    expect(render({ volume: 0 })).toContain("aria-valuetext=\"Off\"");
   });
 
   it("is the first thing in the list, above what the account can do", () => {
-    const html = render({ sound: sound(0.7) });
+    const html = render({ volume: 0.7 });
 
     expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf("Create account"));
     expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf("Delete my data"));
@@ -153,7 +169,7 @@ describe("the volume", () => {
   });
 
   it("is there for an account as well as a guest", () => {
-    const html = render({ sound: sound(0.7), username: "ada" });
+    const html = render({ volume: 0.7, username: "ada" });
 
     expect(html).toContain("volume-slider");
     expect(html).toContain("Sign out");
@@ -176,7 +192,7 @@ describe("the theme", () => {
 
   it("has the theme it is given picked, and only that", () => {
     for (const theme of ["system", "light", "dark"] as const) {
-      const html = render({ theme: { theme, onChange: () => {} } });
+      const html = render({ theme });
 
       expect(html.match(/checked=""/g), theme).toHaveLength(1);
       const match = picked(html);
@@ -185,7 +201,7 @@ describe("the theme", () => {
   });
 
   it("is a row of the list, after the volume and above what the account can do", () => {
-    const html = render({ sound: { volume: 0.7, onChange: () => {}, onSettle: () => {} } });
+    const html = render({ volume: 0.7 });
 
     expect(html).toMatch(/<li class="menu-row"><div class="theme"/);
     expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf('class="theme"'));

@@ -1,7 +1,9 @@
 import type { RowOf } from "millpond";
+import { useOp, useQuery } from "millpond/react";
+import { useMemo } from "react";
 import { GameRow, gameState } from "../components/GameRow";
 import { Loading } from "../components/Loading";
-import type { publicGames, publicList } from "../features/lobby";
+import { PUBLIC_LIST_ID, loadPublicGames, publicGames, publicList } from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";
 
@@ -11,11 +13,6 @@ export type PublicListRow = RowOf<typeof publicList>;
 export interface PublicGamesScreenProps {
   /** The games the site offers: they name the kinds of game listed. */
   games: readonly GameInfo[];
-  /** The public games, newest change first. */
-  listed: readonly PublicGameRow[];
-  /** Whether `listed` is being read; undefined before the first read starts. */
-  list: PublicListRow | undefined;
-  onReload: () => void;
 }
 
 /**
@@ -30,10 +27,16 @@ export function publicPlayersText(game: Pick<PublicGameRow, "playerNames" | "pla
 }
 
 /**
- * The public list: the games that players chose to share, as links to watch them. Everything it
- * shows comes from its props, so it can be rendered without a db.
+ * The public list: the games that players chose to share, as links to watch them. It reads the
+ * list from the lobby.
  */
-export function PublicGamesScreen({ games, listed, list, onReload }: PublicGamesScreenProps) {
+export function PublicGamesScreen({ games }: PublicGamesScreenProps) {
+  // Whether the list is being read; undefined before the first read starts.
+  const list = useQuery(publicList.get(PUBLIC_LIST_ID));
+  // Every kind of game, oldest first: the index on `updatedAt`.
+  const oldestFirst = useQuery(publicGames.byUpdated.updatedAtGte(0));
+  const listed = useMemo(() => [...oldestFirst].reverse(), [oldestFirst]);
+  const load = useOp(loadPublicGames);
   // A game of a kind the site doesn't know has no page, so it is left out.
   const shown = listed.flatMap((game) => {
     const info = games.find((info) => info.id === game.kind);
@@ -49,7 +52,7 @@ export function PublicGamesScreen({ games, listed, list, onReload }: PublicGames
       {list?.state === "failed" && (
         <div role="alert">
           <p className="error">Could not load the public games: {list.error}</p>
-          <button className="button button-quiet" type="button" onClick={onReload}>
+          <button className="button button-quiet" type="button" onClick={() => load()}>
             Try again
           </button>
         </div>

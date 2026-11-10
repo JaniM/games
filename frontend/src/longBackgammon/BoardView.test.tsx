@@ -1,17 +1,24 @@
+import { DbProvider } from "millpond/react";
+import type { ReactElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { board, moving, startingState } from "../fixtures";
+import { afterAll, describe, expect, it } from "vitest";
+import { GAME_ID, board, moving, startingState } from "../fixtures";
 import type { LongBackgammonState, Seat } from "../features/game";
+import { componentDb } from "../testing";
 import { BoardView } from "./Board";
 import type { Motion } from "./motion";
 
 // The board is a drawing of its props, so the motion it is given can be checked in the markup.
 // (Whether it looks right while it runs is for a browser: there is none here.)
 
-const noop = () => {};
+// A press on the board calls the game's ops, so it needs a db. Nothing is pressed here: an empty one does.
+const { db } = componentDb({});
+afterAll(() => db.dispose());
+
+const drawn = (element: ReactElement) => renderToString(<DbProvider db={db}>{element}</DbProvider>);
 
 function draw(state: LongBackgammonState, motion: Motion | null, rolls = 0, viewer: Seat = 0) {
-  return renderToString(
+  return drawn(
     <BoardView
       state={state}
       revision={7}
@@ -20,8 +27,7 @@ function draw(state: LongBackgammonState, motion: Motion | null, rolls = 0, view
       interactive={false}
       motion={motion}
       rolls={rolls}
-      onSelect={noop}
-      onMove={noop}
+      gameId={GAME_ID}
     />,
   );
 }
@@ -152,7 +158,7 @@ describe("the landing marker", () => {
       points: [board({ 1: 8, 7: onSeven }), board({ 1: 15 })],
       ...moving([6, 3], [{ from: 1, die: 6 }]),
     });
-    return renderToString(
+    return drawn(
       <BoardView
         state={state}
         revision={7}
@@ -161,8 +167,7 @@ describe("the landing marker", () => {
         interactive
         motion={null}
         rolls={0}
-        onSelect={noop}
-        onMove={noop}
+        gameId={GAME_ID}
       />,
     );
   }
@@ -195,7 +200,7 @@ describe("the landing marker", () => {
 
 /** The board as the mover sees it, with the checker on point `selected` picked up. */
 function drawPicked(state: LongBackgammonState, selected: number | null) {
-  return renderToString(
+  return drawn(
     <BoardView
       state={state}
       revision={7}
@@ -204,8 +209,7 @@ function drawPicked(state: LongBackgammonState, selected: number | null) {
       interactive
       motion={null}
       rolls={0}
-      onSelect={noop}
-      onMove={noop}
+      gameId={GAME_ID}
     />,
   );
 }
@@ -334,7 +338,7 @@ describe("the tray as a bear-off button", () => {
   });
 
   it("is dark when it is not the viewer's turn to move", () => {
-    const html = renderToString(
+    const html = drawn(
       <BoardView
         state={home}
         revision={7}
@@ -343,8 +347,7 @@ describe("the tray as a bear-off button", () => {
         interactive={false}
         motion={null}
         rolls={0}
-        onSelect={noop}
-        onMove={noop}
+        gameId={GAME_ID}
       />,
     );
 

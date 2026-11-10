@@ -1,13 +1,12 @@
-import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { publicGames, publicList } from "../features/lobby";
 import { router } from "../features/router";
 import { GAMES } from "../games";
-import { gameIdOf } from "../testing";
+import { componentDb, gameIdOf } from "../testing";
 import {
   PublicGamesScreen,
-  type PublicGamesScreenProps,
   type PublicGameRow,
   type PublicListRow,
   publicPlayersText,
@@ -17,25 +16,31 @@ import {
 // This one says it at once, which shows whether the page is waiting (see components/immediateLoading.tsx).
 vi.mock("../components/Loading", () => import("../components/immediateLoading"));
 
-// What the page shows is a function of its props, so these render it to a string.
+// What the page shows is a function of what is in the lobby, so these put the rows in and render
+// it to a string.
 
 const dbs: { dispose(): void }[] = [];
 afterEach(() => {
   for (const db of dbs.splice(0)) db.dispose();
 });
 
-function render(overrides: Partial<PublicGamesScreenProps> = {}) {
-  const db = createDb({ features: { router } });
+interface Page {
+  /** The public games, in any order: the page puts the newest change first. */
+  listed: readonly PublicGameRow[];
+  /** Whether `listed` is being read; undefined before the first read starts. */
+  list: PublicListRow | undefined;
+}
+
+/** The page, with the list read, unless `overrides` say otherwise. */
+function render(overrides: Partial<Page> = {}) {
+  const page: Page = { listed: [], list: { id: "public", state: "loaded", error: null }, ...overrides };
+  const { db, put } = componentDb({ publicGames, publicList }, { router });
   dbs.push(db);
+  for (const game of page.listed) put(publicGames, game);
+  if (page.list) put(publicList, page.list);
   return renderToString(
     <DbProvider db={db}>
-      <PublicGamesScreen
-        games={GAMES}
-        listed={[]}
-        list={{ id: "public", state: "loaded", error: null }}
-        onReload={() => {}}
-        {...overrides}
-      />
+      <PublicGamesScreen games={GAMES} />
     </DbProvider>,
   );
 }

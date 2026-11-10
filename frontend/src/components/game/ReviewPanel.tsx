@@ -1,30 +1,27 @@
+import { useOp, useQuery } from "millpond/react";
 import { type ReactNode, useEffect } from "react";
 import { Loading } from "../Loading";
-import { type ReviewMove, moveForKey } from "../../features/game";
+import {
+  type ReviewMove,
+  closeReview,
+  hasMovesIn,
+  moveForKey,
+  retryReview,
+  reviews,
+  showFrame,
+  shownIndex,
+  stepFrame,
+} from "../../features/game";
 import type { FrameText } from "./people";
 
 export interface ReviewPanelProps {
-  /** The positions are being asked for. With none shown yet, that is all there is to say. */
-  loading: boolean;
-  /** Why the positions could not be had, if they could not. */
-  error: string | null;
-  /** How many positions there are to step through. */
-  count: number;
-  /** The one on show, counted from 0; null while there are none. */
-  index: number | null;
+  gameId: string;
   /** What led to the position on show; null while there is none. */
   text: FrameText | null;
-  /** The first position is not the beginning of the game: what was played before it was not kept. */
-  partial: boolean;
   /** What the game itself is waiting for now, or "" once it is over. */
   live: string;
-  /** Shows the position at this index. */
-  onShow: (index: number) => void;
-  /** Shows the position this many places on: 1 for the next, -1 for the one before. */
-  onStep: (by: number) => void;
-  onRetry: () => void;
-  /** Goes back to the game. Null where the review can't be closed, because it is always there. */
-  onClose: (() => void) | null;
+  /** The review can be closed, to go back to the game. Not where it is always there. */
+  closable: boolean;
 }
 
 /** Whether a key press belongs to a field the user is typing in, or to a slider that handles arrows itself. */
@@ -43,20 +40,23 @@ function isForField(target: EventTarget | null): boolean {
  * ended, are for a screen reader only. The arrow
  * keys step, and Home and End go to the ends.
  */
-export function ReviewPanel({
-  loading,
-  error,
-  count,
-  index,
-  text,
-  partial,
-  live,
-  onShow,
-  onStep,
-  onRetry,
-  onClose,
-}: ReviewPanelProps) {
+export function ReviewPanel({ gameId, text, live, closable }: ReviewPanelProps) {
+  const review = useQuery(reviews.get(gameId));
+  const show = useOp(showFrame);
+  const step = useOp(stepFrame);
+  const retry = useOp(retryReview);
+  const close = useOp(closeReview);
+  // The positions are being asked for. With none shown yet, that is all there is to say.
+  const loading = review?.load === "loading";
+  // Why the positions could not be had, if they could not.
+  const error = review?.load === "failed" ? review.error : null;
+  const count = review?.frames.length ?? 0;
   const last = count - 1;
+  // The one on show, counted from 0; null while there are none.
+  const index = review ? shownIndex(count, review.at) : null;
+  // The first position is not the beginning of the game: what was played before it was not kept.
+  const first = review?.frames[0];
+  const partial = first !== undefined && hasMovesIn(first);
 
   useEffect(() => {
     const press = (event: KeyboardEvent) => {
@@ -65,13 +65,13 @@ export function ReviewPanel({
       const move: ReviewMove | null = moveForKey(event.key);
       if (move === null || count === 0) return;
       event.preventDefault();
-      if (move === "first") onShow(0);
-      else if (move === "last") onShow(last);
-      else onStep(move === "next" ? 1 : -1);
+      if (move === "first") show({ gameId, index: 0 });
+      else if (move === "last") show({ gameId, index: last });
+      else step({ gameId, by: move === "next" ? 1 : -1 });
     };
     window.addEventListener("keydown", press);
     return () => window.removeEventListener("keydown", press);
-  }, [count, last, onShow, onStep]);
+  }, [gameId, count, last, show, step]);
 
   return (
     <section className="review" aria-label="Review">
@@ -98,16 +98,16 @@ export function ReviewPanel({
       )}
       {index !== null && (
         <div className="review-controls">
-          <StepButton label="First position" disabled={index === 0} onClick={() => onShow(0)}>
+          <StepButton label="First position" disabled={index === 0} onClick={() => show({ gameId, index: 0 })}>
             <path d="M3 3v10M12 3 7 8l5 5" />
           </StepButton>
-          <StepButton label="Previous position" disabled={index === 0} onClick={() => onStep(-1)}>
+          <StepButton label="Previous position" disabled={index === 0} onClick={() => step({ gameId, by: -1 })}>
             <path d="M10 3 5 8l5 5" />
           </StepButton>
-          <StepButton label="Next position" disabled={index === last} onClick={() => onStep(1)}>
+          <StepButton label="Next position" disabled={index === last} onClick={() => step({ gameId, by: 1 })}>
             <path d="m6 3 5 5-5 5" />
           </StepButton>
-          <StepButton label="Latest position" disabled={index === last} onClick={() => onShow(last)}>
+          <StepButton label="Latest position" disabled={index === last} onClick={() => show({ gameId, index: last })}>
             <path d="M13 3v10M4 3l5 5-5 5" />
           </StepButton>
           <input
@@ -120,7 +120,7 @@ export function ReviewPanel({
             aria-label="Position"
             aria-valuetext={`${index + 1} of ${count}`}
             disabled={count < 2}
-            onChange={(event) => onShow(Number(event.currentTarget.value))}
+            onChange={(event) => show({ gameId, index: Number(event.currentTarget.value) })}
           />
           <span className="review-count">
             {index + 1} / {count}
@@ -130,17 +130,17 @@ export function ReviewPanel({
       {partial && index !== null && (
         <p className="review-detail">What was played before this position was not kept.</p>
       )}
-      {(live !== "" || error !== null || onClose !== null) && (
+      {(live !== "" || error !== null || closable) && (
         <div className="review-foot">
           <p className="review-live">{live}</p>
           <div className="review-actions">
             {error !== null && (
-              <button className="button button-quiet button-small" type="button" onClick={onRetry}>
+              <button className="button button-quiet button-small" type="button" onClick={() => retry({ gameId })}>
                 Try again
               </button>
             )}
-            {onClose !== null && (
-              <button className="button button-quiet button-small" type="button" onClick={onClose}>
+            {closable && (
+              <button className="button button-quiet button-small" type="button" onClick={() => close({ gameId })}>
                 Close review
               </button>
             )}

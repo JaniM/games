@@ -86,10 +86,17 @@
  * off the bottom of a screen that short.
  *
  * The board's column is as wide as the board is when it is as tall as the screen less the bar at
- * the top and the page's padding (`--game-height`), but it leaves the side column at least 13rem. The side column is no
- * wider than 22rem, and the two are centred together on a screen wider than they need. The size
- * of the board comes from the screen alone, so nothing that comes or goes in the side column
- * resizes it (there is no `--game-chrome` here).
+ * the top and the page's padding (`--game-height`), but it leaves the side column at least
+ * `--game-side`. The side column is no wider than 22rem, and the two are centred together on a
+ * screen wider than they need. The size of the board comes from the screen alone, so nothing that
+ * comes or goes in the side column resizes it (there is no `--game-chrome` here).
+ *
+ * `--game-side` is what keeps the longest line about the turn to two lines, with a little to spare
+ * for a wider font than the Mac's: 16rem for "Your turn. Pick a checker to move (2 dice left).",
+ * whose words need 11.8 of it (the status band's padding and dot take 2.625), and 20rem beside
+ * the square board, for "Your turn. That board is decided, so you may play in any open board."
+ * (16.5). That costs the square board little, as it is no wider than the screen is tall anyway:
+ * on a small phone on its side (667 by 375) it is 18.7rem rather than 20.4.
  *
  * The board spans every row of the side column. The last row is flexible, so it takes what the
  * board has beyond the column, and the rows above it are as tall as what is in them.
@@ -100,7 +107,7 @@
     --game-top: 0.25rem;
     --game-bottom: 1rem;
     --game-height: calc(100vh - var(--top-bar) - var(--game-top) - var(--game-bottom));
-    --game-side: 13rem;
+    --game-side: 16rem;
     --game-gap: 1rem;
     display: grid;
     grid-template-areas:
@@ -122,6 +129,7 @@
 
   /* The square board is as wide as it is tall, and no wider than 40rem, as above. */
   .game-page-square {
+    --game-side: 20rem;
     max-width: none;
     grid-template-columns:
       min(40rem, var(--game-height), 100% - var(--game-side) - var(--game-gap))

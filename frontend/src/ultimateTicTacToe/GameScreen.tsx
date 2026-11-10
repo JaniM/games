@@ -1,20 +1,25 @@
+import { useOp, useQuery } from "millpond/react";
 import {
   type Seat,
   type UtttSnapshot,
   ULTIMATE_TIC_TAC_TOE,
+  gameViews,
   hasMovesIn,
   isFull,
+  openReview,
   reviewAlwaysOn,
+  reviews,
   seatOf,
+  setAutoplay,
   shownIndex,
 } from "../features/game";
+import { SESSION_ID, sessionState } from "../features/session";
 import { ForfeitControl } from "../components/game/ForfeitControl";
 import { InviteBox } from "../components/game/InviteBox";
 import { GameShell, JoinPanel, ResultSection, gameNotice } from "../components/game/Panels";
 import { ReviewPanel } from "../components/game/ReviewPanel";
 import { barNameOf, nameOf, rematchStage } from "../components/game/people";
-import type { AnyGameViewRow, JoinRequestRow, RematchRequestRow, ReviewRow } from "../components/game/rows";
-import type { TimedCue } from "../longBackgammon/cues";
+import type { AnyGameViewRow } from "../components/game/rows";
 import { Board } from "./Board";
 import { MarkIcon } from "./Mark";
 import {
@@ -36,41 +41,12 @@ export function isUtttView(view: AnyGameViewRow): view is GameViewRow {
 }
 
 export interface GameScreenProps {
-  /** The game page's row, or undefined for the moment before the page has opened it. */
-  view: GameViewRow | undefined;
-  /** Who the browser is, or null while the session is being set up. */
-  userId: string | null;
-  join: JoinRequestRow | undefined;
-  /** An answer about the rematch that is on its way, or has failed; undefined if there is none. */
-  rematchRequest: RematchRequestRow | undefined;
-  /** The page is stepping through the game's positions, or is about to: undefined if it is not. */
-  review: ReviewRow | undefined;
+  /** The game to show. Until the page has opened it, the screen says it is connecting. */
+  gameId: string;
   /** The link to give to the opponent. It is also how anyone else can watch. */
   inviteUrl: string;
-  onJoin: () => void;
-  /** Asks for a rematch of the finished game, or says yes to the other player's ask. */
-  onRematch: () => void;
-  /** Takes back one's own ask for a rematch, or says no to the other player's. */
-  onDeclineRematch: () => void;
-  /** Starts stepping through the game's positions. */
-  onReview: () => void;
-  onCloseReview: () => void;
-  /** Asks again for the positions, after that failed. */
-  onRetryReview: () => void;
-  /** Shows the position at this index of the review. */
-  onShowFrame: (index: number) => void;
-  /** Shows the position this many places on in the review: 1 for the next, -1 for the one before. */
-  onStepFrame: (by: number) => void;
-  /** Gives up the game. The screen asks the player to confirm first. */
-  onForfeit: () => void;
-  /** Turns auto-play (this player's turns, played for them) on or off. */
-  onAutoplay: (on: boolean) => void;
   /** Whether to offer auto-play at all. It is a development aid, so release builds leave it out. */
   showAutoplay: boolean;
-  /** Marks a cell. A mark is final: there is no taking it back. */
-  onPlay: (board: number, cell: number) => void;
-  /** Plays a sound. The caller applies the volume, and may play nothing. */
-  onCue: (cue: TimedCue) => void;
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -83,30 +59,20 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * One ultimate tic-tac-toe game, for a player or a spectator. Everything it shows comes
- * from its props, so it can be rendered without a db.
+ * One ultimate tic-tac-toe game, for a player or a spectator. It reads the game from the db, and
+ * what is pressed on it goes to the game's ops.
  */
-export function GameScreen({
-  view,
-  userId,
-  join,
-  rematchRequest,
-  review,
-  inviteUrl,
-  onJoin,
-  onRematch,
-  onDeclineRematch,
-  onReview,
-  onCloseReview,
-  onRetryReview,
-  onShowFrame,
-  onStepFrame,
-  onForfeit,
-  onAutoplay,
-  showAutoplay,
-  onPlay,
-  onCue,
-}: GameScreenProps) {
+export function GameScreen({ gameId, inviteUrl, showAutoplay }: GameScreenProps) {
+  const view = useQuery(gameViews.get(gameId));
+  // Who the browser is, or null while the session is being set up.
+  const userId = useQuery(sessionState.get(SESSION_ID))?.userId ?? null;
+  // The page is stepping through the game's positions, or is about to: undefined if it is not.
+  const review = useQuery(reviews.get(gameId));
+  const startReview = useOp(openReview);
+  const autoplay = useOp(setAutoplay);
+
+  // The page shows this screen only for ultimate tic-tac-toe.
+  if (view && !isUtttView(view)) return null;
   const notice = gameNotice(view);
   if (notice) return notice;
   const snapshot = view?.snapshot;
@@ -149,9 +115,6 @@ export function GameScreen({
   const aside = state ? "" : "Who plays X and moves first is decided when the second player joins.";
 
   const rematch = rematchStage(snapshot, mySeat);
-  // A player's own rematch answer has gone out and the other's is not back. It shows as a snapshot.
-  const answering = rematchRequest?.state === "sending";
-  const rematchProblem = rematchRequest?.state === "failed" ? rematchRequest.error : null;
 
   // Takes the place of the status under the board, while the user steps through the game, and goes
   // above the result of a game that is over, whose rematch is still wanted. A review nobody opened,
@@ -160,52 +123,33 @@ export function GameScreen({
   const reviewPanel =
     review && !(reviewAlways && nothingToStep) ? (
       <ReviewPanel
-        loading={review.load === "loading"}
-        error={review.load === "failed" ? review.error : null}
-        count={review.frames.length}
-        index={shown}
+        gameId={gameId}
         text={frame ? frameText(snapshot, frame.state, mySeat) : null}
-        partial={review.frames[0] !== undefined && hasMovesIn(review.frames[0])}
         live={over ? "" : `In the game: ${turnText(snapshot, mySeat)}`}
-        onShow={onShowFrame}
-        onStep={onStepFrame}
-        onRetry={onRetryReview}
-        onClose={reviewAlways ? null : onCloseReview}
+        closable={!reviewAlways}
       />
     ) : null;
 
   const status = result ? (
-    <ResultSection
-      result={result}
-      rematch={rematch}
-      connected={connected}
-      answering={answering}
-      rematchProblem={rematchProblem}
-      onRematch={onRematch}
-      onDeclineRematch={onDeclineRematch}
-    />
+    <ResultSection gameId={gameId} result={result} rematch={rematch} connected={connected} />
   ) : (
     <section className="status-band" aria-label="Turn" data-turn={myTurn ? "mine" : "wait"}>
-      <p className="status-main" role="status" aria-live="polite">
-        {turnText(snapshot, mySeat)}
-      </p>
-      {(alert || aside) && (
-        <p className={alert ? "status-detail status-detail-alert" : "status-detail"}>
-          {alert ? <span role="alert">{alert}</span> : aside}
-        </p>
-      )}
       {(canReviewMoves || canForfeit || canAutoplay) && (
         <div className="status-actions">
           {canReviewMoves && (
-            <button className="button button-quiet button-small" type="button" onClick={onReview}>
+            <button
+              className="button button-quiet button-small"
+              type="button"
+              onClick={() => startReview({ gameId })}
+            >
               Review moves
             </button>
           )}
           {canForfeit && (
             <ForfeitControl
+              gameId={gameId}
               opponent={nameOf(snapshot, opponent, mySeat)}
               disabled={!connected || view.busy}
-              onForfeit={onForfeit}
             />
           )}
           {canAutoplay && (
@@ -214,19 +158,27 @@ export function GameScreen({
               type="button"
               aria-pressed={view.auto}
               title="Plays your turns: a random empty cell in a board you may play in"
-              onClick={() => onAutoplay(!view.auto)}
+              onClick={() => autoplay({ gameId, on: !view.auto })}
             >
               Auto-play
             </button>
           )}
         </div>
       )}
+      <p className="status-main" role="status" aria-live="polite">
+        {turnText(snapshot, mySeat)}
+      </p>
+      {(alert || aside) && (
+        <p className={alert ? "status-detail status-detail-alert" : "status-detail"}>
+          {alert ? <span role="alert">{alert}</span> : aside}
+        </p>
+      )}
     </section>
   );
 
   return (
     <Shell>
-      {canJoin && <JoinPanel connected={connected} join={join} onJoin={onJoin} />}
+      {canJoin && <JoinPanel gameId={gameId} connected={connected} />}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
 
       {/* Both players are in one row over the board, to leave the height to the board. The viewer is first. */}
@@ -246,13 +198,12 @@ export function GameScreen({
       </div>
       <div className="board-wrap ttt-wrap">
         <Board
+          gameId={gameId}
           state={board}
           revision={frame?.revision ?? snapshot.revision}
           viewer={viewer}
           interactive={canAct}
           player={mySeat !== null}
-          onPlay={onPlay}
-          onCue={onCue}
         />
       </div>
 

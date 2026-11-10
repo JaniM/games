@@ -27,10 +27,11 @@
 }
 
 /*
- * Where the game stands, under the board: a dot and a line for what is to be done now, a line
- * under it for the last turn (or what went wrong, or that the connection is gone), and a
- * warning when there is one. Under the board, not over it, so a line coming or going moves
- * nothing the player is pressing. The band is tinted when the move is the viewer's.
+ * Where the game stands, under the board: the buttons, then a dot and a line for what is to be
+ * done now, a line under it for the last turn (or what went wrong, or that the connection is
+ * gone), and a warning when there is one. Under the board, not over it, and the words last, so a
+ * line coming or going, or wrapping onto another, moves nothing the player is pressing. The band
+ * is tinted when the move is the viewer's.
  */
 .status-band {
   margin: 0.75rem 0 0;
@@ -42,7 +43,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
   padding-left: 1.125rem;
 }
 
@@ -51,20 +52,25 @@
   border-color: color-mix(in srgb, var(--accent) 35%, var(--rule));
 }
 
+/* A long line ("Your turn. Pick a checker to move (1 die left).") wraps on a narrow screen. */
 .status-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   margin: 0;
   font-weight: 600;
 }
 
-/* The dot: hollow while the viewer waits, full when the move is theirs. */
+/*
+ * The dot: hollow while the viewer waits, full when the move is theirs. It stays with the first
+ * line of a line that wraps, in its middle: the line is 1.5em high (the body's line-height).
+ */
 .status-main::before {
   content: "";
   flex: none;
   width: 0.625rem;
   height: 0.625rem;
+  margin-top: calc((1.5em - 0.625rem) / 2);
   border: 2px solid var(--muted);
   border-radius: 50%;
 }
