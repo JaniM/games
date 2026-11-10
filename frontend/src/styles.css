@@ -102,9 +102,34 @@
   box-sizing: border-box;
 }
 
+/*
+ * `--top-bar` is the height of the bar along the top (`.site-top`): for what is sized by what is
+ * left of the screen under it (the game page), for what sticks under it, and for what the browser
+ * scrolls into sight, which it keeps out from under the bar.
+ */
+html {
+  --top-bar: 3rem;
+  scroll-padding-top: var(--top-bar);
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+}
+
+/*
+ * Safari on a phone hides its bars as the page is scrolled down: the page itself, as something on
+ * it that scrolls by itself doesn't count. It keeps them on a page that fits the screen with them
+ * showing (`dvh`), which has nothing to scroll, and on one that is exactly as tall as the screen
+ * with them hidden (`lvh`, which is what `vh` is on a phone, so what the rule above makes a short
+ * page). So the page is a pixel taller than that, wherever the bars can be hidden: where `lvh` is
+ * more than `svh`, the screen with them showing. On a desktop the two are the same, and a page
+ * that fits does not scroll.
+ */
+@supports (height: 100lvh) {
+  body {
+    min-height: calc(100lvh + min(1px, 100lvh - 100svh));
+  }
 }
 
 h1,
@@ -145,9 +170,9 @@ a {
 }
 
 /*
- * The app is at least as tall as the screen, as a column, so that the footer can sit at the
- * bottom of a short page (`.site-footer`). `dvh` is the part of the screen that is showing: on
- * a phone `vh` also counts the space under the browser's toolbar.
+ * The app is at least as tall as what is showing of the screen, as a column, so that the footer
+ * can sit at the bottom of a short page (`.site-footer`). `dvh` is the part of the screen that is
+ * showing: on a phone `vh` also counts the space under the browser's bars.
  */
 #root {
   display: flex;
@@ -166,35 +191,43 @@ a {
   width: 100%;
   max-width: 56rem;
   margin: 0 auto;
-  padding: 4rem 1.5rem;
+  padding: 1rem 1.5rem 4rem;
 }
 
 /* --- The corners --- */
 
 /*
- * The corner of the whole page, not of the centred column. The account menu is always here, over
- * whatever else is in the corner, and never wider than the screen: its panel floats over what is
- * beside it instead of pushing it. The nav takes the other corner. Everything in the two top
- * corners has the same line, so that their text sits on one baseline.
+ * The bar along the top: the nav in the left corner and the account menu in the right, in the
+ * corners of the whole page, not of the centred column. It stays at the top while the page
+ * scrolls under it, on the page's colour, which hides what goes under it. The two have the same
+ * line, so that their text sits on one baseline, and the bar is as tall as that line and the room
+ * over it, whatever is in it. The account menu's panel floats over the page under the bar.
  */
-.top-right,
-.site-nav {
-  position: absolute;
-  top: 1rem;
+.site-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg);
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  height: var(--top-bar);
+  padding: 1rem 1.5rem 0;
   font-size: var(--text-sm);
   line-height: 2rem;
 }
 
+/* The account menu gives way to the nav on a narrow screen: its name is cut short. */
 .top-right {
-  right: 1.5rem;
-  z-index: 30;
-  max-width: calc(100% - 3rem);
+  min-width: 0;
 }
 
 /* The top left corner of every page: where the site goes, beside where the name is. */
 .site-nav {
-  left: 1.5rem;
   display: flex;
+  flex: none;
   gap: 1.5rem;
 }
 
@@ -529,16 +562,21 @@ form.name-control .button {
 /*
  * The list scrolls by itself, so a long one doesn't push the games, or the footer under them,
  * out of sight: the front page is never taller than the screen for its sake. What is around the
- * list is the page's padding, 4rem over it (under the nav) and 1.5rem under it, and the footer
- * (one line of 0.875rem at 1.5, and 0.5rem under it: 1.8125rem). The list is the screen less
- * those 7.3125rem, rounded up. `dvh` is the part of the screen that is showing (see `#root`).
+ * list is the bar at the top (3rem), the page's padding, 1rem over the list and 1.5rem under it,
+ * and the footer (one line of 0.875rem at 1.5, and 0.5rem under it: 1.8125rem). The list, with
+ * its title, is the screen less those 7.3125rem, rounded up. `dvh` is the part of the screen that
+ * is showing (see `#root`). It sticks where it starts, under the bar and the page's padding.
+ *
+ * Only the rows scroll: the title, and a line about the list (loading, empty, failed), stay over
+ * them.
  */
 .home-games {
   position: sticky;
-  top: 1rem;
+  top: calc(var(--top-bar) + 1rem);
+  display: flex;
+  flex-direction: column;
   max-width: 19rem;
   max-height: calc(100vh - 7.5rem);
-  overflow-y: auto;
 }
 
 @supports (max-height: 100dvh) {
@@ -551,6 +589,18 @@ form.name-control .button {
   width: 100%;
   max-width: 46rem;
   justify-self: center;
+}
+
+/*
+ * A phone on its side: the list is as narrow as it goes, and closer, so that the games to start
+ * have the width to be side by side (see the end of the game cards). Before the rules for a wider
+ * screen and a narrower one, which have columns of their own.
+ */
+@media (orientation: landscape) and (max-height: 32rem) {
+  .home {
+    grid-template-columns: 14rem minmax(0, 1fr);
+    gap: 2rem;
+  }
 }
 
 /*
@@ -579,7 +629,22 @@ form.name-control .button {
   color: var(--muted);
 }
 
-/* On a narrow screen the games to start come first, and the list below them. */
+/*
+ * On the front page the titles stay in sight under the bar at the top while what is under them
+ * scrolls with the page: the games to start on a short screen, and the list on a narrow one,
+ * where it is part of the page. On the page's colour, and with padding under it instead of a
+ * margin, which hides what goes under it. Over the cards, which are drawn after it when pressed.
+ */
+.home .section-title {
+  position: sticky;
+  top: var(--top-bar);
+  z-index: 1;
+  margin-bottom: 0;
+  padding-bottom: 0.75rem;
+  background: var(--bg);
+}
+
+/* On a narrow screen the games to start come first, and the list below them, as wide as they are. */
 @media (max-width: 44rem) {
   .home {
     grid-template-columns: minmax(0, 1fr);
@@ -592,6 +657,7 @@ form.name-control .button {
 
   .home-games {
     position: static;
+    max-width: none;
     max-height: none;
   }
 
@@ -604,15 +670,16 @@ form.name-control .button {
 .game-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 2rem 1.5rem;
+  gap: 1rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 /*
- * A button that opens the dialog for starting that game. It is set like an entry in a
- * catalogue, under a heavy rule, and not as a box: the title is what you press.
+ * A button that opens the dialog for starting that game. It is boxed, as what is pressed is, and
+ * stands on an edge like a key's, which it goes down onto when pressed. Its "Play" is set as a
+ * button, so that the card reads as one thing to press.
  */
 .game-card {
   display: flex;
@@ -620,12 +687,22 @@ form.name-control .button {
   gap: 0.5rem;
   width: 100%;
   height: 100%;
-  padding: 1rem 0 0;
+  padding: 1.25rem;
   text-align: left;
   cursor: pointer;
-  background: none;
-  border: 0;
-  border-top: 2px solid var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 0 var(--line);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.1s;
+}
+
+.game-card:active {
+  box-shadow: none;
+  transform: translateY(2px);
 }
 
 .game-card-title {
@@ -635,10 +712,6 @@ form.name-control .button {
   line-height: 1.15;
 }
 
-.game-card:hover .game-card-title {
-  color: var(--accent);
-}
-
 .game-card-text {
   color: var(--muted);
 }
@@ -646,6 +719,7 @@ form.name-control .button {
 .game-card-footer {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 1rem;
   margin-top: auto;
   padding-top: 0.5rem;
@@ -654,22 +728,53 @@ form.name-control .button {
 }
 
 .game-card-play {
+  padding: 0.25rem 0.75rem;
   font-weight: 600;
-  color: var(--accent);
-  transition: transform 0.15s;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+  transition: background 0.15s;
 }
 
-.game-card:hover .game-card-play {
-  transform: translateX(0.25rem);
-}
+/* Only with a pointer to hover with: a phone would leave the card it was tapped on lit. */
+@media (hover: hover) {
+  .game-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 0 var(--accent);
+  }
 
-@media (prefers-reduced-motion: reduce) {
-  .game-card-play {
-    transition: none;
+  .game-card:hover .game-card-title {
+    color: var(--accent);
   }
 
   .game-card:hover .game-card-play {
-    transform: none;
+    background: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-card,
+  .game-card-play {
+    transition: none;
+  }
+}
+
+/*
+ * A phone on its side: the games are side by side, so that all of them are in sight on a screen
+ * this short. The columns are narrower, and the titles a step smaller, which keeps them on one
+ * line and the descriptions level.
+ */
+@media (orientation: landscape) and (max-height: 32rem) {
+  .game-list {
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .game-card {
+    padding: 1rem;
+  }
+
+  .game-card-title {
+    font-size: var(--text-lg);
   }
 }
 
@@ -683,6 +788,12 @@ form.name-control .button {
 
 .my-games li {
   border-bottom: 1px solid var(--rule);
+}
+
+/* On the front page the rows scroll by themselves, under the title (see `.home-games`). */
+.home-games .my-games {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .my-game {
@@ -1069,7 +1180,7 @@ form.name-control .button {
  * screen. It is for the fullest the page gets while a game is played, so that a line coming or
  * going under the board does not resize it and move what the player is pressing.
  *
- *   6.75 = 3.25 + 1 of padding, and the row of the two player bars (2.5)
+ *   6.75 = the bar at the top (3), 0.25 + 1 of padding, and the row of the two player bars (2.5)
  * + 8.5  = the status band with every line it has (turn, a line under it, a warning, the buttons:
  *          8.1875; ultimate tic-tac-toe has no warning), or the review bar instead (7.75 at most)
  *
@@ -1085,8 +1196,8 @@ form.name-control .button {
   --game-chrome: 15.25rem;
   --game-pad: 1.5rem;
   max-width: max(24rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 2 * var(--game-pad)));
-  /* Room for the nav and the name along the top, and not more. */
-  padding: 3.25rem var(--game-pad) 1rem;
+  /* The board starts just under the bar at the top. */
+  padding: 0.25rem var(--game-pad) 1rem;
 }
 
 .game-page:has(.panel) {
@@ -1493,8 +1604,8 @@ form.name-control .button {
  * than it would be in the stack, but what is around it is in sight, where the stack would push it
  * off the bottom of a screen that short.
  *
- * The board's column is as wide as the board is when it is as tall as the screen less the page's
- * padding (`--game-height`), but it leaves the side column at least 13rem. The side column is no
+ * The board's column is as wide as the board is when it is as tall as the screen less the bar at
+ * the top and the page's padding (`--game-height`), but it leaves the side column at least 13rem. The side column is no
  * wider than 22rem, and the two are centred together on a screen wider than they need. The size
  * of the board comes from the screen alone, so nothing that comes or goes in the side column
  * resizes it (there is no `--game-chrome` here).
@@ -1504,10 +1615,10 @@ form.name-control .button {
  */
 @media (orientation: landscape) {
   .game-page {
-    /* Room for the nav and the name along the top, as above. */
-    --game-top: 3.25rem;
+    /* Just under the bar at the top, as above. */
+    --game-top: 0.25rem;
     --game-bottom: 1rem;
-    --game-height: calc(100vh - var(--game-top) - var(--game-bottom));
+    --game-height: calc(100vh - var(--top-bar) - var(--game-top) - var(--game-bottom));
     --game-side: 13rem;
     --game-gap: 1rem;
     display: grid;
@@ -1538,7 +1649,7 @@ form.name-control .button {
 
   @supports (height: 100dvh) {
     .game-page {
-      --game-height: calc(100dvh - var(--game-top) - var(--game-bottom));
+      --game-height: calc(100dvh - var(--top-bar) - var(--game-top) - var(--game-bottom));
     }
   }
 
@@ -1556,12 +1667,12 @@ form.name-control .button {
   /*
    * The side column can be taller than the screen at its fullest (a game that is over, with its
    * review, on the shortest screens), and then the page scrolls: the board stays where it can be
-   * seen, and the column moves beside it.
+   * seen, where it starts, and the column moves beside it.
    */
   .game-page > .board-wrap {
     grid-area: board;
     position: sticky;
-    top: 0.5rem;
+    top: calc(var(--top-bar) + var(--game-top));
   }
 
   .game-page > .review {
@@ -1581,26 +1692,20 @@ form.name-control .button {
 }
 
 /*
- * A phone on its side, where every bit of the height counts: the corners of a game page go up, and
- * in, to line up with the edges of the board, and the page has less padding. The corners come
- * before the page, so `:has` picks them by what follows.
+ * A phone on its side, where every bit of the height counts: on a game page the bar at the top is
+ * lower, and its corners go in, to line up with the edges of the board, and the page has less
+ * padding.
  */
 @media (orientation: landscape) and (max-height: 32rem) {
-  .site-nav:has(~ .game-page),
-  .top-right:has(~ .game-page) {
-    top: 0.25rem;
+  html:has(.game-page) {
+    --top-bar: 2.25rem;
   }
 
-  .site-nav:has(~ .game-page) {
-    left: 1rem;
-  }
-
-  .top-right:has(~ .game-page) {
-    right: 1rem;
+  html:has(.game-page) .site-top {
+    padding: 0.25rem 1rem 0;
   }
 
   .game-page {
-    --game-top: 2.5rem;
     --game-bottom: 0.5rem;
     --game-pad: 1rem;
   }

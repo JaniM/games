@@ -16,12 +16,15 @@ export function App() {
 
   return (
     <>
-      <div className="top-right">
-        {/* The sound is for the games: the slider is in the menu while one is open. */}
-        <AccountMenu showSound={route.page === "game"} />
-      </div>
+      {/* The bar along the top stays where it is while the page scrolls under it (see `.site-top`). */}
+      <header className="site-top">
+        <SiteNav page={route.page === "home" || route.page === "games" ? route.page : "other"} />
+        <div className="top-right">
+          {/* The sound is for the games: the slider is in the menu while one is open. */}
+          <AccountMenu showSound={route.page === "game"} />
+        </div>
+      </header>
       <AccountDialogs />
-      <SiteNav page={route.page === "home" || route.page === "games" ? route.page : "other"} />
       {route.page === "home" && <Home />}
       {route.page === "games" && <PublicGames />}
       {/* Keyed, so that moving from one game to another starts a fresh page. */}
