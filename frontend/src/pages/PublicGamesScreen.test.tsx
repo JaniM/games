@@ -1,7 +1,7 @@
 import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { router } from "../features/router";
 import { GAMES } from "../games";
 import { gameIdOf } from "../testing";
@@ -12,6 +12,10 @@ import {
   type PublicListRow,
   publicPlayersText,
 } from "./PublicGamesScreen";
+
+// Rendering to a string shows the first moment, before the loading text has waited its second.
+// This one says it at once, which shows whether the page is waiting (see immediateLoading.tsx).
+vi.mock("../Loading", () => import("../immediateLoading"));
 
 // What the page shows is a function of its props, so these render it to a string.
 

@@ -1,11 +1,15 @@
 import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { asUtttFrame } from "../features/game/review";
 import { router } from "../features/router";
 import { GAME_ID, marks, utttSnapshotOf, utttState, wonBoard } from "../fixtures";
 import { GameScreen, type GameScreenProps, type GameViewRow, isUtttView } from "./GameScreen";
+
+// Rendering to a string shows the first moment, before the loading text has waited its second.
+// This one says it at once, which shows whether the page is waiting (see immediateLoading.tsx).
+vi.mock("../Loading", () => import("../immediateLoading"));
 
 // What a page shows is a function of its props, so these render it to a string.
 // (There is no DOM here: clicks are covered by the board's tests and the ops they call.)

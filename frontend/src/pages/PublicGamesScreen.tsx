@@ -1,5 +1,6 @@
 import type { RowOf } from "millpond";
 import { GameRow, gameState } from "../GameRow";
+import { Loading } from "../Loading";
 import type { publicGames, publicList } from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";
@@ -54,7 +55,7 @@ export function PublicGamesScreen({ games, listed, list, onReload }: PublicGames
         </div>
       )}
       {shown.length === 0 && loaded && <p className="muted">No public games yet.</p>}
-      {shown.length === 0 && !loaded && list?.state !== "failed" && <p className="muted">Loading…</p>}
+      {shown.length === 0 && !loaded && list?.state !== "failed" && <Loading className="muted" />}
       <ul className="my-games">
         {shown.map(({ game, info }) => (
           <li key={game.gameId}>

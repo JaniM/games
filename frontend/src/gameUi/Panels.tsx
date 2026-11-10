@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 import { Link } from "../Link";
+import { Loading } from "../Loading";
 import { gamePath } from "../features/router";
 import type { RematchStage, Result } from "./people";
 import type { AnyGameViewRow, JoinRequestRow } from "./rows";
@@ -37,7 +38,7 @@ export function gameNotice(view: AnyGameViewRow | undefined): ReactElement | nul
   if (!view?.snapshot) {
     return (
       <GameShell title="Game">
-        <p role="status">Connecting to the game…</p>
+        <Loading role="status">Connecting to the game…</Loading>
       </GameShell>
     );
   }

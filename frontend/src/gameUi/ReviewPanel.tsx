@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect } from "react";
+import { Loading } from "../Loading";
 import { type ReviewMove, moveForKey } from "../features/game";
 import type { FrameText } from "./people";
 
@@ -81,9 +82,9 @@ export function ReviewPanel({
           {text.title}
         </p>
       ) : loading ? (
-        <p className="review-title" role="status">
+        <Loading className="review-title" role="status">
           Loading the moves…
-        </p>
+        </Loading>
       ) : error === null ? (
         <p className="review-title" role="status">
           Nothing was kept of this game.

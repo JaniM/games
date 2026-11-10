@@ -1,5 +1,6 @@
 import type { RowOf } from "millpond";
 import { GAME_STATE_TEXT, GameRow, gameState } from "../GameRow";
+import { Loading } from "../Loading";
 import { Modal } from "../Modal";
 import type { gamesList, myGames, newGame } from "../features/lobby";
 import type { GameInfo } from "../games";
@@ -146,7 +147,7 @@ function MyGames({ games, mine, list, onReload }: MyGamesProps) {
         </div>
       )}
       {shown.length === 0 && loaded && <p className="muted">You have no games yet.</p>}
-      {shown.length === 0 && !loaded && list?.state !== "failed" && <p className="muted">Loading…</p>}
+      {shown.length === 0 && !loaded && list?.state !== "failed" && <Loading className="muted" />}
       <ul className="my-games">
         {shown.map(({ game, info }) => (
           <li key={game.gameId}>
