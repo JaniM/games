@@ -510,9 +510,13 @@ form.name-control .button {
   max-width: 68rem;
 }
 
-/* The front page is as wide as the screen: its list is at the left edge, in line with the nav. */
+/*
+ * The front page is as wide as the screen: its list is at the left edge, in line with the nav.
+ * Little padding under it, because the footer follows (see `.home-games`).
+ */
 .page-home {
   max-width: none;
+  padding-bottom: 1.5rem;
 }
 
 .home {
@@ -522,13 +526,25 @@ form.name-control .button {
   align-items: start;
 }
 
-/* The list scrolls by itself, so a long one doesn't push the games out of sight. */
+/*
+ * The list scrolls by itself, so a long one doesn't push the games, or the footer under them,
+ * out of sight: the front page is never taller than the screen for its sake. What is around the
+ * list is the page's padding, 4rem over it (under the nav) and 1.5rem under it, and the footer
+ * (one line of 0.875rem at 1.5, and 0.5rem under it: 1.8125rem). The list is the screen less
+ * those 7.3125rem, rounded up. `dvh` is the part of the screen that is showing (see `#root`).
+ */
 .home-games {
   position: sticky;
   top: 1rem;
   max-width: 19rem;
-  max-height: calc(100vh - 2rem);
+  max-height: calc(100vh - 7.5rem);
   overflow-y: auto;
+}
+
+@supports (max-height: 100dvh) {
+  .home-games {
+    max-height: calc(100dvh - 7.5rem);
+  }
 }
 
 .home-catalog {
@@ -577,6 +593,11 @@ form.name-control .button {
   .home-games {
     position: static;
     max-height: none;
+  }
+
+  /* The list is part of the page here, and a page this long scrolls: room before the footer. */
+  .page-home {
+    padding-bottom: 4rem;
   }
 }
 
