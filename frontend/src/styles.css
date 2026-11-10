@@ -1342,19 +1342,6 @@ form.name-control .button {
   color: var(--accent);
 }
 
-.player-off {
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
-
-/* The count of checkers borne off sits at the far end, in columns that line up. */
-.player-off {
-  flex: none;
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
 .swatch {
   flex: none;
   width: 1rem;

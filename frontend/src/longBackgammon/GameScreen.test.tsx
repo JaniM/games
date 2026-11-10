@@ -959,8 +959,12 @@ describe("reviewing a game", () => {
       const ended = viewOf({ snapshot: snapshotOf({ revision: 9, state: over }) });
       const frames = [asFrame(1, startingState()), asFrame(9, over)];
 
-      expect(plain(render(ADA, ended, { review: reviewOf({ frames, at: 0 }) }))).not.toContain('class="player-off"');
-      expect(plain(render(ADA, ended, { review: reviewOf({ frames, at: null }) }))).toContain("15 borne off</span>");
+      // In the first position it is Ada's turn to roll; in the game as it stands, it is over.
+      const activeIn = (at: number | null) =>
+        barsOf(render(ADA, ended, { review: reviewOf({ frames, at }) })).map((bar) => bar.active);
+
+      expect(activeIn(0)).toEqual([true, false]);
+      expect(activeIn(null)).toEqual([false, false]);
     });
 
     it("moves who is to move with the position", () => {

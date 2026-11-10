@@ -267,6 +267,25 @@ describe("the markers of a combined move", () => {
   });
 });
 
+describe("the trays", () => {
+  const borneOff = startingState({ off: [3, 5] });
+
+  it("say, in a tooltip, whose checkers are in them and how many", () => {
+    const html = draw(borneOff, null);
+
+    // The viewer's is bottom right, the opponent's top right.
+    expect(html).toContain("<title>Your checkers borne off: 3</title>");
+    expect(html).toContain("<title>Opponent borne off: 5</title>");
+  });
+
+  it("follow the viewer: the other seat sees the counts the other way round", () => {
+    const html = draw(borneOff, null, 0, 1);
+
+    expect(html).toContain("<title>Your checkers borne off: 5</title>");
+    expect(html).toContain("<title>Opponent borne off: 3</title>");
+  });
+});
+
 describe("the tray as a bear-off button", () => {
   // Everything is home. The checker on 20 can be borne off with the 5.
   const home = startingState({

@@ -244,14 +244,12 @@ export function GameScreen({
         <PlayerBar
           name={barNameOf(snapshot, viewer, mySeat)}
           colour={board ? colourOf(viewer, board, viewer) : null}
-          off={board?.off[viewer] ?? 0}
           toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
           empty={viewer >= snapshot.players.length}
         />
         <PlayerBar
           name={barNameOf(snapshot, opponent, mySeat)}
           colour={board ? colourOf(opponent, board, viewer) : null}
-          off={board?.off[opponent] ?? 0}
           toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
           empty={opponent >= snapshot.players.length}
         />
@@ -297,12 +295,11 @@ interface PlayerBarProps {
   name: string;
   /** Null before the game starts: nobody is White yet. */
   colour: Colour | null;
-  off: number;
   toMove: boolean;
   empty: boolean;
 }
 
-function PlayerBar({ name, colour, off, toMove, empty }: PlayerBarProps) {
+function PlayerBar({ name, colour, toMove, empty }: PlayerBarProps) {
   return (
     <div className={toMove ? "player-bar player-bar-active" : "player-bar"}>
       <span className={`swatch swatch-${colour ?? "none"}`} aria-hidden="true" />
@@ -314,7 +311,6 @@ function PlayerBar({ name, colour, off, toMove, empty }: PlayerBarProps) {
       {colour && <span className="visually-hidden">{colour === "white" ? "White" : "Black"}</span>}
       {/* The tint and the ring say whose turn it is to the eye; the words are for a screen reader. */}
       {toMove && <span className="visually-hidden">to move</span>}
-      {off > 0 && <span className="player-off">{off} borne off</span>}
     </div>
   );
 }
