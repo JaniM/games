@@ -1,7 +1,10 @@
 // Game positions for tests: the shapes the server sends, built from small pieces. Long backgammon
-// first, then ultimate tic-tac-toe.
+// first, then ultimate tic-tac-toe, then Hex.
 
 import {
+  HEX,
+  type HexSnapshot,
+  type HexState,
   LONG_BACKGAMMON,
   type LongBackgammonSnapshot,
   type LongBackgammonState,
@@ -177,6 +180,73 @@ export function utttSnapshotMessage(overrides: Record<string, unknown> = {}) {
     gameId: GAME_ID,
     stateVersion: 1,
     ...utttSnapshotOf(),
+    ...overrides,
+  };
+}
+
+// --- Hex ---
+
+/** The 121 empty cells of the board, row by row. */
+export function emptyHexCells(): (Seat | null)[] {
+  return Array.from({ length: 11 * 11 }, () => null);
+}
+
+/** The column and row of a cell named as in the rules: `a1` is column 0, row 0. */
+export function cellAt(name: string): { column: number; row: number } {
+  return { column: name.charCodeAt(0) - 97, row: Number(name.slice(1)) - 1 };
+}
+
+/** The cells with stones on them, by name: `{ f6: 0, e5: 1 }` is seat 0's stone on f6 and seat 1's on e5. */
+export function stones(placed: Record<string, Seat>): (Seat | null)[] {
+  const cells = emptyHexCells();
+  for (const [name, seat] of Object.entries(placed)) {
+    const { column, row } = cellAt(name);
+    cells[row * 11 + column] = seat;
+  }
+  return cells;
+}
+
+/**
+ * A game of Hex in the state the server sends: an empty board with seat 0 as Red and to move,
+ * unless the test says otherwise. Nothing is worked out from the cells: `canSwap` and `chain` are
+ * the test's to say, as the position needs them.
+ */
+export function hexState(overrides: Partial<HexState> = {}): HexState {
+  return {
+    size: 11,
+    red: 0,
+    cells: emptyHexCells(),
+    turn: 0,
+    swapped: false,
+    last: null,
+    phase: { type: "play" },
+    canSwap: false,
+    chain: null,
+    ...overrides,
+  };
+}
+
+/** What a snapshot of a Hex game holds once the client has read it. */
+export function hexSnapshotOf(overrides: Partial<HexSnapshot> = {}): HexSnapshot {
+  return {
+    kind: HEX,
+    revision: 1,
+    players: ["user-a", "user-b"],
+    playerNames: ["Ada", "Grace"],
+    playerGuests: [false, false],
+    state: hexState(),
+    rematch: null,
+    ...overrides,
+  };
+}
+
+/** The message the server sends for a Hex game. */
+export function hexSnapshotMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "snapshot",
+    gameId: GAME_ID,
+    stateVersion: 1,
+    ...hexSnapshotOf(),
     ...overrides,
   };
 }

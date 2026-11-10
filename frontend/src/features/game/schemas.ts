@@ -1,20 +1,23 @@
 import { z } from "zod";
 import { type Seat, seatSchema } from "./seat";
+import * as hex from "./hex";
 import * as tictactoe from "./ultimateTicTacToe";
 
 // The state of a long backgammon game, as the server sends it. The server owns the
 // rules: the client only draws this and uses `legal` to know what may be clicked.
-// The other game's state is in `ultimateTicTacToe.ts`. A snapshot or a frame is of one kind of
+// The other games' states are in `ultimateTicTacToe.ts` and `hex.ts`. A snapshot or a frame is of one kind of
 // game, named by its `kind`, and holds the state of that game: narrow on `kind` before reading it.
 
 /** The kind of a game, as the server names it (`Game::KIND`) and the catalog in `games.ts` does. */
 export const LONG_BACKGAMMON = "long-backgammon";
 export const ULTIMATE_TIC_TAC_TOE = "ultimate-tic-tac-toe";
+export const HEX = "hex";
 
 /** The layout of each kind's `state` this client reads. */
 export const STATE_VERSIONS = {
   [LONG_BACKGAMMON]: 1,
   [ULTIMATE_TIC_TAC_TOE]: 1,
+  [HEX]: 1,
 } as const;
 export type GameKind = keyof typeof STATE_VERSIONS;
 
@@ -95,6 +98,11 @@ export type UtttState = tictactoe.UtttState;
 export type UtttPhase = tictactoe.UtttPhase;
 export type BoardResult = tictactoe.BoardResult;
 
+/** The state of a Hex game. */
+export type HexState = hex.HexState;
+export type HexPhase = hex.HexPhase;
+export type HexCell = hex.HexCell;
+
 /**
  * A position as the server keeps it in a game's history: the state without what the server
  * works out again from it (`legal` and `combos`). Nothing can be played in a position of the
@@ -107,7 +115,8 @@ export type Position = z.infer<typeof positionSchema>;
  * One position of a game in review: the kind of game, the state the game was in, and the
  * revision of the snapshot that showed it. Nothing in it is playable: in long backgammon `legal`
  * and `combos` are empty. (In ultimate tic-tac-toe `playable` stays: it says which board was to be
- * played in, which a frame shows as the game does. The board of a review is not pressed.)
+ * played in, which a frame shows as the game does. The board of a review is not pressed. A Hex
+ * state is kept whole too: nothing in it is more than a flag.)
  */
 export const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal(LONG_BACKGAMMON), revision: z.number().int(), state: stateSchema }),
@@ -116,10 +125,12 @@ export const frameSchema = z.discriminatedUnion("kind", [
     revision: z.number().int(),
     state: tictactoe.stateSchema,
   }),
+  z.object({ kind: z.literal(HEX), revision: z.number().int(), state: hex.stateSchema }),
 ]);
 export type Frame = z.infer<typeof frameSchema>;
 export type LongBackgammonFrame = Extract<Frame, { kind: typeof LONG_BACKGAMMON }>;
 export type UtttFrame = Extract<Frame, { kind: typeof ULTIMATE_TIC_TAC_TOE }>;
+export type HexFrame = Extract<Frame, { kind: typeof HEX }>;
 
 /**
  * What `GET /api/games/{id}/history` answers, with the positions still unread so that a bad
@@ -193,10 +204,12 @@ export const snapshotSchema = z.discriminatedUnion("kind", [
     ...snapshotParts,
     state: tictactoe.stateSchema.nullable(),
   }),
+  z.object({ kind: z.literal(HEX), ...snapshotParts, state: hex.stateSchema.nullable() }),
 ]);
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export type LongBackgammonSnapshot = Extract<Snapshot, { kind: typeof LONG_BACKGAMMON }>;
 export type UtttSnapshot = Extract<Snapshot, { kind: typeof ULTIMATE_TIC_TAC_TOE }>;
+export type HexSnapshot = Extract<Snapshot, { kind: typeof HEX }>;
 
 /** What a snapshot says of the people in a game, whatever the game. The words about them need no more. */
 export type Players = Pick<Snapshot, "players" | "playerNames" | "playerGuests" | "rematch">;
@@ -215,6 +228,9 @@ export const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("undo") }),
   /** Marks a cell in ultimate tic-tac-toe. */
   tictactoe.actionSchema,
+  /** Puts a stone on a cell in Hex, and Blue's swap. */
+  hex.placeSchema,
+  hex.swapSchema,
   /**
    * Gives up the game (D10). Not an action of the game: the server has a message of its own
    * for it, which `sendActions` sends in its place. It is here so that it goes out the way

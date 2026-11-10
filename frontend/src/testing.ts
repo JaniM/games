@@ -236,7 +236,7 @@ export function fakeServer() {
         level?: string;
         public?: boolean;
       };
-      if (kind !== "long-backgammon" && kind !== "ultimate-tic-tac-toe") {
+      if (kind !== "long-backgammon" && kind !== "ultimate-tic-tac-toe" && kind !== "hex") {
         return new Response("unknown kind of game", { status: 422 });
       }
       // As the server: a level is for a game against the bot, and is one of the three.

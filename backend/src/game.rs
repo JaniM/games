@@ -15,7 +15,9 @@ use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{bot::Level, long_backgammon::LongBackgammon, ultimate_tic_tac_toe::UltimateTicTacToe};
+use crate::{
+    bot::Level, hex::Hex, long_backgammon::LongBackgammon, ultimate_tic_tac_toe::UltimateTicTacToe,
+};
 
 /// An action the rules don't allow. The reason goes back to the player who tried it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,6 +407,7 @@ pub fn registry() -> Games {
     Games::default()
         .with::<LongBackgammon>()
         .with::<UltimateTicTacToe>()
+        .with::<Hex>()
 }
 
 #[cfg(test)]

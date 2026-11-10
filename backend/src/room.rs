@@ -2870,6 +2870,63 @@ mod tests {
         }
     }
 
+    #[sqlx::test]
+    async fn a_whole_hex_game_with_a_swap_leaves_a_history_the_server_can_load(pool: PgPool) {
+        let rooms = rooms(&pool, Games::default().with::<crate::hex::Hex>());
+        let (first, second) = (user(&pool).await, user(&pool).await);
+        let engine = rooms.games().get("hex").unwrap().clone();
+        let id = rooms.create(&engine, first, false).await.unwrap();
+        rooms.join(&id, second).await.unwrap();
+        // By seat.
+        let mut players = [
+            rooms.connect(&id, first).await.unwrap(),
+            rooms.connect(&id, second).await.unwrap(),
+        ];
+
+        // Red opens in the centre and Blue swaps it. Then whoever is to move fills the first empty
+        // cell in reading order, which connects somebody before the board is full.
+        let mut actions = 0;
+        loop {
+            let state = players[0]
+                .latest()
+                .state
+                .clone()
+                .expect("the game has started");
+            if state["phase"]["type"] != "play" {
+                break;
+            }
+            let seat = state["turn"].as_u64().unwrap() as usize;
+            let action = if actions == 0 {
+                json!({ "type": "place", "column": 5, "row": 5 })
+            } else if actions == 1 {
+                assert_eq!(state["canSwap"], json!(true));
+                json!({ "type": "swap" })
+            } else {
+                let cell = (0..121)
+                    .find(|&cell| state["cells"][cell].is_null())
+                    .expect("a game that is on has an empty cell");
+                json!({ "type": "place", "column": cell % 11, "row": cell / 11 })
+            };
+            players[seat].act(action).await.unwrap();
+            actions += 1;
+            assert!(actions <= 122, "the game does not end");
+        }
+
+        // The record is the whole state.
+        assert_history_loads(
+            &pool,
+            &engine,
+            &id,
+            actions,
+            &[],
+            players[0].latest().state.clone(),
+        )
+        .await;
+        let history = history_of(&pool, &id).await;
+        assert_eq!(history[2].2["last"]["swap"], json!(true));
+        assert!(history.last().unwrap().2["chain"].is_array());
+    }
+
     /// Checks the history of a finished game that took `actions` actions: a state for the start
     /// of the game and one for each action, each without the `left_out` fields of a state, each
     /// loading to what the game records for it, and the last one being the game as it ended, as

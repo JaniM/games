@@ -32,4 +32,12 @@ export const GAMES: readonly GameInfo[] = [
     players: "2 players",
     bot: true,
   },
+  {
+    id: "hex",
+    name: "Hex",
+    description:
+      "Take turns placing stones on a board of hexagons. Join your two sides of the board before your opponent joins theirs.",
+    players: "2 players",
+    bot: false,
+  },
 ];

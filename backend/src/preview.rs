@@ -695,7 +695,7 @@ mod tests {
     #[sqlx::test]
     async fn the_picture_is_a_png_of_the_size_of_a_card_for_each_real_game(pool: PgPool) {
         let app = app(pool);
-        for kind in ["long-backgammon", "ultimate-tic-tac-toe"] {
+        for kind in ["long-backgammon", "ultimate-tic-tac-toe", "hex"] {
             let started = started_by(&app, &format!("ada-{kind}"), kind, "Grace").await;
             let (_, other) = app
                 .register_account(&format!("grace-{kind}"), "correct horse battery")

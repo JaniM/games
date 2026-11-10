@@ -24,7 +24,8 @@
  *   - The result of a game that is over (7.325, see `.result` in `game-panels.css`) under the
  *     review bar (5.5 at most): 6.75 + 5.5 + 7.325 = 19.575, up to 19.75.
  *
- * The square board below has the same chrome: it is the same bars, status, review and result.
+ * The square board below, and the Hex board after it, have the same chrome: it is the same bars,
+ * status, review and result.
  */
 .game-page {
   --game-chrome: 15.25rem;
@@ -69,6 +70,21 @@
 @supports (height: 100dvh) {
   .game-page-square {
     max-width: min(40rem, max(24rem, calc(100dvh - var(--game-chrome) + 2 * var(--game-pad))));
+  }
+}
+
+/*
+ * A game with a Hex board, which is √3 (1.7321) times as wide as it is tall (see `hex/geometry.ts`):
+ * the page is as wide as the board is when its height is what is left of the screen after the
+ * chrome, as for the long backgammon board. After the rules above, which it replaces.
+ */
+.game-page-hex {
+  max-width: max(24rem, calc((100vh - var(--game-chrome)) * 1.7321 + 2 * var(--game-pad)));
+}
+
+@supports (height: 100dvh) {
+  .game-page-hex {
+    max-width: max(24rem, calc((100dvh - var(--game-chrome)) * 1.7321 + 2 * var(--game-pad)));
   }
 }
 
@@ -133,6 +149,13 @@
     max-width: none;
     grid-template-columns:
       min(40rem, var(--game-height), 100% - var(--game-side) - var(--game-gap))
+      minmax(var(--game-side), 22rem);
+  }
+
+  /* The Hex board is as tall as the screen too, at its own width for that height. */
+  .game-page-hex {
+    grid-template-columns:
+      min(var(--game-height) * 1.7321, 100% - var(--game-side) - var(--game-gap))
       minmax(var(--game-side), 22rem);
   }
 

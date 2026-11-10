@@ -110,11 +110,16 @@ export { hasMoves, hasMovesIn, moveForKey, positionOf, reviewAlwaysOn, shownInde
 export type { ReviewMove } from "./review";
 export { isFull, landing, seatOf } from "./selectors";
 export type { Landing } from "./selectors";
-export { LONG_BACKGAMMON, ULTIMATE_TIC_TAC_TOE } from "./schemas";
+export { HEX, LONG_BACKGAMMON, ULTIMATE_TIC_TAC_TOE } from "./schemas";
 export type {
   Action,
   BoardResult,
   Frame,
+  HexCell,
+  HexFrame,
+  HexPhase,
+  HexSnapshot,
+  HexState,
   LongBackgammonFrame,
   LongBackgammonSnapshot,
   LongBackgammonState,

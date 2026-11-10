@@ -37,9 +37,9 @@ describe("the dark colours in tokens.css", () => {
     const device = blocks(DEVICE_DARK);
     const picked = blocks(PICKED_DARK).filter((declarations) => declarations.some((declaration) => declaration.startsWith("--")));
 
-    // The colours of the page, and the wood of the board.
-    expect(device).toHaveLength(2);
-    expect(picked).toHaveLength(2);
+    // The colours of the page, the wood of the long backgammon board, and the wood of the Hex board.
+    expect(device).toHaveLength(3);
+    expect(picked).toHaveLength(3);
     expect(picked).toEqual(device);
   });
 

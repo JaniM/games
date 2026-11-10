@@ -1,5 +1,7 @@
 import {
   type Action,
+  HEX,
+  type HexSnapshot,
   LONG_BACKGAMMON,
   type LongBackgammonSnapshot,
   type Snapshot,
@@ -18,7 +20,7 @@ export const AUTOPLAY_PAUSE_MS = 800;
 const HEAD = 1;
 
 /**
- * What auto-play does now, in a game of either kind (see below for what each plays). Null when
+ * What auto-play does now, in a game of any kind (see below for what each plays). Null when
  * there is nothing for `userId` to do: it is not their turn, or the game has not started or is over.
  *
  * It picks only from what the server offers, so it needs no rules of its own.
@@ -35,6 +37,8 @@ export function autoplayAction(
       return longBackgammonAction(snapshot, userId, random);
     case ULTIMATE_TIC_TAC_TOE:
       return ultimateTicTacToeAction(snapshot, userId, random);
+    case HEX:
+      return hexAction(snapshot, userId, random);
   }
 }
 
@@ -78,4 +82,19 @@ function ultimateTicTacToeAction(
   );
   const choice = choices[Math.floor(random() * choices.length)];
   return choice ? { type: "play", ...choice } : null;
+}
+
+/**
+ * Hex: puts a stone on an empty cell, or swaps when the server says the player may. The swap is
+ * one choice among the cells, so every choice is equally likely.
+ */
+function hexAction(snapshot: HexSnapshot, userId: string | null, random: () => number): Action | null {
+  const state = snapshot.state;
+  if (state?.phase.type !== "play" || seatOf(snapshot, userId) !== state.turn) return null;
+
+  const choices: Action[] = state.cells.flatMap((seat, cell) =>
+    seat === null ? [{ type: "place" as const, column: cell % state.size, row: Math.floor(cell / state.size) }] : [],
+  );
+  if (state.canSwap) choices.push({ type: "swap" });
+  return choices[Math.floor(random() * choices.length)] ?? null;
 }

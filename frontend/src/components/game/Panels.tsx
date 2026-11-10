@@ -8,9 +8,9 @@ import type { RematchStage, Result } from "./people";
 import type { AnyGameViewRow } from "./rows";
 
 /** The page of a game: a screen reader gets the title, because the nav and the board say the rest. */
-export function GameShell({ title, shape, children }: { title: string; shape?: "square"; children: ReactNode }) {
+export function GameShell({ title, shape, children }: { title: string; shape?: "square" | "hex"; children: ReactNode }) {
   return (
-    <main className={shape === "square" ? "page game-page game-page-square" : "page game-page"}>
+    <main className={shape ? `page game-page game-page-${shape}` : "page game-page"}>
       <h1 className="visually-hidden">{title}</h1>
       {children}
     </main>

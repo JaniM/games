@@ -425,6 +425,29 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn the_server_offers_hex_under_the_id_of_the_front_end_catalog(pool: PgPool) {
+        let app = TestApp::new(pool.clone(), game::registry());
+        let (_, creator) = app.register_user().await;
+        let (_, joiner) = app.register_user().await;
+
+        let game_id = app.create_game(&creator, "hex").await;
+        let (_, _, waiting, _) = stored(&pool, &game_id).await;
+        assert_eq!(waiting, None);
+        app.join_game(&joiner, &game_id).await;
+
+        // The second player's arrival starts the game: an empty board, and Red to move.
+        let (revision, _, state, players) = stored(&pool, &game_id).await;
+        let state = state.expect("the game has started");
+        assert_eq!((revision, players.len()), (1, 2));
+        assert_eq!(state["phase"], json!({ "type": "play" }));
+        assert_eq!(state["turn"], state["red"]);
+        assert_eq!(state["last"], json!(null));
+        assert_eq!(state["canSwap"], json!(false));
+        assert_eq!(state["size"], json!(11));
+        assert_eq!(state["cells"], json!(vec![json!(null); 121]));
+    }
+
+    #[sqlx::test]
     async fn the_server_offers_ultimate_tic_tac_toe_under_the_id_of_the_front_end_catalog(
         pool: PgPool,
     ) {

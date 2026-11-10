@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { board, marks, moving, snapshotOf, startingState, utttSnapshotOf, utttState } from "../../fixtures";
+import {
+  board,
+  hexSnapshotOf,
+  hexState,
+  marks,
+  moving,
+  snapshotOf,
+  startingState,
+  stones,
+  utttSnapshotOf,
+  utttState,
+} from "../../fixtures";
 import {
   addFrame,
   asFrame,
+  asHexFrame,
   asUtttFrame,
   atFor,
   extend,
@@ -432,6 +444,64 @@ describe("ultimate tic-tac-toe", () => {
       expect(reviewAlwaysOn(snapshot(1, null), "someone-else")).toBe(false);
       expect(reviewAlwaysOn(snapshot(3, second), null)).toBe(false);
       expect(players).toContain("user-a");
+    });
+  });
+});
+
+describe("hex", () => {
+  const fresh = hexState();
+  const opened = hexState({
+    cells: stones({ f6: 0 }),
+    turn: 1,
+    last: { seat: 0, column: 5, row: 5, swap: false },
+    canSwap: true,
+  });
+  const swapped = hexState({ cells: stones({ f6: 1 }), swapped: true, last: { seat: 1, column: 5, row: 5, swap: true } });
+
+  describe("readFrame", () => {
+    it("reads a position the server kept as it was, the swap that was open then too", () => {
+      expect(readFrame("hex", 2, opened)).toEqual(asHexFrame(2, opened));
+      expect(readFrame("hex", 2, opened)).toMatchObject({ kind: "hex", state: { canSwap: true } });
+    });
+
+    it("refuses what is not a position of this game", () => {
+      expect(readFrame("hex", 2, { ...opened, cells: [] })).toBeNull();
+      expect(readFrame("hex", 2, { ...opened, canSwap: undefined })).toBeNull();
+      expect(readFrame("hex", 2, utttState())).toBeNull();
+      expect(readFrame("ultimate-tic-tac-toe", 2, opened)).toBeNull();
+    });
+  });
+
+  describe("hasMovesIn", () => {
+    it("is false before the first stone, and true after it or after a forfeit", () => {
+      expect(hasMovesIn({ kind: "hex", state: fresh })).toBe(false);
+      expect(hasMovesIn({ kind: "hex", state: opened })).toBe(true);
+      expect(hasMovesIn({ kind: "hex", state: swapped })).toBe(true);
+      const given = hexState({ phase: { type: "over", winner: 1, forfeited: true } });
+      expect(hasMovesIn({ kind: "hex", state: given })).toBe(true);
+    });
+  });
+
+  describe("addFrame and extend", () => {
+    it("keep every position as a frame: a move is never taken back", () => {
+      let frames: Frame[] = [];
+      for (const [revision, state] of [[1, fresh], [2, opened], [3, swapped]] as const) {
+        frames = addFrame(frames, asHexFrame(revision, state));
+      }
+      expect(frames.map((f) => f.revision)).toEqual([1, 2, 3]);
+
+      const more = extend(frames.slice(0, 2), 2, hexSnapshotOf({ revision: 3, state: swapped }));
+      expect(more.type === "frames" && more.frames.map((f) => f.kind)).toEqual(["hex", "hex", "hex"]);
+    });
+  });
+
+  describe("reviewAlwaysOn", () => {
+    it("is on for a game that is over and for a watcher once a stone is down, as for the other games", () => {
+      const over = hexState({ ...opened, phase: { type: "over", winner: 0, forfeited: true } });
+      expect(reviewAlwaysOn(hexSnapshotOf({ state: over }), "user-a")).toBe(true);
+      expect(reviewAlwaysOn(hexSnapshotOf({ state: opened }), "somebody")).toBe(true);
+      expect(reviewAlwaysOn(hexSnapshotOf({ state: fresh }), "somebody")).toBe(false);
+      expect(reviewAlwaysOn(hexSnapshotOf({ state: opened }), "user-a")).toBe(false);
     });
   });
 });

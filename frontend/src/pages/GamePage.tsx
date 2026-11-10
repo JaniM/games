@@ -1,8 +1,9 @@
 import { useOp, useQuery } from "millpond/react";
 import { useEffect } from "react";
-import { ULTIMATE_TIC_TAC_TOE, closeGame, gameViews, keepReview, openGame, reviews } from "../features/game";
+import { HEX, ULTIMATE_TIC_TAC_TOE, closeGame, gameViews, keepReview, openGame, reviews } from "../features/game";
 import { gamePath } from "../features/router";
 import { SESSION_ID, sessionState } from "../features/session";
+import { GameScreen as HexGameScreen } from "../hex/GameScreen";
 import { GameScreen, isLongBackgammonView } from "../longBackgammon/GameScreen";
 import { unlockOnGesture } from "../longBackgammon/sounds";
 import { GameScreen as UtttGameScreen } from "../ultimateTicTacToe/GameScreen";
@@ -49,6 +50,7 @@ export function GamePage({ gameId }: { gameId: string }) {
   };
 
   if (view?.snapshot?.kind === ULTIMATE_TIC_TAC_TOE) return <UtttGameScreen {...screen} />;
+  if (view?.snapshot?.kind === HEX) return <HexGameScreen {...screen} />;
   // Long backgammon, which is also what shows the page until the first snapshot says what it is.
   if (view === undefined || isLongBackgammonView(view)) return <GameScreen {...screen} />;
   return null;

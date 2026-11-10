@@ -1,6 +1,10 @@
+import { stateSchema as hexStateSchema } from "./hex";
 import {
   type Frame,
   type GameKind,
+  HEX,
+  type HexFrame,
+  type HexState,
   LONG_BACKGAMMON,
   type LongBackgammonFrame,
   type LongBackgammonState,
@@ -36,8 +40,16 @@ export function asUtttFrame(revision: number, state: UtttState): UtttFrame {
   return { kind: ULTIMATE_TIC_TAC_TOE, revision, state };
 }
 
+/** A Hex state as a frame. Nothing is left out, as in ultimate tic-tac-toe: `canSwap` is a flag. */
+export function asHexFrame(revision: number, state: HexState): HexFrame {
+  return { kind: HEX, revision, state };
+}
+
 /** A state with the kind of game it is a state of: what a snapshot and a frame both hold. */
-export type Positioned = Pick<LongBackgammonFrame, "kind" | "state"> | Pick<UtttFrame, "kind" | "state">;
+export type Positioned =
+  | Pick<LongBackgammonFrame, "kind" | "state">
+  | Pick<UtttFrame, "kind" | "state">
+  | Pick<HexFrame, "kind" | "state">;
 
 /** The state of a snapshot with its kind, or null for a game that has no state yet. */
 export function positionOf(snapshot: Snapshot): Positioned | null {
@@ -45,6 +57,8 @@ export function positionOf(snapshot: Snapshot): Positioned | null {
     case LONG_BACKGAMMON:
       return snapshot.state && { kind: snapshot.kind, state: snapshot.state };
     case ULTIMATE_TIC_TAC_TOE:
+      return snapshot.state && { kind: snapshot.kind, state: snapshot.state };
+    case HEX:
       return snapshot.state && { kind: snapshot.kind, state: snapshot.state };
   }
 }
@@ -56,6 +70,8 @@ export function frameOf(revision: number, position: Positioned): Frame {
       return asFrame(revision, position.state);
     case ULTIMATE_TIC_TAC_TOE:
       return asUtttFrame(revision, position.state);
+    case HEX:
+      return asHexFrame(revision, position.state);
   }
 }
 
@@ -73,6 +89,10 @@ export function readFrame(kind: GameKind, revision: number, state: unknown): Fra
       const position = utttStateSchema.safeParse(state);
       return position.success ? asUtttFrame(revision, position.data) : null;
     }
+    case HEX: {
+      const position = hexStateSchema.safeParse(state);
+      return position.success ? asHexFrame(revision, position.data) : null;
+    }
   }
 }
 
@@ -86,13 +106,20 @@ export function utttHasMoves(state: UtttState): boolean {
   return state.last !== null || state.phase.type !== "play";
 }
 
-/** Whether anything has been played yet in a game of either kind. */
+/** Whether anything has been played yet: a stone, or a forfeit. */
+export function hexHasMoves(state: HexState): boolean {
+  return state.last !== null || state.phase.type !== "play";
+}
+
+/** Whether anything has been played yet in a game of any kind. */
 export function hasMovesIn(game: Positioned): boolean {
   switch (game.kind) {
     case LONG_BACKGAMMON:
       return hasMoves(game.state);
     case ULTIMATE_TIC_TAC_TOE:
       return utttHasMoves(game.state);
+    case HEX:
+      return hexHasMoves(game.state);
   }
 }
 
@@ -141,8 +168,8 @@ function sameBoard(a: LongBackgammonState, b: LongBackgammonState): boolean {
  * game that was going when positions began to be kept) has no frame to go back to, and then
  * `next` is kept as a frame of its own.
  *
- * Only long backgammon has steps to take back. In ultimate tic-tac-toe a mark is final (D9), so
- * every position is a frame.
+ * Only long backgammon has steps to take back. In ultimate tic-tac-toe a mark is final (D9), and
+ * in Hex a move is (D8), so every position is a frame.
  */
 export function addFrame(frames: readonly Frame[], next: Frame): Frame[] {
   const last = frames.at(-1);

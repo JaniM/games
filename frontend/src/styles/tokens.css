@@ -114,3 +114,38 @@
   --tri-a: #c8b48f;
   --tri-b: #8a5a3b;
 }
+
+/*
+ * The Hex board: the wood of its cells, the darker lines between them (`--hex-grain`, which also
+ * rims the stones), and the stones, whose colours draw the edges each player owns too. Red and Blue
+ * are the colours the rules name the players by. The red is a crimson, cooler than the accent, so
+ * that a stone is never taken for something to press; and every place a colour says something, a
+ * word or a position says it too (the bars name the colour, and the edges are where they are).
+ */
+
+:root {
+  --hex-wood: #dbb683;
+  --hex-grain: #937754;
+  --stone-red: #c62f3b;
+  --stone-blue: #2b5fa8;
+}
+
+/*
+ * The dark wood, a walnut, twice, as the dark colours at the top are. On it the stones are lighter,
+ * so that they stand out from it as the deep ones do from the light wood.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hex-wood: #5e4632;
+    --hex-grain: #3b2b1e;
+    --stone-red: #e5534b;
+    --stone-blue: #5b8fd9;
+  }
+}
+
+:root[data-theme="dark"] {
+  --hex-wood: #5e4632;
+  --hex-grain: #3b2b1e;
+  --stone-red: #e5534b;
+  --stone-blue: #5b8fd9;
+}

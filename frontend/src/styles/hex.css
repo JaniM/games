@@ -1,0 +1,117 @@
+/*
+ * The Hex board: a rhombus of hexagonal cells of wood, drawn by `hex/Board.tsx` in the units of
+ * `hex/geometry.ts`, with `a1` at the top left as in the rules. The rhombus behind the cells is cut
+ * along its diagonals, and each part is in the colour of the player whose edge it is: Red's on the
+ * top and the bottom, Blue's on the left and the right. The cells cover all of it but the edges.
+ * The server draws the same board, in the dark colours, for the preview of a link
+ * (`backend/src/hex/picture.rs`): keep the two in step.
+ */
+.hex {
+  display: block;
+  width: 100%;
+  height: auto;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.hex-edge-red {
+  fill: color-mix(in srgb, var(--stone-red) 85%, var(--bg));
+}
+
+.hex-edge-blue {
+  fill: color-mix(in srgb, var(--stone-blue) 85%, var(--bg));
+}
+
+.hex-cell {
+  fill: var(--hex-wood);
+  stroke: var(--hex-grain);
+  stroke-width: 1.5;
+}
+
+/* A thin rim in the colour of the lines, which sets a stone off from the wood. */
+.hex-stone {
+  stroke: var(--hex-grain);
+  stroke-width: 1.5;
+}
+
+.hex-stone-red {
+  fill: var(--stone-red);
+}
+
+.hex-stone-blue {
+  fill: var(--stone-blue);
+}
+
+/*
+ * A game won by a chain shows it: the stones that are not part of it step back. Not so far that
+ * the wood washes their colour out: a faded stone is still plainly Red's or Blue's.
+ */
+.hex-stone-faded {
+  opacity: 0.6;
+}
+
+/* The dot on the stone the last move placed, in the colour of the wood. */
+.hex-last {
+  fill: var(--hex-wood);
+  pointer-events: none;
+}
+
+/*
+ * An empty cell the player may put a stone on is the only kind that is a button. Under the pointer,
+ * and with the focus, it shows the stone faintly; the focus also rings the cell in the accent,
+ * instead of the box around it that a browser would draw.
+ */
+.hex-open {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.hex-open:focus-visible {
+  outline: none;
+}
+
+.hex-open:focus-visible .hex-cell {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.hex-ghost {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hex-open:hover .hex-ghost {
+  opacity: 0.35;
+}
+
+.hex-open:focus-visible .hex-ghost {
+  opacity: 0.5;
+}
+
+/*
+ * A new stone is set down: it grows into its place. Like the rest of the motion of the boards, it
+ * is not turned off by `prefers-reduced-motion` (see the end of `long-backgammon.css`).
+ */
+.hex-stone-fresh {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hex-place 0.18s ease-out both;
+}
+
+@keyframes hex-place {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+/* The colour a player plays, in their bar, where long backgammon has its checker. */
+.swatch-red {
+  background: var(--stone-red);
+  border-color: var(--stone-red);
+}
+
+.swatch-blue {
+  background: var(--stone-blue);
+  border-color: var(--stone-blue);
+}

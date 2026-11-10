@@ -19,6 +19,7 @@ mod delta;
 mod error;
 mod game;
 mod game_id;
+mod hex;
 mod history;
 mod lobby;
 mod long_backgammon;

@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { marks, moving, snapshotOf, startingState, utttSnapshotOf, utttState, wonBoard } from "../../fixtures";
+import {
+  hexSnapshotOf,
+  hexState,
+  marks,
+  moving,
+  snapshotOf,
+  startingState,
+  stones,
+  utttSnapshotOf,
+  utttState,
+  wonBoard,
+} from "../../fixtures";
 import { autoplayAction } from "./autoplay";
 
 // Seats: user-a is seat 0 (White, to move in a fresh game), user-b is seat 1.
@@ -155,5 +166,50 @@ describe("what auto-play does in ultimate tic-tac-toe", () => {
     const stuck = utttState({ playable: [] });
 
     expect(autoplayAction(utttSnapshotOf({ state: stuck }), "user-a")).toBeNull();
+  });
+});
+
+describe("what auto-play does in Hex", () => {
+  const opened = hexState({
+    cells: stones({ f6: 0 }),
+    turn: 1,
+    last: { seat: 0, column: 5, row: 5, swap: false },
+    canSwap: true,
+  });
+
+  it("places a stone on any empty cell, every one as likely", () => {
+    const first = autoplayAction(hexSnapshotOf(), "user-a", sequence(0));
+    const last = autoplayAction(hexSnapshotOf(), "user-a", sequence(0.9999));
+
+    expect(first).toEqual({ type: "place", column: 0, row: 0 });
+    expect(last).toEqual({ type: "place", column: 10, row: 10 });
+  });
+
+  it("never plays on a stone, and swaps as one choice among the cells when it may", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
+      const action = autoplayAction(hexSnapshotOf({ state: opened }), "user-b");
+      expect(action).not.toEqual({ type: "place", column: 5, row: 5 });
+      seen.add(JSON.stringify(action));
+    }
+    // The 120 empty cells and the swap.
+    expect(seen.size).toBe(121);
+    expect(seen.has(JSON.stringify({ type: "swap" }))).toBe(true);
+    // The swap is the last choice.
+    expect(autoplayAction(hexSnapshotOf({ state: opened }), "user-b", sequence(0.9999))).toEqual({ type: "swap" });
+  });
+
+  it("does not swap when it may not", () => {
+    for (let i = 0; i < 500; i++) {
+      expect(autoplayAction(hexSnapshotOf(), "user-a")).toMatchObject({ type: "place" });
+    }
+  });
+
+  it("does nothing out of turn, for a spectator, before the game starts, or once it is over", () => {
+    expect(autoplayAction(hexSnapshotOf({ state: opened }), "user-a")).toBeNull();
+    expect(autoplayAction(hexSnapshotOf({ state: opened }), "somebody-else")).toBeNull();
+    expect(autoplayAction(hexSnapshotOf({ state: null }), "user-a")).toBeNull();
+    const over = hexState({ phase: { type: "over", winner: 0, forfeited: true } });
+    expect(autoplayAction(hexSnapshotOf({ state: over }), "user-a")).toBeNull();
   });
 });
