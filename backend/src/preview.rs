@@ -41,8 +41,9 @@ const CARD_WIDTH: u32 = 1200;
 const CARD_HEIGHT: u32 = 630;
 /// The space round the board.
 const CARD_MARGIN: f32 = 24.0;
-/// The background of the page (`--bg` in `styles.css`).
-const CARD_BACKGROUND: (u8, u8, u8) = (0xf6, 0xf4, 0xef);
+/// The background of the page in its dark colours (`--bg` in `styles.css`), which the games'
+/// pictures are drawn in.
+const CARD_BACKGROUND: (u8, u8, u8) = (0x16, 0x14, 0x0f);
 
 /// How long what a program that unfolds links fetched may be kept. The address of a picture has
 /// the game's revision in it (see [`page`]), so a game that has moved on is a new address.
@@ -240,8 +241,8 @@ pub async fn picture(
         .into_response())
 }
 
-/// Draws a board, an SVG document, as the picture: centred on the page's background, as large as
-/// fits inside the margin. The error is for the log: a game's SVG that can't be drawn is a bug.
+/// Draws a board, an SVG document, as the picture: centred on the page's dark background, as large
+/// as fits inside the margin. The error is for the log: a game's SVG that can't be drawn is a bug.
 fn render(board: &str) -> Result<Vec<u8>, String> {
     let tree = usvg::Tree::from_str(board, &usvg::Options::default())
         .map_err(|err| format!("the board is not an SVG: {err}"))?;
@@ -710,6 +711,14 @@ mod tests {
                 assert_eq!(reply.status, StatusCode::OK, "{kind}");
                 assert_eq!(reply.headers[header::CONTENT_TYPE], "image/png");
                 assert_eq!(png_size(&reply.body), (1200, 630), "{kind}");
+                // The board sits on the dark page: the corner of the card is bare.
+                let card = tiny_skia::Pixmap::decode_png(&reply.body).unwrap();
+                let corner = card.pixel(0, 0).unwrap();
+                assert_eq!(
+                    (corner.red(), corner.green(), corner.blue()),
+                    (0x16, 0x14, 0x0f),
+                    "{kind}"
+                );
             }
         }
     }

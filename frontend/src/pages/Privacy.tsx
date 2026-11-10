@@ -296,7 +296,8 @@ export function Privacy({ operator = OPERATOR }: PrivacyProps) {
       <p>
         In your browser, in its local storage: your user id and access token, and your username if
         you have an account (<code>games.session</code>); the sound volume (
-        <code>games.volume</code>); and whether new games are public (<code>games.public</code>).
+        <code>games.volume</code>); the theme, light or dark, if you pick one (
+        <code>games.theme</code>); and whether new games are public (<code>games.public</code>).
       </p>
       <p>
         Whoever hosts the site may keep ordinary access logs of their own, such as the time of a

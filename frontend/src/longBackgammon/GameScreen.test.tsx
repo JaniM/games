@@ -73,13 +73,20 @@ function render(userId: string | null, view: GameViewRow | undefined, extra: Par
 }
 
 /**
- * The board and what is laid over it, up to the bar of the player below it, and the rest of the
- * page without it.
+ * The board and what is laid over it, up to the first section under it (the status, the review
+ * or the result), and the rest of the page without it.
  */
 function splitBoard(html: string): { wrap: string; elsewhere: string } {
   const from = html.indexOf('class="board-wrap"');
-  const to = html.indexOf('class="player-bar', from);
+  const to = html.indexOf("<section", from);
   return { wrap: html.slice(from, to), elsewhere: html.slice(0, from) + html.slice(to) };
+}
+
+/** The player bars in the order they are on the page: whose each is, and whether it is lit. */
+function barsOf(html: string): { text: string; active: boolean }[] {
+  return [...html.matchAll(/<div class="player-bar( player-bar-active)?">(.*?)<\/div>/g)].map(
+    ([, active, inner]) => ({ active: active !== undefined, text: (inner ?? "").replaceAll(/<[^>]*>/g, "") }),
+  );
 }
 
 /** A game with Ada waiting alone for an opponent. */
@@ -175,37 +182,56 @@ describe("a game with both players", () => {
     expect(html).toContain('<span class="visually-hidden">White</span>');
     expect(html).toContain('<span class="visually-hidden">Black</span>');
     expect(html).not.toContain('class="player-colour"');
-    expect(html).toContain("to move");
   });
 
-  it("puts the viewer's own bar over the board and the opponent's under it", () => {
+  it("leaves \"to move\" out of the bar for the eye, to give the name its room, and keeps it for a screen reader", () => {
+    const html = render(GRACE, viewOf());
+
+    expect(html).not.toContain("player-turn");
+    expect(html.match(/<span class="visually-hidden">to move<\/span>/g)).toHaveLength(1);
+    // It is in the bar that is lit: Ada's, who is White and rolls first.
+    expect(barsOf(html).map((bar) => bar.active)).toEqual([false, true]);
+    expect(html).toContain(
+      '<div class="player-bar player-bar-active"><span class="swatch swatch-white" aria-hidden="true"></span><span class="player-name" title="Ada">Ada</span><span class="visually-hidden">White</span><span class="visually-hidden">to move</span></div>',
+    );
+  });
+
+  it("puts the whole of a name in its tooltip, for the bar to cut it off", () => {
+    const long = "W".repeat(32);
+    const html = render(GRACE, viewOf({ snapshot: snapshotOf({ playerNames: ["Ada", long] }) }));
+
+    expect(html).toContain(`title="${long} (you)"`);
+    expect(html).toContain(`>${long} (you)</span>`);
+  });
+
+  it("puts both bars side by side over the board, the viewer's own first", () => {
     const html = render(GRACE, viewOf());
     const board = html.indexOf('class="board-wrap"');
 
-    expect(html.indexOf("Grace (you)")).toBeLessThan(board);
-    expect(html.indexOf(">Ada<")).toBeGreaterThan(board);
-    expect(html).toMatch(/class="player-bar player-bar-above[ "][^>]*>(?:(?!<\/div>)[\s\S])*Grace \(you\)/);
-    expect(html).toMatch(/class="player-bar player-bar-below[ "][^>]*>(?:(?!<\/div>)[\s\S])*Ada/);
+    // One row, to leave the height to the board: nothing of the players is under it.
+    expect(html.match(/class="player-bars"/g)).toHaveLength(1);
+    expect(html.lastIndexOf('class="player-bar')).toBeLessThan(board);
+    const [first, second] = barsOf(html);
+    expect(first?.text).toContain("Grace (you)");
+    expect(second?.text).toContain("Ada");
+    expect(barsOf(html)).toHaveLength(2);
   });
 
-  it("puts a spectator's view the same way: White over the board", () => {
-    const html = render(STRANGER, viewOf());
-    const board = html.indexOf('class="board-wrap"');
+  it("puts a spectator's view the same way: White first", () => {
+    const [first, second] = barsOf(render(STRANGER, viewOf()));
 
-    // Nobody is "you"; the bar over the board is the one the board is turned for, White's.
-    expect(html.indexOf(">Ada<")).toBeLessThan(board);
-    expect(html.indexOf(">Grace<")).toBeGreaterThan(board);
+    // Nobody is "you"; the first bar is the one the board is turned for, White's.
+    expect(first?.text).toContain("Ada");
+    expect(second?.text).toContain("Grace");
   });
 
   it("highlights the player to move, wherever their bar is", () => {
     // Ada (White, seat 0) is to roll first.
-    const ada = render(ADA, viewOf());
-    expect(ada).toMatch(/class="player-bar player-bar-above player-bar-active"/);
-    expect(ada.match(/player-bar-active/g)).toHaveLength(1);
+    const ada = barsOf(render(ADA, viewOf()));
+    expect(ada.map((bar) => bar.active)).toEqual([true, false]);
 
-    const grace = render(GRACE, viewOf());
-    expect(grace).toMatch(/class="player-bar player-bar-below player-bar-active"/);
-    expect(grace.match(/player-bar-active/g)).toHaveLength(1);
+    const grace = barsOf(render(GRACE, viewOf()));
+    expect(grace.map((bar) => bar.active)).toEqual([false, true]);
   });
 
   it("highlights nobody when the game is over", () => {
@@ -472,7 +498,7 @@ describe("a game with both players", () => {
     expect(html).not.toContain("Roll dice");
   });
 
-  it("replaces the status with the result, and offers the way back to the games", () => {
+  it("replaces the status with the result, and offers a rematch", () => {
     const state = startingState({ phase: { type: "over", winner: 0, points: 2, forfeited: false } });
     const html = render(ADA, viewOf({ snapshot: snapshotOf({ state }) }));
 
@@ -480,15 +506,18 @@ describe("a game with both players", () => {
     expect(html).toContain('class="result result-won"');
     expect(html).toContain(">You won<");
     expect(html).toContain(">Mars: 2 points<");
-    // Another game is what a player is offered; the way out is there, but quieter.
-    expect(html).toMatch(/<a[^>]*class="button button-quiet"[^>]*href="\/"[^>]*>All games</);
+    expect(html).toContain(">Rematch<");
+    // The nav is the way out: the result has no button for it.
+    expect(html).not.toContain("All games");
   });
 
-  it("makes the way back the main button for someone who is only watching", () => {
+  it("has no buttons in the result of someone who is only watching", () => {
     const state = startingState({ phase: { type: "over", winner: 0, points: 1, forfeited: false } });
     const html = render(STRANGER, viewOf({ snapshot: snapshotOf({ state }) }));
 
-    expect(html).toMatch(/<a[^>]*class="button"[^>]*href="\/"[^>]*>All games</);
+    expect(html).toContain('class="result"');
+    expect(html).not.toContain("result-actions");
+    expect(html).not.toContain("All games");
   });
 
   it("marks the status as the viewer's own while it is their move, and not otherwise", () => {
@@ -668,11 +697,11 @@ describe("the rematch of a finished game", () => {
     expect(html).not.toMatch(/<button[^>]*disabled/);
   });
 
-  it("offers a spectator nothing to press but the way back", () => {
+  it("offers a spectator nothing to press", () => {
     const html = resultOnly(render(STRANGER, finished()));
 
     expect(buttons(html)).toEqual([]);
-    expect(html).toContain("All games");
+    expect(html).not.toContain("<a ");
   });
 
   it("offers nothing before the game is over", () => {
@@ -748,6 +777,17 @@ describe("the rematch of a finished game", () => {
     expect(html).toMatch(/role="alert">The game is not over yet\./);
     // And it can be tried again.
     expect(html).not.toMatch(/<button[^>]*disabled/);
+  });
+
+  it("keeps the size of the block when an answer fails: the problem takes the place of the rematch line", () => {
+    const failed = { gameId: GAME_ID, answer: "ask", state: "failed", error: "Try again." } as const;
+
+    const html = resultOnly(render(GRACE, finished({ type: "offered", by: 0 }), { rematchRequest: failed }));
+
+    // A screen reader still has the line it had. On the screen there is one line for the rematch.
+    expect(html).toMatch(/class="result-rematch visually-hidden"[^>]*>Ada wants a rematch\./);
+    expect(html).toMatch(/class="result-rematch result-rematch-due"[^>]*>Try again\./);
+    expect(html.match(/class="result-rematch(?! visually-hidden)/g)).toHaveLength(1);
   });
 });
 
@@ -923,9 +963,9 @@ describe("reviewing a game", () => {
       const forFrame = (at: number | null) => render(ADA, live, { review: reviewOf({ at }) });
 
       // In the game seat 1 (Grace) is to roll; in the position after the roll, seat 0 (Ada) is to move.
-      expect(forFrame(null).match(/player-bar-active/g)).toHaveLength(1);
-      expect(forFrame(null).indexOf("player-bar-below player-bar-active")).toBeGreaterThan(-1);
-      expect(forFrame(1).indexOf("player-bar-above player-bar-active")).toBeGreaterThan(-1);
+      // Ada is the viewer, so her bar is the first.
+      expect(barsOf(forFrame(null)).map((bar) => bar.active)).toEqual([false, true]);
+      expect(barsOf(forFrame(1)).map((bar) => bar.active)).toEqual([true, false]);
     });
 
     it("lets nothing be played, even on the player's own turn", () => {

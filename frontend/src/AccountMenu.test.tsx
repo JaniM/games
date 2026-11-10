@@ -26,6 +26,7 @@ function render(overrides: Partial<AccountMenuViewProps> = {}) {
         username={null}
         busy={false}
         sound={null}
+        theme={{ theme: "system", onChange: noop }}
         onCreate={noop}
         onSignIn={noop}
         onSignOut={noop}
@@ -156,5 +157,42 @@ describe("the volume", () => {
 
     expect(html).toContain("volume-slider");
     expect(html).toContain("Sign out");
+  });
+});
+
+describe("the theme", () => {
+  const picked = (html: string) => html.match(/<input[^>]*checked=""[^>]*value="(\w+)"|<input[^>]*value="(\w+)"[^>]*checked=""/);
+
+  it("is a choice of Auto, Light and Dark in the panel, on a page with no sound too", () => {
+    const html = render();
+
+    expect(html.indexOf("<details")).toBeLessThan(html.indexOf("Theme"));
+    expect(html.indexOf("Theme")).toBeLessThan(html.indexOf("</details>"));
+    expect(html).toContain('role="radiogroup" aria-labelledby="theme-label"');
+    expect(html.match(/type="radio"/g)).toHaveLength(3);
+    for (const name of ["Auto", "Light", "Dark"]) expect(html).toContain(`>${name}</span>`);
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+  });
+
+  it("has the theme it is given picked, and only that", () => {
+    for (const theme of ["system", "light", "dark"] as const) {
+      const html = render({ theme: { theme, onChange: () => {} } });
+
+      expect(html.match(/checked=""/g), theme).toHaveLength(1);
+      const match = picked(html);
+      expect(match?.[1] ?? match?.[2], theme).toBe(theme);
+    }
+  });
+
+  it("is a row of the list, after the volume and above what the account can do", () => {
+    const html = render({ sound: { volume: 0.7, onChange: () => {}, onSettle: () => {} } });
+
+    expect(html).toMatch(/<li class="menu-row"><div class="theme"/);
+    expect(html.indexOf("volume-slider")).toBeLessThan(html.indexOf('class="theme"'));
+    expect(html.indexOf('class="theme"')).toBeLessThan(html.indexOf("Create account"));
+  });
+
+  it("is there for an account as well as a guest", () => {
+    expect(render({ username: "ada" })).toContain('class="theme"');
   });
 });

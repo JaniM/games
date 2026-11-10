@@ -180,64 +180,85 @@ describe("a game that is waiting for an opponent", () => {
   });
 });
 
+/** The player bars in the order they are on the page: their html, and whether each is lit. */
+function barsOf(html: string): { html: string; active: boolean }[] {
+  return [...html.matchAll(/<div class="player-bar( player-bar-active)?">(.*?)<\/div>/g)].map(
+    ([, active, inner]) => ({ active: active !== undefined, html: inner ?? "" }),
+  );
+}
+
 describe("the player bars", () => {
-  it("put the opponent over the board and the viewer under it, each with their mark", () => {
+  it("are side by side over the board, the viewer's first, each with their mark", () => {
     const html = render(ADA, gameOn());
 
-    const above = html.indexOf("player-bar-above");
-    const board = html.indexOf('class="ttt"');
-    const below = html.indexOf("player-bar-below");
-    expect(above).toBeGreaterThan(-1);
-    expect(above).toBeLessThan(board);
-    expect(board).toBeLessThan(below);
-    expect(html.slice(above, board)).toContain("Grace");
-    expect(html.slice(above, board)).toContain("ttt-mark-o");
-    expect(html.slice(below)).toContain("Ada (you)");
-    expect(html.slice(below)).toContain("ttt-mark-x");
+    // One row, to leave the height to the board: nothing of the players is under it.
+    expect(count(html, 'class="player-bars"')).toBe(1);
+    expect(html.lastIndexOf('class="player-bar')).toBeLessThan(html.indexOf('class="ttt"'));
+    const [first, second] = barsOf(html);
+    expect(barsOf(html)).toHaveLength(2);
+    expect(first?.html).toContain("Ada (you)");
+    expect(first?.html).toContain("ttt-mark-x");
+    expect(second?.html).toContain("Grace");
+    expect(second?.html).toContain("ttt-mark-o");
   });
 
   it("leave the name of each mark for a screen reader: the marks say it to the eye", () => {
     const html = render(ADA, gameOn());
-    const above = html.slice(html.indexOf("player-bar-above"), html.indexOf('class="ttt"'));
-    const below = html.slice(html.indexOf("player-bar-below"));
+    const [first, second] = barsOf(html);
 
-    expect(above).toContain('<span class="visually-hidden">O</span>');
-    expect(below).toContain('<span class="visually-hidden">X</span>');
+    expect(first?.html).toContain('<span class="visually-hidden">X</span>');
+    expect(second?.html).toContain('<span class="visually-hidden">O</span>');
     expect(html).not.toContain('class="player-colour"');
   });
 
   it("mark the player to move, and nobody once the game is over", () => {
+    // Ada has sent Grace to the centre board: it is Grace's turn, and the viewer's bar is first.
     const html = render(ADA, gameOn());
     expect(count(html, "to move")).toBe(1);
-    expect(html.slice(html.indexOf("player-bar-above"), html.indexOf('class="ttt"'))).toContain("player-bar-active");
+    expect(barsOf(html).map((bar) => bar.active)).toEqual([false, true]);
+    expect(barsOf(render(GRACE, gameOn())).map((bar) => bar.active)).toEqual([true, false]);
 
     expect(count(render(ADA, gameOn(finished(0))), "player-bar-active")).toBe(0);
   });
 
-  it("count the small boards each holds, and say nothing of none", () => {
+  it("leave \"to move\" out of the bar for the eye, to give the name its room, and keep it for a screen reader", () => {
+    const html = render(ADA, gameOn());
+    const [first, second] = barsOf(html);
+
+    expect(html).not.toContain("player-turn");
+    expect(first?.html).not.toContain("to move");
+    expect(second?.html).toContain('<span class="visually-hidden">to move</span>');
+  });
+
+  it("put the whole of a name in its tooltip, for the bar to cut it off", () => {
+    const html = render(ADA, gameOn());
+    const [first, second] = barsOf(html);
+
+    expect(first?.html).toContain('<span class="player-name" title="Ada (you)">Ada (you)</span>');
+    expect(second?.html).toContain('<span class="player-name" title="Grace">Grace</span>');
+  });
+
+  it("say nothing of how many small boards each holds: the board shows it", () => {
     const state = utttState({
       turn: 1,
       last: { seat: 0, board: 0, cell: 4 },
       cells: marks({ 0: wonBoard(0), 1: wonBoard(0, [3, 4, 5]), 2: wonBoard(1) }),
     });
-    const html = render(ADA, gameOn(state));
 
-    expect(html).toContain("2 boards");
-    expect(html).toContain("1 board<");
-    expect(render(ADA, gameOn())).not.toContain("boards<");
+    expect(render(ADA, gameOn(state))).not.toMatch(/\d boards?</);
   });
 
-  it("turn to the player X for someone who only watches, with X under the board", () => {
-    const html = render(STRANGER, gameOn());
+  it("turn to the player X for someone who only watches, with X first", () => {
+    const [first, second] = barsOf(render(STRANGER, gameOn()));
 
-    expect(html.slice(html.indexOf("player-bar-below"))).toContain("Ada");
-    expect(html.slice(html.indexOf("player-bar-above"), html.indexOf('class="ttt"'))).toContain("Grace");
+    expect(first?.html).toContain("Ada");
+    expect(second?.html).toContain("Grace");
   });
 
   it("show the mark of whoever plays X, when it is the other seat", () => {
     const html = render(ADA, gameOn(utttState({ ...sentToCentre, x: 1, turn: 0 })));
 
-    expect(html.slice(html.indexOf("player-bar-below"))).toContain("ttt-mark-o");
+    expect(barsOf(html)[0]?.html).toContain("ttt-mark-o");
   });
 });
 
@@ -415,13 +436,15 @@ describe("a game that is over", () => {
     }
   });
 
-  it("offers a rematch to a player, and only the way home to someone who watches", () => {
+  it("offers a rematch to a player, and nothing to press to someone who watches", () => {
     const player = render(ADA, gameOn(finished(0)));
     const watcher = render(STRANGER, gameOn(finished(0)));
 
     expect(player).toContain("Rematch");
+    expect(player).not.toContain("All games");
     expect(watcher).not.toContain("Rematch");
-    expect(watcher).toContain("All games");
+    expect(watcher).not.toContain("All games");
+    expect(watcher).not.toContain("result-actions");
   });
 
   it("follows the rematch: asked, answered, and started", () => {

@@ -65,6 +65,7 @@ describe("the privacy policy", () => {
 
     expect(html).toContain("<code>games.session</code>");
     expect(html).toContain("<code>games.volume</code>");
+    expect(html).toContain("<code>games.theme</code>");
     expect(html).toContain("and your username if you have an account");
   });
 

@@ -4,8 +4,6 @@ import { gamePath } from "../features/router";
 import type { RematchStage, Result } from "./people";
 import type { AnyGameViewRow, JoinRequestRow } from "./rows";
 
-const HOME = "/";
-
 /** The page of a game: a screen reader gets the title, because the nav and the board say the rest. */
 export function GameShell({ title, shape, children }: { title: string; shape?: "square"; children: ReactNode }) {
   return (
@@ -82,7 +80,7 @@ interface ResultSectionProps {
   onDeclineRematch: () => void;
 }
 
-/** The game over block: who won, and what the players can do next: ask for a rematch, or go home. */
+/** The game over block: who won, and what the players can do next: ask for a rematch. */
 export function ResultSection({
   result,
   rematch,
@@ -99,61 +97,70 @@ export function ResultSection({
         <p className="result-title" role="status">
           {result.title}
         </p>
-        {result.detail && <p className="result-detail">{result.detail}</p>}
-        {/* Always there, so that a screen reader hears it when the other player answers. */}
-        <p
-          className={rematch.stage === "answer" ? "result-rematch result-rematch-due" : "result-rematch"}
-          role="status"
-        >
-          {rematch.line}
-        </p>
-        {rematchProblem && (
-          <p className="result-rematch result-rematch-due" role="alert">
-            {rematchProblem}
+        {/* One line, always there, for how it ended and where the rematch stands (see `.result`). */}
+        <div className="result-notes">
+          {result.detail && <p className="result-detail">{result.detail}</p>}
+          {/* Always there, so that a screen reader hears it when the other player answers. What went
+              wrong takes its place on the screen: the line holds one thing about the rematch. */}
+          <p
+            className={
+              rematchProblem
+                ? "result-rematch visually-hidden"
+                : rematch.stage === "answer"
+                  ? "result-rematch result-rematch-due"
+                  : "result-rematch"
+            }
+            role="status"
+          >
+            {rematch.line}
           </p>
-        )}
+          {rematchProblem && (
+            <p className="result-rematch result-rematch-due" role="alert">
+              {rematchProblem}
+            </p>
+          )}
+        </div>
       </div>
-      <div className="result-actions">
-        {rematch.stage === "ask" && (
-          <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
-            Rematch
-          </button>
-        )}
-        {rematch.stage === "answer" && (
-          <>
+      {/* Someone who only watches has nothing to press. */}
+      {rematch.stage !== "closed" && (
+        <div className="result-actions">
+          {rematch.stage === "ask" && (
             <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
-              Accept
+              Rematch
             </button>
+          )}
+          {rematch.stage === "answer" && (
+            <>
+              <button className="button" type="button" disabled={!connected || answering} onClick={onRematch}>
+                Accept
+              </button>
+              <button
+                className="button button-quiet"
+                type="button"
+                disabled={!connected || answering}
+                onClick={onDeclineRematch}
+              >
+                Decline
+              </button>
+            </>
+          )}
+          {rematch.stage === "waiting" && (
             <button
               className="button button-quiet"
               type="button"
               disabled={!connected || answering}
               onClick={onDeclineRematch}
             >
-              Decline
+              Cancel
             </button>
-          </>
-        )}
-        {rematch.stage === "waiting" && (
-          <button
-            className="button button-quiet"
-            type="button"
-            disabled={!connected || answering}
-            onClick={onDeclineRematch}
-          >
-            Cancel
-          </button>
-        )}
-        {rematch.stage === "started" && (
-          <Link className="button" to={gamePath(rematch.gameId)}>
-            Go to the rematch
-          </Link>
-        )}
-        {/* The way out is the main button only when there is nothing else to do. */}
-        <Link className={rematch.stage === "closed" ? "button" : "button button-quiet"} to={HOME}>
-          All games
-        </Link>
-      </div>
+          )}
+          {rematch.stage === "started" && (
+            <Link className="button" to={gamePath(rematch.gameId)}>
+              Go to the rematch
+            </Link>
+          )}
+        </div>
+      )}
     </section>
   );
 }

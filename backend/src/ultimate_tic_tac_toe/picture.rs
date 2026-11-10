@@ -1,23 +1,25 @@
 //! The board as an SVG, for the preview of a link to a game (see `preview`).
 //!
 //! It draws what `frontend/src/ultimateTicTacToe/Board.tsx` and the `.ttt*` rules of
-//! `frontend/src/styles.css` draw, in the light palette: the same grid of heavy and light lines,
+//! `frontend/src/styles.css` draw: the same grid of heavy and light lines,
 //! the marks, the big mark that claims a board that is won, the boards the next mark must go in,
 //! the cell of the last mark, and the boards of the line that won. The tints are the CSS's
 //! `color-mix`, worked out by [`mix`]. What only matters to someone at the board (buttons, focus,
 //! motion) is left out. Keep the two in step.
+//!
+//! It is drawn in the dark colours of the site, not the light ones, as every game's picture is.
 
 use super::{BoardState, State};
 
 /// A colour, as red, green and blue.
 type Rgb = [u8; 3];
 
-// The light palette of `styles.css`.
-const BG: Rgb = [0xf6, 0xf4, 0xef];
-const FG: Rgb = [0x1d, 0x1b, 0x18];
-const LINE: Rgb = [0x8a, 0x83, 0x74];
-const ACCENT: Rgb = [0xa4, 0x47, 0x2b];
-const MARK_O: Rgb = [0x2c, 0x6e, 0x78];
+// The dark palette of `styles.css`, the `prefers-color-scheme: dark` one.
+const BG: Rgb = [0x16, 0x14, 0x0f];
+const FG: Rgb = [0xef, 0xeb, 0xe3];
+const LINE: Rgb = [0x6d, 0x67, 0x5a];
+const ACCENT: Rgb = [0xe0, 0x8a, 0x6a];
+const MARK_O: Rgb = [0x7c, 0xc2, 0xcc];
 
 /// CSS's `color-mix(in srgb, a share%, b)`.
 fn mix(a: Rgb, share: u32, b: Rgb) -> Rgb {
@@ -312,9 +314,19 @@ mod tests {
 
     #[test]
     fn the_tints_are_the_css_colour_mixes() {
-        // `--tint` and `--ttt-big` of `styles.css`, as a browser works them out.
-        assert_eq!(hex(mix(ACCENT, 9, BG)), "#efe4dd");
-        assert_eq!(hex(mix(FG, 80, BG)), "#484643");
+        // `--tint` and `--ttt-big` of `styles.css` in its dark colours, as a browser works them out.
+        assert_eq!(hex(mix(ACCENT, 9, BG)), "#281f17");
+        assert_eq!(hex(mix(FG, 80, BG)), "#c4c0b9");
+    }
+
+    #[test]
+    fn the_picture_is_in_the_dark_colours_of_the_site() {
+        let svg = picture(None);
+
+        // The cells are the page's background, and the heavy lines are the text's colour, faintly.
+        assert!(svg.contains(&format!(r#"fill="{}""#, hex(BG))));
+        assert_eq!(hex(BG), "#16140f");
+        assert_eq!(hex(FG), "#efebe3");
     }
 
     #[test]

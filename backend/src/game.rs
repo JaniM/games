@@ -119,6 +119,9 @@ pub trait Game: 'static {
     /// no randomness in it: what [`Game::start`] picks is not decided yet. Looks the same however
     /// the viewer sits, because there is no viewer; seat 0's side is the near one.
     ///
+    /// Draw it in the dark colours of the site (`prefers-color-scheme: dark` in `styles.css`): the
+    /// preview puts it on the dark page's background, as every game's is.
+    ///
     /// The SVG is rendered without text (there are no fonts on the server), so the picture must
     /// say everything with shapes. The default is no picture, and the preview has only words.
     fn picture(state: Option<&Self::State>) -> Option<String> {

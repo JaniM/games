@@ -23,11 +23,6 @@ export function viewerSeat(mySeat: Seat | null, state: UtttState | null): Seat {
   return mySeat ?? state?.x ?? 0;
 }
 
-/** How many small boards `seat` has won. */
-export function boardsWon(state: UtttState, seat: Seat): number {
-  return state.boards.filter((board) => board.type === "won" && board.seat === seat).length;
-}
-
 /** A place on the board as a person says it: "cell 3 of board 5". */
 export function placeText(board: number, cell: number): string {
   return `cell ${cell + 1} of board ${board + 1}`;

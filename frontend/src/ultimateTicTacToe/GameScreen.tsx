@@ -19,7 +19,6 @@ import { Board } from "./Board";
 import { MarkIcon } from "./Mark";
 import {
   type Mark,
-  boardsWon,
   frameText,
   markName,
   markOf,
@@ -116,7 +115,6 @@ export function GameScreen({
 
   const state = snapshot.state;
   const mySeat = seatOf(snapshot, userId);
-  // The opponent is over the board and the viewer under it, as in any game played on a screen.
   const viewer = viewerSeat(mySeat, state);
   const opponent = (1 - viewer) as Seat;
   const connected = view.connection === "open";
@@ -231,14 +229,21 @@ export function GameScreen({
       {canJoin && <JoinPanel connected={connected} join={join} onJoin={onJoin} />}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
 
-      <PlayerBar
-        edge="above"
-        name={barNameOf(snapshot, opponent, mySeat)}
-        mark={board ? markOf(board, opponent) : null}
-        boards={board ? boardsWon(board, opponent) : 0}
-        toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
-        empty={opponent >= snapshot.players.length}
-      />
+      {/* Both players are in one row over the board, to leave the height to the board. The viewer is first. */}
+      <div className="player-bars">
+        <PlayerBar
+          name={barNameOf(snapshot, viewer, mySeat)}
+          mark={board ? markOf(board, viewer) : null}
+          toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
+          empty={viewer >= snapshot.players.length}
+        />
+        <PlayerBar
+          name={barNameOf(snapshot, opponent, mySeat)}
+          mark={board ? markOf(board, opponent) : null}
+          toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
+          empty={opponent >= snapshot.players.length}
+        />
+      </div>
       <div className="board-wrap ttt-wrap">
         <Board
           state={board}
@@ -250,14 +255,6 @@ export function GameScreen({
           onCue={onCue}
         />
       </div>
-      <PlayerBar
-        edge="below"
-        name={barNameOf(snapshot, viewer, mySeat)}
-        mark={board ? markOf(board, viewer) : null}
-        boards={board ? boardsWon(board, viewer) : 0}
-        toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
-        empty={viewer >= snapshot.players.length}
-      />
 
       {reviewPanel}
       {over || !reviewPanel ? status : null}
@@ -266,28 +263,27 @@ export function GameScreen({
 }
 
 interface PlayerBarProps {
-  /** Where the bar is: over the board or under it. The highlight is on the edge toward the board. */
-  edge: "above" | "below";
   name: string;
   /** Null before the game starts: nobody is X yet. */
   mark: Mark | null;
-  /** How many small boards the player holds. */
-  boards: number;
   toMove: boolean;
   empty: boolean;
 }
 
-function PlayerBar({ edge, name, mark, boards, toMove, empty }: PlayerBarProps) {
+function PlayerBar({ name, mark, toMove, empty }: PlayerBarProps) {
   return (
-    <div className={`player-bar player-bar-${edge}${toMove ? " player-bar-active" : ""}`}>
+    <div className={toMove ? "player-bar player-bar-active" : "player-bar"}>
       <span className={`player-mark${mark ? "" : " player-mark-none"}`} aria-hidden="true">
         {mark && <MarkIcon mark={mark} />}
       </span>
-      <span className={empty ? "player-name muted" : "player-name"}>{name}</span>
+      {/* A name too long for the bar is cut off; the whole of it is in the tooltip. */}
+      <span className={empty ? "player-name muted" : "player-name"} title={name}>
+        {name}
+      </span>
       {/* The mark says it to the eye; its name is for a screen reader. */}
       {mark && <span className="visually-hidden">{markName(mark)}</span>}
-      {toMove && <span className="player-turn">to move</span>}
-      {boards > 0 && <span className="player-off">{boards === 1 ? "1 board" : `${boards} boards`}</span>}
+      {/* The tint and the ring say whose turn it is to the eye; the words are for a screen reader. */}
+      {toMove && <span className="visually-hidden">to move</span>}
     </div>
   );
 }

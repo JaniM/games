@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Games</title>
+    <script>
+      // The theme a visitor picked, on the page before it is first drawn, so that a dark page doesn't
+      // flash light while the app starts. It is the app's to keep from there (src/features/theme),
+      // and the key and the values are the ones of src/features/theme/storage.ts. With none saved,
+      // or Auto, the page follows the device.
+      try {
+        var theme = localStorage.getItem("games.theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch (err) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

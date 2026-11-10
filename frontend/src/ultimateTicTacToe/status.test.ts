@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { marks, utttSnapshotOf, utttState, wonBoard } from "../fixtures";
 import {
   boardLabel,
-  boardsWon,
   cellLabel,
   frameText,
   markName,
@@ -38,27 +37,6 @@ describe("the viewer", () => {
   it("is X's seat for someone who only watches, and seat 0 before there is a game", () => {
     expect(viewerSeat(null, utttState({ x: 1 }))).toBe(1);
     expect(viewerSeat(null, null)).toBe(0);
-  });
-});
-
-describe("boardsWon", () => {
-  it("counts the boards each seat holds, not the drawn ones", () => {
-    const state = utttState({
-      cells: marks({
-        0: wonBoard(0),
-        1: wonBoard(0, [0, 4, 8]),
-        2: wonBoard(1),
-        // Full with no line: drawn.
-        3: { 0: 0, 1: 1, 2: 0, 3: 0, 4: 1, 5: 1, 6: 1, 7: 0, 8: 0 },
-      }),
-    });
-
-    expect(boardsWon(state, 0)).toBe(2);
-    expect(boardsWon(state, 1)).toBe(1);
-  });
-
-  it("is none at the start", () => {
-    expect(boardsWon(utttState(), 0)).toBe(0);
   });
 });
 

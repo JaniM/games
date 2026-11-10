@@ -56,8 +56,22 @@
   background: var(--bg);
 }
 
+/*
+ * The dark colours, twice: for a device that is set to dark (unless the person picked light in
+ * the account menu), and for the person who picked dark (`data-theme` on the root element, see
+ * `features/theme`). The two blocks must hold the same, and a test checks that they do.
+ * `color-scheme` makes what the browser draws (fields, scroll bars) follow the choice.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16140f;
     --fg: #efebe3;
     --muted: #a39c8f;
@@ -68,6 +82,18 @@
     --mark-o: #7cc2cc;
     --on-accent: #16140f;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16140f;
+  --fg: #efebe3;
+  --muted: #a39c8f;
+  --card: #1f1c16;
+  --rule: #2f2b23;
+  --line: #6d675a;
+  --accent: #e08a6a;
+  --mark-o: #7cc2cc;
+  --on-accent: #16140f;
 }
 
 *,
@@ -891,22 +917,91 @@ form.name-control .button {
 }
 
 /*
+ * The theme in the account menu: its name, and Auto, Light and Dark side by side. The radios are
+ * hidden and their labels are the buttons; the picked one is tinted and in the accent, as what
+ * is picked is elsewhere. It wraps on a narrow panel rather than growing it.
+ */
+.theme {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  color: var(--muted);
+}
+
+.theme-options {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.theme-option {
+  cursor: pointer;
+}
+
+.theme-name {
+  display: block;
+  padding: 0 0.5rem;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.theme-option:hover .theme-name {
+  color: var(--accent);
+}
+
+.theme-option:has(input:checked) .theme-name {
+  color: var(--accent);
+  background: var(--tint);
+  border-color: var(--accent);
+}
+
+/* The radio is hidden, so its label takes the focus ring. */
+.theme-option:has(input:focus-visible) .theme-name {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
  * The board fills the screen, and everything else on the page is as wide as the board.
  *
  * The board is as wide as the page, so the page is as wide as the board should be: the width
  * at which its height (the board is 720 by 520, see `geometry.ts`) is what is left of the screen
- * after everything above and below it (`--game-chrome`: both player bars and the status under
- * the board), plus the page's own padding. Never wider than the window, and not
- * narrower than 40rem, so that a short window gets a board it can read and scrolls, as it
- * always did, instead of a small one. Err on the high side: too much chrome leaves a little
- * room, too little scrolls.
+ * after everything above and below it (`--game-chrome`), plus the page's own padding. Never
+ * wider than the window, and not narrower than 40rem, so that a short window gets a board it
+ * can read and scrolls, as it always did, instead of a small one.
+ *
+ * The chrome is counted in rem from the paddings and line heights (1.5) of what is there, and
+ * rounded up: too much leaves a little room, too little pushes the bottom of the page off the
+ * screen. It is for the fullest the page gets while a game is played, so that a line coming or
+ * going under the board does not resize it and move what the player is pressing.
+ *
+ *   6.75 = 3.25 + 1 of padding, and the row of the two player bars (2.5)
+ * + 8.5  = the status band with every line it has (turn, a line under it, a warning, the buttons:
+ *          8.1875; ultimate tic-tac-toe has no warning), or the review bar instead (7.75 at most)
+ *
+ * Two states hold more, and the board is smaller for as long as they last (`:has` picks them):
+ *   - A panel over the board, to invite or to join (10 at most), with the status band without
+ *     its buttons (4.75): 6.75 + 10 + 4.75 = 21.5.
+ *   - The result of a game that is over (7.325, see `.result`) under the review bar (5.5 at
+ *     most): 6.75 + 5.5 + 7.325 = 19.575, up to 19.75.
+ *
+ * The square board below has the same chrome: it is the same bars, status, review and result.
  */
 .game-page {
-  --game-chrome: 14.5rem;
+  --game-chrome: 15.25rem;
   max-width: min(100%, max(40rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 3rem)));
   /* Room for the nav and the name along the top, and not more. */
   padding-top: 3.25rem;
   padding-bottom: 1rem;
+}
+
+.game-page:has(.panel) {
+  --game-chrome: 21.5rem;
+}
+
+.game-page:has(.result) {
+  --game-chrome: 19.75rem;
 }
 
 /* Where the browser has them, the units that leave out the address bar of a phone. */
@@ -1033,7 +1128,15 @@ form.name-control .button {
   color: var(--accent);
 }
 
-/* The end of a game, in the place of the status under the board: who won, and the way out. */
+/*
+ * The end of a game, in the place of the status under the board: who won, and the way out.
+ *
+ * Its size is static, whatever it says: the rematch line comes and goes, and a draw has no
+ * detail, and none of it may resize the block, which would resize the board (`--game-chrome`).
+ * So it has three lines and no more: the kicker (1.3125), the title (2.0125) and the notes
+ * (1.5), which hold the detail and the rematch line side by side (`.result-notes`). With the
+ * padding (1.5) and the borders (0.25) that is 6.575, and 7.325 with the margin.
+ */
 .result {
   display: flex;
   flex-wrap: wrap;
@@ -1071,7 +1174,15 @@ form.name-control .button {
   color: var(--muted);
 }
 
-/* Where the rematch stands. Empty, and so no height, when there is nothing to say. */
+/* The detail and the rematch line, on one line that is there when both are empty. */
+.result-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  min-height: 1.5rem;
+}
+
+/* Where the rematch stands, or what went wrong. */
 .result-rematch {
   margin: 0;
   color: var(--muted);
@@ -1181,29 +1292,36 @@ form.name-control .button {
 }
 
 /*
- * The two players: the viewer over the board, the opponent under it. The one to move is
- * tinted, with a line in the accent on the edge that faces the board, as if the bar were
- * joined to it. The line is there, transparent, on the other bar too, so that a turn passing
- * moves nothing.
+ * The two players, side by side over the board (`.player-bars`): the viewer first. The one to
+ * move is tinted, with a line in the accent on the edge that faces the board, as if the bar
+ * were joined to it. The line is there, transparent, on the other bar too, so that a turn
+ * passing moves nothing.
  */
 .player-bar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.625rem;
+  gap: 0.625rem;
   min-height: 2.25rem;
   padding: 0.25rem 0.75rem;
   border: 0 solid transparent;
 }
 
-.player-bar-above {
+/*
+ * Both bars are in one row over the board, to leave the height to the board: the same width
+ * each, and the highlight on the bottom edge, the one toward the board. The row is 2.5 tall in
+ * all (`--game-chrome`), always one line: a name too long for its bar is cut off with an ellipsis
+ * (see `.player-name`), and the rest of the bar keeps its room.
+ */
+.player-bars {
+  display: flex;
+  gap: 0.5rem;
   margin-bottom: 0.25rem;
-  border-bottom-width: 2px;
 }
 
-.player-bar-below {
-  margin-top: 0.25rem;
-  border-top-width: 2px;
+.player-bars .player-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  border-bottom-width: 2px;
 }
 
 .player-bar-active {
@@ -1211,8 +1329,13 @@ form.name-control .button {
   border-color: var(--accent);
 }
 
+/* The one part of the bar that gives way: a name that doesn't fit ends in an ellipsis. */
 .player-name {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .player-bar-active .player-name {
@@ -1226,19 +1349,14 @@ form.name-control .button {
 
 /* The count of checkers borne off sits at the far end, in columns that line up. */
 .player-off {
+  flex: none;
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.player-turn {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
 .swatch {
+  flex: none;
   width: 1rem;
   height: 1rem;
   border-radius: 50%;
@@ -1268,6 +1386,7 @@ form.name-control .button {
 /* A player's mark, in a bar where long backgammon has its swatch. The player to move has the same ring. */
 .player-mark {
   display: block;
+  flex: none;
   width: 1.25rem;
   height: 1.25rem;
   border-radius: 50%;
@@ -1313,13 +1432,21 @@ form.name-control .button {
   --swatch-stroke: #6b655c;
 }
 
+/* The dark wood, twice, as the dark colours at the top are. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --board-frame: #4a3826;
     --board-bar: #33261a;
     --tri-a: #c8b48f;
     --tri-b: #8a5a3b;
   }
+}
+
+:root[data-theme="dark"] {
+  --board-frame: #4a3826;
+  --board-bar: #33261a;
+  --tri-a: #c8b48f;
+  --tri-b: #8a5a3b;
 }
 
 .board {

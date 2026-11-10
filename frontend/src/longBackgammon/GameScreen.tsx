@@ -238,15 +238,24 @@ export function GameScreen({
       {canJoin && <JoinPanel connected={connected} join={join} onJoin={onJoin} />}
       {mySeat !== null && waiting && <InviteBox url={inviteUrl} />}
 
-      {/* The viewer is on top: the board is turned to put their head in the top right corner. */}
-      <PlayerBar
-        edge="above"
-        name={barNameOf(snapshot, viewer, mySeat)}
-        colour={board ? colourOf(viewer, board, viewer) : null}
-        off={board?.off[viewer] ?? 0}
-        toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
-        empty={viewer >= snapshot.players.length}
-      />
+      {/* Both players are in one row over the board, to leave the height to the board. The viewer is
+          first: the board is turned to put their head in the top right corner. */}
+      <div className="player-bars">
+        <PlayerBar
+          name={barNameOf(snapshot, viewer, mySeat)}
+          colour={board ? colourOf(viewer, board, viewer) : null}
+          off={board?.off[viewer] ?? 0}
+          toMove={board !== null && board.phase.type !== "over" && board.turn === viewer}
+          empty={viewer >= snapshot.players.length}
+        />
+        <PlayerBar
+          name={barNameOf(snapshot, opponent, mySeat)}
+          colour={board ? colourOf(opponent, board, viewer) : null}
+          off={board?.off[opponent] ?? 0}
+          toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
+          empty={opponent >= snapshot.players.length}
+        />
+      </div>
       <div className="board-wrap">
         <Board
           state={board}
@@ -277,14 +286,6 @@ export function GameScreen({
           </button>
         )}
       </div>
-      <PlayerBar
-        edge="below"
-        name={barNameOf(snapshot, opponent, mySeat)}
-        colour={board ? colourOf(opponent, board, viewer) : null}
-        off={board?.off[opponent] ?? 0}
-        toMove={board !== null && board.phase.type !== "over" && board.turn === opponent}
-        empty={opponent >= snapshot.players.length}
-      />
 
       {reviewPanel}
       {over || !reviewPanel ? status : null}
@@ -293,8 +294,6 @@ export function GameScreen({
 }
 
 interface PlayerBarProps {
-  /** Where the bar is: over the board or under it. The highlight is on the edge toward the board. */
-  edge: "above" | "below";
   name: string;
   /** Null before the game starts: nobody is White yet. */
   colour: Colour | null;
@@ -303,14 +302,18 @@ interface PlayerBarProps {
   empty: boolean;
 }
 
-function PlayerBar({ edge, name, colour, off, toMove, empty }: PlayerBarProps) {
+function PlayerBar({ name, colour, off, toMove, empty }: PlayerBarProps) {
   return (
-    <div className={`player-bar player-bar-${edge}${toMove ? " player-bar-active" : ""}`}>
+    <div className={toMove ? "player-bar player-bar-active" : "player-bar"}>
       <span className={`swatch swatch-${colour ?? "none"}`} aria-hidden="true" />
-      <span className={empty ? "player-name muted" : "player-name"}>{name}</span>
+      {/* A name too long for the bar is cut off; the whole of it is in the tooltip. */}
+      <span className={empty ? "player-name muted" : "player-name"} title={name}>
+        {name}
+      </span>
       {/* The swatch says it to the eye; the name of the colour is for a screen reader. */}
       {colour && <span className="visually-hidden">{colour === "white" ? "White" : "Black"}</span>}
-      {toMove && <span className="player-turn">to move</span>}
+      {/* The tint and the ring say whose turn it is to the eye; the words are for a screen reader. */}
+      {toMove && <span className="visually-hidden">to move</span>}
       {off > 0 && <span className="player-off">{off} borne off</span>}
     </div>
   );

@@ -1,7 +1,7 @@
 //! The board as an SVG, for the preview of a link to a game (see `preview`).
 //!
 //! It draws what `frontend/src/longBackgammon/Board.tsx` and `Dice.tsx` draw, from the places
-//! in `geometry.ts` and `layout.ts`, in the light palette of `styles.css`: the frame, the points,
+//! in `geometry.ts` and `layout.ts`, in the dark palette of `styles.css`: the frame, the points,
 //! the checkers, the trays with what is borne off, and the dice. The board is seen from seat 0's
 //! side, whose head is top right and home bottom right (see `layout.ts`'s `pointSlot`). What only
 //! matters to someone at the board (the moves they may make, motion) is left out, and so is the
@@ -10,11 +10,12 @@
 
 use super::{Phase, State};
 
-// The light palette of `styles.css`.
-const FRAME: &str = "#6f5238";
-const BAR: &str = "#4f3a27";
-const TRI_A: &str = "#e4d3b4";
-const TRI_B: &str = "#a8704c";
+// The dark palette of `styles.css` (`prefers-color-scheme: dark`). Only the wood changes in it:
+// the checkers and the dice are the same in both.
+const FRAME: &str = "#4a3826";
+const BAR: &str = "#33261a";
+const TRI_A: &str = "#c8b48f";
+const TRI_B: &str = "#8a5a3b";
 const BOARD_TEXT: &str = "#efe3cc";
 const CHECKER_WHITE: (&str, &str) = ("#fbf8f0", "#3a2f22");
 const CHECKER_BLACK: (&str, &str) = ("#2a2622", "#0e0c0a");
