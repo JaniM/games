@@ -4,6 +4,13 @@ import { z } from "zod";
 /** The singleton key of the one `newGame` row. */
 export const NEW_GAME_ID = "current";
 
+/** How well the bot plays, as the server names its levels. */
+export const BOT_LEVELS = ["easy", "medium", "hard"] as const;
+export type BotLevel = (typeof BOT_LEVELS)[number];
+
+/** The level before the player picks one: the one the server plays when it is not told. */
+export const DEFAULT_LEVEL: BotLevel = "medium";
+
 /**
  * The dialog for creating a game, and the request it makes. No row means no dialog; the
  * dialog is open exactly as long as the row is. `state` says where it stands:
@@ -21,6 +28,8 @@ export const newGame = table(
     kind: z.string(),
     /** Play against the computer, not a friend who follows a link. */
     bot: z.boolean(),
+    /** How well the computer plays. Only sent, and only offered, with `bot`. */
+    level: z.enum(BOT_LEVELS),
     /** Put the game in the public list once it has started. */
     public: z.boolean(),
     error: z.string().nullable(),

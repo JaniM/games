@@ -68,7 +68,10 @@ mod rules;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::game::{Game, Rejection, StateError};
+use crate::{
+    bot::{Level, System},
+    game::{Game, Rejection, StateError},
+};
 use rules::{BoardState, Cells, Outcome};
 
 /// The game itself. It has no data: everything is in its [`State`].
@@ -401,8 +404,12 @@ impl Game for UltimateTicTacToe {
         state.forfeit(seat)
     }
 
-    fn bot_action(state: &State, seat: usize) -> Option<Action> {
-        bot::action(state, seat)
+    fn bot_turn(state: &State, seat: usize) -> bool {
+        bot::to_move(state, seat)
+    }
+
+    fn bot_action(state: &State, seat: usize, level: Level) -> Option<Action> {
+        bot::action(state, seat, level, &mut System)
     }
 }
 

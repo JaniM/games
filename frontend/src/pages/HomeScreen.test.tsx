@@ -40,6 +40,7 @@ function render(overrides: Partial<HomeScreenProps> = {}) {
         request={undefined}
         onNewGame={noop}
         onOpponent={noop}
+        onLevel={noop}
         onPublic={noop}
         onCreate={noop}
         onClose={noop}
@@ -68,6 +69,7 @@ const request = (overrides: Partial<NewGameRow> = {}): NewGameRow => ({
   state: "choosing",
   kind: "long-backgammon",
   bot: false,
+  level: "medium",
   public: true,
   error: null,
   ...overrides,
@@ -296,6 +298,49 @@ describe("the dialog for creating a game", () => {
     expect(html).toMatch(/<input[^>]*type="radio"[^>]*checked=""[^>]*\/><span class="choice-name">Play vs a bot/);
     expect(html).toContain("Create game");
     expect(html).not.toContain("Start game");
+  });
+
+  it("offers no level for a friend, who is not a bot", () => {
+    const html = render({ request: request({ bot: false }) });
+
+    expect(html).not.toContain("Easy");
+    expect(html).not.toContain('name="level"');
+  });
+
+  it("offers the three levels once the bot is picked, with medium picked to begin with", () => {
+    const html = render({ request: request({ bot: true }) });
+
+    const levels = [...html.matchAll(/<input[^>]*name="level"[^>]*\/><span class="segmented-name">(\w+)</g)].map(
+      (match) => match[1],
+    );
+    expect(levels).toEqual(["Easy", "Medium", "Hard"]);
+    expect(html).toMatch(/<input[^>]*name="level"[^>]*checked=""[^>]*\/><span class="segmented-name">Medium/);
+    expect(html.match(/name="level"[^>]*checked=""/g)).toHaveLength(1);
+  });
+
+  it("lays the three levels out in one row, as a segmented choice and not a list", () => {
+    const html = render({ request: request({ bot: true }) });
+
+    // The levels are cells of one control, and the opponent above them is still a list.
+    expect(html.match(/class="segmented-option"/g)).toHaveLength(3);
+    expect(html.match(/<fieldset[^>]*class="segmented"/g)).toHaveLength(1);
+    expect(html.match(/<fieldset[^>]*class="choice"/g)).toHaveLength(1);
+    // The radios are hidden but still radios, so the arrow keys move between the levels.
+    expect(html.match(/<input[^>]*class="visually-hidden"[^>]*type="radio"[^>]*name="level"/g)).toHaveLength(3);
+  });
+
+  it("shows the level that was picked", () => {
+    const html = render({ request: request({ bot: true, level: "hard" }) });
+
+    expect(html).toMatch(/<input[^>]*name="level"[^>]*checked=""[^>]*\/><span class="segmented-name">Hard/);
+    expect(html.match(/name="level"[^>]*checked=""/g)).toHaveLength(1);
+  });
+
+  it("can't change the level while the game is being made, like the opponent", () => {
+    const html = render({ request: request({ bot: true, state: "creating" }) });
+
+    // The opponent and the level, and the box for a public game, are all fixed now.
+    expect(html.match(/<fieldset[^>]*disabled=""/g)).toHaveLength(2);
   });
 
   it("has no choice of opponent for a game with no bot, only the link to send", () => {

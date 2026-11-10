@@ -19,7 +19,7 @@ use sqlx::PgPool;
 
 use crate::{
     auth::AuthUser,
-    bot::BOT_USER,
+    bot::Level,
     error::ApiError,
     game_id::GameId,
     rematch::Rematch,
@@ -35,6 +35,9 @@ pub struct NewGame {
     /// Play against the computer. The game starts at once, with the bot in seat 1.
     #[serde(default)]
     bot: bool,
+    /// How well the bot plays: `"easy"`, `"medium"` or `"hard"`. Only with `bot`; medium if left out.
+    #[serde(default)]
+    level: Option<Level>,
     /// Put the game in the public list once it has started. Off unless asked for: the id of a
     /// game that is listed is no secret any more.
     #[serde(default)]
@@ -51,9 +54,11 @@ pub struct Seat {
 
 /// `POST /api/games` with `{ "kind": "...", "bot": false, "public": false }`: creates a game,
 /// with the user in seat 0, and loads it. With `"bot": true` the computer takes the other seat
-/// and the game starts at once. With `"public": true` the game is in the public list once it
-/// has started (see [`list_public_games`]). `bot` and `public` can be left out, which is false.
-/// Answers 422 for a kind the server doesn't offer, and for a bot in a game that has none.
+/// and the game starts at once; `"level": "easy"`, `"medium"` or `"hard"` says which of the bots,
+/// and can be left out, which is medium. With `"public": true` the game is in the public list
+/// once it has started (see [`list_public_games`]). `bot` and `public` can be left out, which is
+/// false. Answers 422 for a kind the server doesn't offer, for a bot in a game that has none,
+/// and for a level with no bot to have it.
 pub async fn create_game(
     AuthUser(user): AuthUser,
     State(rooms): State<Rooms>,
@@ -63,8 +68,14 @@ pub async fn create_game(
         .games()
         .get(&body.kind)
         .ok_or(ApiError::Invalid("unknown kind of game"))?;
+    if body.level.is_some() && !body.bot {
+        return Err(ApiError::Invalid("a level is for a game against the bot"));
+    }
     let game_id = if body.bot {
-        rooms.create_against_bot(engine, user, body.public).await
+        let level = body.level.unwrap_or(Level::DEFAULT);
+        rooms
+            .create_against_bot(engine, user, level, body.public)
+            .await
     } else {
         rooms.create(engine, user, body.public).await
     }
@@ -188,7 +199,7 @@ pub async fn list_games(
                       WHERE gp.game_id = g.id
                       ORDER BY gp.seat),
                 -- A guest here is one in a room (`read_players` in `room`): keep the two the same.
-                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND u.id <> $3
+                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND NOT u.is_bot
                       FROM game_players gp
                       JOIN users u ON u.id = gp.user_id
                       WHERE gp.game_id = g.id
@@ -201,7 +212,6 @@ pub async fn list_games(
     )
     .bind(user)
     .bind(LIST_LIMIT)
-    .bind(BOT_USER)
     .fetch_all(&pool)
     .await
     .map_err(ApiError::database("could not list a user's games"))?;
@@ -277,7 +287,7 @@ pub async fn list_public_games(State(pool): State<PgPool>) -> Result<Json<Public
                       WHERE gp.game_id = g.id
                       ORDER BY gp.seat),
                 -- A guest here is one in a room (`read_players` in `room`): keep the two the same.
-                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND u.id <> $2
+                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND NOT u.is_bot
                       FROM game_players gp
                       JOIN users u ON u.id = gp.user_id
                       WHERE gp.game_id = g.id
@@ -288,7 +298,6 @@ pub async fn list_public_games(State(pool): State<PgPool>) -> Result<Json<Public
          LIMIT $1",
     )
     .bind(LIST_LIMIT)
-    .bind(BOT_USER)
     .fetch_all(&pool)
     .await
     .map_err(ApiError::database("could not list the public games"))?;
@@ -331,7 +340,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bot::BOT_USER,
+        bot::Level,
         game,
         test_util::{Client, Quick, Solo, Tally, TestApp, bearer},
     };
@@ -490,7 +499,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::CREATED);
         assert_eq!(reply.json["seat"], 0);
         let game_id = reply.json["gameId"].as_str().unwrap();
-        let bot = BOT_USER.to_string();
+        let bot = Level::Medium.user().to_string();
         assert_eq!(
             stored(&pool, game_id).await,
             (
@@ -504,9 +513,102 @@ mod tests {
         let listed = list(&app, &token).await;
         assert_eq!(listed[0]["joined"], 2);
         assert_eq!(listed[0]["started"], true);
-        assert_eq!(listed[0]["playerNames"], json!([null, "Bot"]));
+        assert_eq!(listed[0]["playerNames"], json!([null, "Medium bot"]));
         // The user is a guest, and the bot is not.
         assert_eq!(listed[0]["playerGuests"], json!([true, false]));
+    }
+
+    #[sqlx::test]
+    async fn each_level_has_its_own_bot_in_the_other_seat(pool: PgPool) {
+        let app = app(pool.clone());
+        let (user_id, token) = app.register_user().await;
+
+        for (level, name) in [
+            ("easy", "Easy bot"),
+            ("medium", "Medium bot"),
+            ("hard", "Hard bot"),
+        ] {
+            let reply = app.create_bot_game_at(&token, "tally", level).await;
+
+            assert_eq!(reply.status, StatusCode::CREATED, "{level}");
+            let game_id = reply.json["gameId"].as_str().unwrap();
+            let (_, _, _, players) = stored(&pool, game_id).await;
+            let bot = Level::ALL
+                .into_iter()
+                .find(|bot| bot.user().to_string() == players[1])
+                .expect("the other seat is a bot");
+            assert_eq!(players[0], user_id);
+            assert_eq!(format!("{bot:?}").to_lowercase(), level);
+            // The list names it by its level, and none of them is a guest.
+            let listed = list(&app, &token).await;
+            let game = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|game| game["gameId"] == game_id)
+                .unwrap();
+            assert_eq!(game["playerNames"], json!([null, name]));
+            assert_eq!(game["playerGuests"], json!([true, false]));
+        }
+    }
+
+    #[sqlx::test]
+    async fn a_game_against_the_bot_with_no_level_is_against_the_middle_one(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, token) = app.register_user().await;
+
+        let reply = app.create_bot_game(&token, "tally").await;
+
+        let game_id = reply.json["gameId"].as_str().unwrap();
+        let (_, _, _, players) = stored(&pool, game_id).await;
+        assert_eq!(players[1], Level::Medium.user().to_string());
+    }
+
+    #[sqlx::test]
+    async fn a_level_that_is_not_one_of_the_three_is_refused(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, token) = app.register_user().await;
+
+        for level in ["impossible", "Hard", ""] {
+            let reply = app.create_bot_game_at(&token, "tally", level).await;
+
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{level:?}");
+        }
+        assert_eq!(
+            count_games(&pool).await,
+            0,
+            "a refused game must not be left behind"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_level_is_refused_for_a_game_with_no_bot_in_it(pool: PgPool) {
+        let app = app(pool.clone());
+        let (_, token) = app.register_user().await;
+
+        for body in [
+            json!({ "kind": "tally", "bot": false, "level": "hard" }),
+            json!({ "kind": "tally", "level": "easy" }),
+        ] {
+            let reply = app
+                .send(
+                    Method::POST,
+                    "/api/games",
+                    Some(&bearer(&token)),
+                    Some(body),
+                )
+                .await;
+
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        assert_eq!(count_games(&pool).await, 0);
+    }
+
+    async fn count_games(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM games")
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     #[sqlx::test]
@@ -947,7 +1049,7 @@ mod tests {
 
         assert_eq!(ids(&games), [game_id.as_str()]);
         // The bot is a player with a name of its own, and is not a guest.
-        assert_eq!(games[0]["playerNames"], json!(["Ada", "Bot"]));
+        assert_eq!(games[0]["playerNames"], json!(["Ada", "Medium bot"]));
         assert_eq!(games[0]["playerGuests"], json!([true, false]));
     }
 
@@ -1156,7 +1258,7 @@ mod tests {
         let next = reply.json["rematch"]["gameId"].as_str().unwrap();
         let (_, _, state, players) = stored(&pool, next).await;
         assert_eq!(state, Some(json!({ "over": false })));
-        assert_eq!(players, vec![user_id, BOT_USER.to_string()]);
+        assert_eq!(players, vec![user_id, Level::Medium.user().to_string()]);
     }
 
     #[sqlx::test]

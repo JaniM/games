@@ -46,6 +46,8 @@ export const createGameRequest = effect({
                 body: JSON.stringify({
                   kind: request.kind,
                   bot: request.bot,
+                  // The server refuses a level for a game with no bot in it.
+                  ...(request.bot ? { level: request.level } : {}),
                   public: request.public,
                 }),
                 signal: ctx.signal,

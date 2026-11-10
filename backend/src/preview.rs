@@ -28,7 +28,6 @@ use sqlx::PgPool;
 use tokio::sync::Semaphore;
 
 use crate::{
-    bot::BOT_USER,
     error::ApiError,
     game::{Engine, Games, StateError},
     game_id::GameId,
@@ -123,7 +122,7 @@ async fn find(pool: &PgPool, id: &GameId) -> Result<Option<Found>, sqlx::Error> 
                       WHERE gp.game_id = g.id
                       ORDER BY gp.seat),
                 -- A guest here is one in a room (`read_players` in `room`): keep the two the same.
-                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND u.id <> $2
+                ARRAY(SELECT u.username IS NULL AND u.deleted_at IS NULL AND NOT u.is_bot
                       FROM game_players gp
                       JOIN users u ON u.id = gp.user_id
                       WHERE gp.game_id = g.id
@@ -132,7 +131,6 @@ async fn find(pool: &PgPool, id: &GameId) -> Result<Option<Found>, sqlx::Error> 
          WHERE g.id = $1",
     )
     .bind(id)
-    .bind(BOT_USER)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
@@ -610,7 +608,7 @@ mod tests {
         );
         assert_eq!(
             tag(text(&bot), "og:description").as_deref(),
-            Some("Player 1 vs Bot")
+            Some("Player 1 vs Medium bot")
         );
     }
 

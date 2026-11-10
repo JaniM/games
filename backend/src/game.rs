@@ -15,7 +15,7 @@ use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{long_backgammon::LongBackgammon, ultimate_tic_tac_toe::UltimateTicTacToe};
+use crate::{bot::Level, long_backgammon::LongBackgammon, ultimate_tic_tac_toe::UltimateTicTacToe};
 
 /// An action the rules don't allow. The reason goes back to the player who tried it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,8 +74,9 @@ pub trait Game: 'static {
     /// a game. A game that says so must have two players and implement [`Game::bot_action`].
     const BOT: bool = false;
 
-    /// What a room keeps in memory for a game that is being played.
-    type State: Serialize + DeserializeOwned + Send + 'static;
+    /// What a room keeps in memory for a game that is being played. It is `Clone` because a bot
+    /// works out its move on a thread of its own, from a copy (see [`Game::bot_action`]).
+    type State: Serialize + DeserializeOwned + Clone + Send + 'static;
     type Action: DeserializeOwned;
 
     /// Whether the game has ended and nobody has anything more to do in it. The server
@@ -154,16 +155,30 @@ pub trait Game: 'static {
         Err(Rejection::new("this game can't be forfeited"))
     }
 
-    /// The action the computer opponent plays for `seat` in this state, or `None` if it has
-    /// nothing to play: it isn't `seat`'s turn, or the game is over. Called again after every
+    /// Whether the computer opponent has something to play for `seat` in this state: it is
+    /// `seat`'s turn and the game isn't over. A room asks this whenever anything happens in it,
+    /// so it must be cheap, which is why it isn't left to [`Game::bot_action`]: that one may take
+    /// a while to decide. The two agree: `bot_action` has an action exactly when this is true.
+    fn bot_turn(state: &Self::State, seat: usize) -> bool {
+        let _ = (state, seat);
+        false
+    }
+
+    /// The action the computer opponent of the given level plays for `seat` in this state, or
+    /// `None` if it has nothing to play (see [`Game::bot_turn`]). Called again after every
     /// action, so the bot needs no memory of its own, and a game that was stored half way
     /// through the bot's turn carries on from there.
     ///
     /// The action goes through [`Game::apply`] like a player's, so the bot can't break the
     /// rules; but an action the rules refuse is a bug in the bot, and leaves it with no move.
-    /// Only games with [`Game::BOT`] need this.
-    fn bot_action(state: &Self::State, seat: usize) -> Option<Self::Action> {
-        let _ = (state, seat);
+    /// Only games with [`Game::BOT`] need this, and each of them plays all three levels (see
+    /// [`Level`]).
+    ///
+    /// **It may take a while** (a hard bot looks ahead), so it is never called on a thread that
+    /// serves requests: the room runs it as a blocking job (see [`Live::bot_job`]). Keep it to a
+    /// few milliseconds all the same, because the bot's opponent is waiting for it.
+    fn bot_action(state: &Self::State, seat: usize, level: Level) -> Option<Self::Action> {
+        let _ = (state, seat, level);
         None
     }
 
@@ -203,10 +218,19 @@ pub trait Live: Send {
     /// A picture of the board as it stands. See [`Game::picture`].
     fn picture(&self) -> Option<String>;
 
-    /// The game after the computer opponent plays for `seat`, or `None` if it has nothing to
-    /// play (see [`Game::bot_action`]).
-    fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>>;
+    /// Whether the computer opponent has something to play for `seat`. See [`Game::bot_turn`].
+    fn bot_turn(&self, seat: usize) -> bool;
+
+    /// The work of playing for the computer opponent of the given level in `seat`, which is to
+    /// say what [`Game::bot_action`] decides and [`Game::apply`] makes of it. It owns a copy of
+    /// the state, so it can be run anywhere, and the game it gives is the one after the bot plays,
+    /// or `None` if it has nothing to play. It can take a while, so run it where waiting is
+    /// harmless (`tokio::task::spawn_blocking`), not on a task that serves requests.
+    fn bot_job(&self, seat: usize, level: Level) -> BotJob;
 }
+
+/// A bot's move, to be worked out and made. See [`Live::bot_job`].
+pub type BotJob = Box<dyn FnOnce() -> Option<Box<dyn Live>> + Send>;
 
 struct Running<G: Game>(G::State);
 
@@ -240,20 +264,27 @@ impl<G: Game> Live for Running<G> {
         G::picture(Some(&self.0))
     }
 
-    fn bot_move(&self, seat: usize) -> Option<Box<dyn Live>> {
-        let action = G::bot_action(&self.0, seat)?;
-        match G::apply(&self.0, seat, action) {
-            Ok(next) => Some(Box::new(Running::<G>(next))),
-            Err(rejection) => {
-                tracing::error!(
-                    game = G::KIND,
-                    seat,
-                    reason = rejection.reason(),
-                    "the bot played against the rules"
-                );
-                None
+    fn bot_turn(&self, seat: usize) -> bool {
+        G::bot_turn(&self.0, seat)
+    }
+
+    fn bot_job(&self, seat: usize, level: Level) -> BotJob {
+        let state = self.0.clone();
+        Box::new(move || {
+            let action = G::bot_action(&state, seat, level)?;
+            match G::apply(&state, seat, action) {
+                Ok(next) => Some(Box::new(Running::<G>(next)) as Box<dyn Live>),
+                Err(rejection) => {
+                    tracing::error!(
+                        game = G::KIND,
+                        seat,
+                        reason = rejection.reason(),
+                        "the bot played against the rules"
+                    );
+                    None
+                }
             }
-        }
+        })
     }
 }
 
@@ -487,7 +518,7 @@ mod tests {
 
     struct Counted;
 
-    #[derive(Serialize)]
+    #[derive(Clone, Serialize)]
     struct CountedState(u32);
 
     impl<'de> Deserialize<'de> for CountedState {

@@ -19,8 +19,20 @@ const NAME_ERROR = "name must be 1 to 32 characters, without control characters"
 /** A game id the way the server makes them: 12 characters of lower case letters and digits. Here the nth, so tests can name it. */
 export const gameIdOf = (n: number) => `game${String(n).padStart(8, "0")}`;
 
-/** The computer opponent's user id on the fake server. It shows up as the player named "Bot". */
-export const BOT_USER_ID = "bot";
+/**
+ * The computer opponents' user ids on the fake server, by level. They show up as the players named
+ * "Easy bot", "Medium bot" and "Hard bot".
+ */
+export const BOT_USER_IDS = { easy: "bot-easy", medium: "bot-medium", hard: "bot-hard" } as const;
+
+/** The bot that a game against the bot has when no level is asked for: the middle one, as on the server. */
+export const BOT_USER_ID = BOT_USER_IDS.medium;
+
+const BOT_NAMES = new Map<string, string>([
+  [BOT_USER_IDS.easy, "Easy bot"],
+  [BOT_USER_IDS.medium, "Medium bot"],
+  [BOT_USER_IDS.hard, "Hard bot"],
+]);
 
 /**
  * A user on the fake server. Several tokens can be the same user: an account has a session for
@@ -51,7 +63,8 @@ export interface FakeGame {
  * A stand-in for the backend, with the same contract: `POST /api/register` issues
  * credentials, `GET /api/me` and `PATCH /api/me` act on the user a bearer token
  * belongs to, `POST /api/games`, `GET /api/games` and `POST /api/games/{id}/join`
- * keep a list of games (two seats each; `POST` takes `public`, off if left out),
+ * keep a list of games (two seats each; `POST` takes `public`, off if left out, and `bot` with a `level` of
+ * `easy`, `medium` (if left out) or `hard`),
  * `GET /api/public-games` lists the public games that have started, newest change first, and needs
  * no token, `POST` and `DELETE /api/games/{id}/rematch` answer as the real ones do to a game that
  * is unknown (404), not the user's (403) or not over (409),
@@ -84,11 +97,11 @@ export function fakeServer() {
   /** The names of a game's players by seat, and which of them are guests, as the server lists them. */
   const playersOf = (game: FakeGame) => ({
     playerNames: game.players.map((id) =>
-      id === BOT_USER_ID ? "Bot" : ([...users.values()].find((u) => u.userId === id)?.name ?? null),
+      BOT_NAMES.get(id) ?? [...users.values()].find((u) => u.userId === id)?.name ?? null,
     ),
-    // The bot is not a guest, and neither is anyone with a username.
+    // A bot is not a guest, and neither is anyone with a username.
     playerGuests: game.players.map(
-      (id) => id !== BOT_USER_ID && ![...users.values()].find((u) => u.userId === id)?.username,
+      (id) => !BOT_NAMES.has(id) && ![...users.values()].find((u) => u.userId === id)?.username,
     ),
   });
 
@@ -174,18 +187,27 @@ export function fakeServer() {
     const rematch = /^\/api\/games\/([^/]+)\/rematch$/.exec(path);
     const history = /^\/api\/games\/([^/]+)\/history$/.exec(path);
     if (path === "/api/games" && init?.method === "POST") {
-      const { kind, bot = false, public: isPublic = false } = JSON.parse(String(init.body)) as {
+      const {
+        kind,
+        bot = false,
+        level,
+        public: isPublic = false,
+      } = JSON.parse(String(init.body)) as {
         kind: string;
         bot?: boolean;
+        level?: string;
         public?: boolean;
       };
       if (kind !== "long-backgammon" && kind !== "ultimate-tic-tac-toe") {
         return new Response("unknown kind of game", { status: 422 });
       }
+      // As the server: a level is for a game against the bot, and is one of the three.
+      if (level !== undefined && !bot) return new Response("a level is for a game against the bot", { status: 422 });
+      if (level !== undefined && !(level in BOT_USER_IDS)) return new Response("unknown level", { status: 422 });
       const game = {
         id: gameIdOf(games.size + 1),
         kind,
-        players: bot ? [user.userId, BOT_USER_ID] : [user.userId],
+        players: bot ? [user.userId, BOT_USER_IDS[(level ?? "medium") as keyof typeof BOT_USER_IDS]] : [user.userId],
         updatedAt: tick(),
         public: isPublic,
       };

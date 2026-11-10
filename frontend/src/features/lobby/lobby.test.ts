@@ -1,6 +1,6 @@
 import { createDb } from "millpond";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BOT_USER_ID, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
+import { BOT_USER_ID, BOT_USER_IDS, fakeServer, fakeStorage, gameIdOf, issued, settle } from "../../testing";
 import { LOCATION_ID, locationState, router } from "../router";
 import { session } from "../session";
 import {
@@ -132,6 +132,7 @@ describe("the dialog for creating a game", () => {
       state: "choosing",
       kind: "long-backgammon",
       bot: false,
+      level: "medium",
       public: true,
       error: null,
     });
@@ -211,7 +212,12 @@ describe("choosing the opponent", () => {
     await settle();
 
     const post = fetchMock.mock.calls.find(([input]) => String(input) === "/api/games");
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ kind: "long-backgammon", bot: true, public: true });
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      kind: "long-backgammon",
+      bot: true,
+      level: "medium",
+      public: true,
+    });
     const [created] = [...server.games.values()];
     expect(created?.players).toHaveLength(2);
     expect(path(db)).toBe(`/games/${gameIdOf(1)}`);
@@ -232,6 +238,100 @@ describe("choosing the opponent", () => {
     db.ops.lobby.chooseOpponent({ bot: true });
 
     expect(row(db)).toMatchObject({ state: "creating", bot: false });
+  });
+});
+
+describe("choosing the level of the bot", () => {
+  const row = (db: TestDb) => db.read(newGame.get(NEW_GAME_ID));
+  const body = (fetchMock: ReturnType<typeof setup>["fetchMock"]) => {
+    const post = fetchMock.mock.calls.find(([input]) => String(input) === "/api/games");
+    return JSON.parse(String(post?.[1]?.body));
+  };
+
+  it("is medium until another is picked, and can be changed again", () => {
+    const { db } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    expect(row(db)?.level).toBe("medium");
+
+    db.ops.lobby.chooseLevel({ level: "hard" });
+    expect(row(db)?.level).toBe("hard");
+
+    db.ops.lobby.chooseLevel({ level: "easy" });
+    expect(row(db)?.level).toBe("easy");
+  });
+
+  it("starts again at medium when the dialog is opened again", () => {
+    const { db } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    db.ops.lobby.chooseLevel({ level: "hard" });
+    db.ops.lobby.closeNewGame();
+
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+
+    expect(row(db)?.level).toBe("medium");
+  });
+
+  it("asks the server for a bot of the level that was picked, which sits in the other seat", async () => {
+    const { db, server, fetchMock } = setup();
+    db.ops.lobby.openNewGame({ kind: "ultimate-tic-tac-toe" });
+    db.ops.lobby.chooseOpponent({ bot: true });
+    db.ops.lobby.chooseLevel({ level: "hard" });
+
+    db.ops.lobby.createGame();
+    await settle();
+
+    expect(body(fetchMock)).toEqual({
+      kind: "ultimate-tic-tac-toe",
+      bot: true,
+      level: "hard",
+      public: true,
+    });
+    const [created] = [...server.games.values()];
+    expect(created?.players[1]).toBe(BOT_USER_IDS.hard);
+  });
+
+  it("sends no level for a friend, even if one was picked before going back to a friend", async () => {
+    const { db, server, fetchMock } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    db.ops.lobby.chooseOpponent({ bot: true });
+    db.ops.lobby.chooseLevel({ level: "easy" });
+    db.ops.lobby.chooseOpponent({ bot: false });
+
+    db.ops.lobby.createGame();
+    await settle();
+
+    expect(body(fetchMock)).toEqual({ kind: "long-backgammon", bot: false, public: true });
+    const [created] = [...server.games.values()];
+    expect(created?.players).toHaveLength(1);
+  });
+
+  it("remembers the level when the bot is dropped and picked again", () => {
+    const { db } = setup();
+    db.ops.lobby.openNewGame({ kind: "long-backgammon" });
+    db.ops.lobby.chooseOpponent({ bot: true });
+    db.ops.lobby.chooseLevel({ level: "hard" });
+
+    db.ops.lobby.chooseOpponent({ bot: false });
+    db.ops.lobby.chooseOpponent({ bot: true });
+
+    expect(row(db)).toMatchObject({ bot: true, level: "hard" });
+  });
+
+  it("does nothing with no dialog open", () => {
+    const { db } = setup();
+
+    db.ops.lobby.chooseLevel({ level: "hard" });
+
+    expect(row(db)).toBeUndefined();
+  });
+
+  it("can't change while the game is being made: the request has gone out as it was", async () => {
+    const { db } = setup();
+    startCreating(db);
+
+    db.ops.lobby.chooseLevel({ level: "hard" });
+
+    expect(row(db)).toMatchObject({ state: "creating", level: "medium" });
   });
 });
 
@@ -274,7 +374,7 @@ describe("choosing whether the game is public", () => {
     db.ops.lobby.createGame();
     await settle();
 
-    expect(body(fetchMock)).toEqual({ kind: "long-backgammon", bot: true, public: true });
+    expect(body(fetchMock)).toEqual({ kind: "long-backgammon", bot: true, level: "medium", public: true });
     expect([...server.games.values()].map((game) => game.public)).toEqual([true]);
   });
 
@@ -450,7 +550,7 @@ describe("the public list", () => {
         kind: "long-backgammon",
         finished: false,
         updatedAt: 10,
-        playerNames: ["Ada", "Bot"],
+        playerNames: ["Ada", "Medium bot"],
         playerGuests: [true, false],
       },
       {
@@ -668,7 +768,7 @@ describe("your games", () => {
       playerGuests: [true, false],
     });
     expect(db.read(myGames.get(gameIdOf(2)))).toMatchObject({
-      playerNames: ["Ada", "Bot"],
+      playerNames: ["Ada", "Medium bot"],
       playerGuests: [true, false],
     });
   });

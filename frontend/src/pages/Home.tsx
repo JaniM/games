@@ -9,6 +9,7 @@ import {
   loadGames,
   myGames,
   newGame,
+  chooseLevel,
   chooseOpponent,
   choosePublic,
   openNewGame,
@@ -25,6 +26,7 @@ export function Home() {
   const load = useOp(loadGames);
   const open = useOp(openNewGame);
   const opponent = useOp(chooseOpponent);
+  const level = useOp(chooseLevel);
   const makePublic = useOp(choosePublic);
   const create = useOp(createGame);
   const close = useOp(closeNewGame);
@@ -45,6 +47,7 @@ export function Home() {
       request={request}
       onNewGame={(kind) => open({ kind })}
       onOpponent={(bot) => opponent({ bot })}
+      onLevel={(picked) => level({ level: picked })}
       onPublic={(isPublic) => makePublic({ public: isPublic })}
       onCreate={() => create()}
       onClose={() => close()}

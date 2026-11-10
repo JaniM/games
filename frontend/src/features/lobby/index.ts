@@ -6,6 +6,7 @@ import {
   persistLobbySettings,
 } from "./effects";
 import {
+  chooseLevel,
   chooseOpponent,
   choosePublic,
   closeNewGame,
@@ -30,6 +31,7 @@ export const lobby = feature({
     startLobby,
     openNewGame,
     chooseOpponent,
+    chooseLevel,
     choosePublic,
     createGame,
     closeNewGame,
@@ -48,6 +50,7 @@ export const lobby = feature({
 
 // Components import definitions by value; they never need the assembled db.
 export {
+  chooseLevel,
   chooseOpponent,
   choosePublic,
   closeNewGame,
@@ -60,6 +63,9 @@ export {
 } from "./ops";
 export { loadPublic } from "./storage";
 export {
+  BOT_LEVELS,
+  type BotLevel,
+  DEFAULT_LEVEL,
   DEFAULT_PUBLIC,
   GAMES_LIST_ID,
   LOBBY_SETTINGS_ID,

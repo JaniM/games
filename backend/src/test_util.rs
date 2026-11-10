@@ -19,6 +19,7 @@ use crate::{
     AppState,
     account::Accounts,
     app,
+    bot::Level,
     game::{Game, Games, Rejection, StateError},
     preview::Pages,
     room::Rooms,
@@ -158,13 +159,26 @@ impl TestApp {
         reply.json["gameId"].as_str().unwrap().to_owned()
     }
 
-    /// Creates a game against the bot as the token's user. Returns the reply as it is.
+    /// Creates a game against the bot as the token's user, without saying which level. Returns
+    /// the reply as it is.
     pub async fn create_bot_game(&self, token: &str, kind: &str) -> Reply {
         self.send(
             Method::POST,
             "/api/games",
             Some(&bearer(token)),
             Some(json!({ "kind": kind, "bot": true })),
+        )
+        .await
+    }
+
+    /// Creates a game against the bot of the given level, which is sent as the client sends it.
+    /// Returns the reply as it is.
+    pub async fn create_bot_game_at(&self, token: &str, kind: &str, level: &str) -> Reply {
+        self.send(
+            Method::POST,
+            "/api/games",
+            Some(&bearer(token)),
+            Some(json!({ "kind": kind, "bot": true, "level": level })),
         )
         .await
     }
@@ -341,10 +355,11 @@ pub async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
 
 // Games for testing the room system.
 
-/// Two players take turns adding to a total. Seat 0 begins. Its bot adds 1 on its turn.
+/// Two players take turns adding to a total. Seat 0 begins. Its bot adds 1 on its turn, or 2 if
+/// it is the easy one and 3 if it is the hard one, so that a test can tell the levels apart.
 pub struct Tally;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TallyState {
     pub total: i64,
     pub turn: usize,
@@ -380,8 +395,17 @@ impl Game for Tally {
         TallyState { total: 0, turn: 0 }
     }
 
-    fn bot_action(state: &TallyState, seat: usize) -> Option<TallyAction> {
-        (state.turn == seat).then_some(TallyAction::Add { amount: 1 })
+    fn bot_turn(state: &TallyState, seat: usize) -> bool {
+        state.turn == seat
+    }
+
+    fn bot_action(state: &TallyState, seat: usize, level: Level) -> Option<TallyAction> {
+        let amount = match level {
+            Level::Medium => 1,
+            Level::Easy => 2,
+            Level::Hard => 3,
+        };
+        (state.turn == seat).then_some(TallyAction::Add { amount })
     }
 
     fn apply(
@@ -398,10 +422,121 @@ impl Game for Tally {
     }
 }
 
+/// How long the bot of [`Slow`] is busy with each move.
+pub const SLOW_THINKING: Duration = Duration::from_millis(400);
+
+/// [`Tally`] with a bot that takes [`SLOW_THINKING`] over every move, standing still on the
+/// thread it is run on, and in which either player may give up: for testing that a room goes on
+/// serving while its bot thinks, and what happens to a move that was being worked out when the
+/// game changed.
+pub struct Slow;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SlowState {
+    pub total: i64,
+    pub turn: usize,
+    pub over: bool,
+}
+
+impl Game for Slow {
+    const KIND: &'static str = "slow";
+    const NAME: &'static str = "Slow";
+    const PLAYERS: usize = 2;
+    const STATE_VERSION: u32 = 1;
+    const BOT: bool = true;
+    type State = SlowState;
+    type Action = TallyAction;
+
+    fn start() -> SlowState {
+        SlowState {
+            total: 0,
+            turn: 0,
+            over: false,
+        }
+    }
+
+    fn is_over(state: &SlowState) -> bool {
+        state.over
+    }
+
+    fn bot_turn(state: &SlowState, seat: usize) -> bool {
+        !state.over && state.turn == seat
+    }
+
+    fn bot_action(state: &SlowState, seat: usize, _: Level) -> Option<TallyAction> {
+        if !Self::bot_turn(state, seat) {
+            return None;
+        }
+        std::thread::sleep(SLOW_THINKING);
+        Some(TallyAction::Add { amount: 1 })
+    }
+
+    fn apply(state: &SlowState, seat: usize, action: TallyAction) -> Result<SlowState, Rejection> {
+        if state.over {
+            return Err(Rejection::new("the game is over"));
+        }
+        let TallyAction::Add { amount } = action;
+        Ok(SlowState {
+            total: state.total + amount,
+            turn: tally_turn(state.turn, seat, amount)?,
+            over: false,
+        })
+    }
+
+    fn forfeit(state: &SlowState, _seat: usize) -> Result<SlowState, Rejection> {
+        Ok(SlowState {
+            over: true,
+            ..state.clone()
+        })
+    }
+}
+
+/// How often the bot of [`Stuck`] has been asked for a move.
+pub static STUCK_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`Tally`] with a bot that says it is its turn, and then has no move to play: a bug in a bot,
+/// for testing that a room doesn't ask it again and again.
+pub struct Stuck;
+
+impl Game for Stuck {
+    const KIND: &'static str = "stuck";
+    const NAME: &'static str = "Stuck";
+    const PLAYERS: usize = 2;
+    const STATE_VERSION: u32 = 1;
+    const BOT: bool = true;
+    type State = TallyState;
+    type Action = TallyAction;
+
+    fn start() -> TallyState {
+        TallyState { total: 0, turn: 0 }
+    }
+
+    fn bot_turn(state: &TallyState, seat: usize) -> bool {
+        state.turn == seat
+    }
+
+    fn bot_action(_: &TallyState, _: usize, _: Level) -> Option<TallyAction> {
+        STUCK_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    }
+
+    fn apply(
+        state: &TallyState,
+        seat: usize,
+        action: TallyAction,
+    ) -> Result<TallyState, Rejection> {
+        let TallyAction::Add { amount } = action;
+        Ok(TallyState {
+            total: state.total + amount,
+            turn: tally_turn(state.turn, seat, amount)?,
+        })
+    }
+}
+
 /// The same game after a later release renamed `total` to `sum`.
 pub struct TallyV2;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TallyV2State {
     pub sum: i64,
     pub turn: usize,
@@ -451,7 +586,7 @@ impl Game for TallyV2 {
 /// It has a bot, which never plays.
 pub struct Quick;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QuickState {
     pub over: bool,
 }
@@ -481,7 +616,7 @@ impl Game for Quick {
 /// A game for one player, which counts their actions.
 pub struct Solo;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SoloState {
     pub count: u32,
 }
@@ -515,7 +650,7 @@ impl Game for Solo {
 /// that has twenty-one, as in a board game: for testing what the history keeps of a step.
 pub struct Cells;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CellsState {
     pub cells: Vec<u8>,
     pub turn: usize,

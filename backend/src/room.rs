@@ -27,13 +27,14 @@ use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
+    task::{JoinError, JoinHandle},
     time::Instant,
 };
 use uuid::Uuid;
 
 use crate::{
-    bot::BOT_USER,
-    game::{Engine, Games, Live},
+    bot::Level,
+    game::{BotJob, Engine, Games, Live},
     game_id::GameId,
     history,
     rematch::{self, Outcome, Rematch},
@@ -177,12 +178,13 @@ impl Rooms {
         self.create_with(game).await
     }
 
-    /// Creates a game against the bot, which takes seat 1. The game starts at once, because
-    /// there is no one else to wait for. [`RoomError::NoBot`] if the game has no bot.
+    /// Creates a game against the bot of the given level, which takes seat 1. The game starts at
+    /// once, because there is no one else to wait for. [`RoomError::NoBot`] if the game has no bot.
     pub async fn create_against_bot(
         &self,
         engine: &Arc<dyn Engine>,
         creator: Uuid,
+        level: Level,
         public: bool,
     ) -> Result<GameId, RoomError> {
         if !engine.has_bot() {
@@ -191,7 +193,7 @@ impl Rooms {
         let live = engine.start();
         let game = NewGame::new(
             engine.as_ref(),
-            vec![creator, BOT_USER],
+            vec![creator, level.user()],
             Some(live.as_ref()),
             public,
         )?;
@@ -530,6 +532,9 @@ impl Connection {
     }
 }
 
+/// A job that is working out the bot's move, and the revision of the game it works on.
+type Thinking = (JoinHandle<Option<Box<dyn Live>>>, i64);
+
 /// The state behind a room, owned by its task.
 struct Room {
     pool: PgPool,
@@ -635,6 +640,11 @@ impl Room {
     /// show, but only while someone is connected: the bot plays for an audience. With nobody
     /// there it waits, the room goes idle like any other and leaves memory, and the bot
     /// carries on from the stored game when somebody next connects.
+    ///
+    /// Working out the move can take a while, so it is done by a blocking job on a thread of its
+    /// own, while the room goes on serving requests. A move is made only if the game is still as
+    /// it was when the job began, and somebody is still there to see it: a player who gives up
+    /// while the bot is thinking has ended a game that the bot's move is no part of.
     async fn serve(
         &mut self,
         inbox: &mut mpsc::UnboundedReceiver<Command>,
@@ -647,15 +657,29 @@ impl Room {
             /// The last connection left. Look again to start the grace period.
             Unwatched,
             BotDue,
+            /// The job that works out the bot's move has finished.
+            BotDone(Result<Option<Box<dyn Live>>, JoinError>),
             Idle,
         }
 
         // When the bot plays next. Kept across loops, so that a request that doesn't change the
         // game (a name, another connection) doesn't push the bot's move back.
         let mut bot_due: Option<Instant> = None;
+        // The job that is working out the bot's move, and the revision of the game it works on.
+        let mut thinking: Option<Thinking> = None;
+        // The revision at which the bot had no move though it was its turn, which is a bug in the
+        // bot. It isn't asked again until the game has changed, or it would be asked forever.
+        let mut stuck_at: Option<i64> = None;
         loop {
+            // A job for a game that has moved on has nothing to say. Its thread finishes by itself.
+            if thinking
+                .as_ref()
+                .is_some_and(|&(_, revision)| revision != self.revision)
+            {
+                thinking = None;
+            }
             let watched = self.snapshots.receiver_count() > 0;
-            if watched && self.bot_next().is_some() {
+            if watched && thinking.is_none() && stuck_at != Some(self.revision) && self.bot_turn() {
                 bot_due.get_or_insert_with(|| Instant::now() + bot_pause);
             } else {
                 bot_due = None;
@@ -666,6 +690,12 @@ impl Room {
                 command = inbox.recv() => Wake::Command(command),
                 _ = self.snapshots.closed(), if watched => Wake::Unwatched,
                 _ = tokio::time::sleep_until(bot_due.unwrap_or_else(Instant::now)), if bot_due.is_some() => Wake::BotDue,
+                done = async {
+                    match thinking.as_mut() {
+                        Some((job, _)) => job.await,
+                        None => std::future::pending().await,
+                    }
+                }, if thinking.is_some() => Wake::BotDone(done),
                 _ = tokio::time::sleep(idle_grace), if !watched => Wake::Idle,
             };
             match wake {
@@ -674,7 +704,26 @@ impl Room {
                 Wake::Unwatched => {}
                 Wake::BotDue => {
                     bot_due = None; // The next move gets a pause of its own.
-                    self.play_bot().await;
+                    if let Some(job) = self.bot_job() {
+                        thinking = Some((tokio::task::spawn_blocking(job), self.revision));
+                    }
+                }
+                Wake::BotDone(done) => {
+                    let (_, revision) = thinking.take().expect("a job was running");
+                    match done {
+                        // A failure to save is logged and stops the room.
+                        Ok(Some(next))
+                            if revision == self.revision && self.snapshots.receiver_count() > 0 =>
+                        {
+                            _ = self.commit(next).await;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => stuck_at = Some(revision),
+                        Err(err) => {
+                            tracing::error!(game = %self.id, %err, "the bot's move could not be worked out");
+                            stuck_at = Some(revision);
+                        }
+                    }
                 }
             }
             if self.stale {
@@ -683,17 +732,28 @@ impl Room {
         }
     }
 
-    /// The game after the bot plays, if it is in the game and has a move.
-    fn bot_next(&self) -> Option<Box<dyn Live>> {
-        let seat = self.seat_of(BOT_USER)?;
-        self.live.as_ref()?.bot_move(seat)
+    /// The seat the bot has in this game and its level, if it is one of the players.
+    fn bot(&self) -> Option<(usize, Level)> {
+        self.players
+            .iter()
+            .enumerate()
+            .find_map(|(seat, &player)| Some((seat, Level::of(player)?)))
     }
 
-    /// Plays the bot's move. A failure is logged and, if it was the save, stops the room.
-    async fn play_bot(&mut self) {
-        if let Some(next) = self.bot_next() {
-            _ = self.commit(next).await;
+    /// Whether the bot has a move to play. Cheap, which working out the move is not.
+    fn bot_turn(&self) -> bool {
+        match (self.bot(), self.live.as_ref()) {
+            (Some((seat, _)), Some(live)) => live.bot_turn(seat),
+            _ => false,
         }
+    }
+
+    /// The job that works out the bot's move, if it has one, at the level of the bot that has
+    /// the seat.
+    fn bot_job(&self) -> Option<BotJob> {
+        let (seat, level) = self.bot()?;
+        let live = self.live.as_ref()?;
+        live.bot_turn(seat).then(|| live.bot_job(seat, level))
     }
 
     async fn handle(&mut self, command: Command) {
@@ -803,7 +863,10 @@ impl Room {
 
     async fn ask_rematch(&mut self, user: Uuid) -> Result<Option<Rematch>, RoomError> {
         let seat = self.rematch_seat(user)?;
-        let opponent_is_bot = self.players.get(1 - seat) == Some(&BOT_USER);
+        let opponent_is_bot = self
+            .players
+            .get(1 - seat)
+            .is_some_and(|&player| Level::of(player).is_some());
         let outcome = rematch::ask(self.rematch.as_ref(), seat, opponent_is_bot);
         self.change_rematch(outcome).await?;
         Ok(self.rematch.clone())
@@ -970,7 +1033,7 @@ struct Who {
     names: Vec<Option<String>>,
     /// Who has deleted their user. A game with one has nobody to play a rematch with.
     deleted: Vec<bool>,
-    /// Who is a guest: has no username, and is neither the bot nor deleted. See
+    /// Who is a guest: has no username, and is neither a bot nor deleted. See
     /// [`Snapshot::player_guests`].
     guests: Vec<bool>,
 }
@@ -980,11 +1043,10 @@ async fn read_players(pool: &PgPool, players: &[Uuid]) -> Result<Who, sqlx::Erro
     // A guest here is one in `list_games` (in `lobby`): keep the two the same.
     let rows: Vec<(Uuid, Option<String>, bool, bool)> = sqlx::query_as(
         "SELECT id, name, deleted_at IS NOT NULL,
-                username IS NULL AND deleted_at IS NULL AND id <> $2
+                username IS NULL AND deleted_at IS NULL AND NOT is_bot
            FROM users WHERE id = ANY($1)",
     )
     .bind(players)
-    .bind(BOT_USER)
     .fetch_all(pool)
     .await?;
     let row = |player: &Uuid| rows.iter().find(|(id, ..)| id == player);
@@ -1231,7 +1293,8 @@ mod tests {
 
     use super::*;
     use crate::test_util::{
-        Cells, Quick, Solo, TEST_BOT_PAUSE, Tally, TallyV2, TestApp, eventually,
+        Cells, Quick, SLOW_THINKING, STUCK_ASKED, Slow, Solo, Stuck, TEST_BOT_PAUSE, Tally,
+        TallyV2, TestApp, eventually,
     };
 
     /// Short enough to wait out in a test.
@@ -1673,9 +1736,14 @@ mod tests {
 
     /// A tally game for `creator` against the bot, which is in seat 1 and adds 1 on its turn.
     async fn bot_game(rooms: &Rooms, creator: Uuid) -> GameId {
+        bot_game_at(rooms, creator, Level::Medium).await
+    }
+
+    /// A tally game against the bot of the given level, which adds 2 if it is easy and 3 if hard.
+    async fn bot_game_at(rooms: &Rooms, creator: Uuid, level: Level) -> GameId {
         let engine = rooms.games().get("tally").unwrap().clone();
         rooms
-            .create_against_bot(&engine, creator, false)
+            .create_against_bot(&engine, creator, level, false)
             .await
             .unwrap()
     }
@@ -1689,8 +1757,8 @@ mod tests {
 
         let mut connection = rooms.connect(&id, creator).await.unwrap();
         let snapshot = connection.latest();
-        assert_eq!(snapshot.players, [creator, BOT_USER]);
-        assert_eq!(snapshot.player_names, [None, Some("Bot".to_owned())]);
+        assert_eq!(snapshot.players, [creator, Level::Medium.user()]);
+        assert_eq!(snapshot.player_names, [None, Some("Medium bot".to_owned())]);
         assert_eq!(snapshot.state, Some(json!({ "total": 0, "turn": 0 })));
     }
 
@@ -1700,7 +1768,9 @@ mod tests {
         let creator = user(&pool).await;
         let solo = rooms.games().get("solo").unwrap().clone();
 
-        let result = rooms.create_against_bot(&solo, creator, false).await;
+        let result = rooms
+            .create_against_bot(&solo, creator, Level::Medium, false)
+            .await;
 
         assert_eq!(result, Err(RoomError::NoBot));
     }
@@ -1726,6 +1796,111 @@ mod tests {
             (2, 1, Some(json!({ "total": 6, "turn": 0 })))
         );
         assert_quiet(&mut connection).await;
+    }
+
+    #[sqlx::test]
+    async fn the_bot_plays_at_the_level_it_was_asked_for(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let creator = user(&pool).await;
+        for (level, adds) in [(Level::Easy, 2), (Level::Medium, 1), (Level::Hard, 3)] {
+            let id = bot_game_at(&rooms, creator, level).await;
+            let mut connection = rooms.connect(&id, creator).await.unwrap();
+            assert_eq!(connection.latest().players, [creator, level.user()]);
+
+            connection.act(add(10)).await.unwrap();
+
+            next(&mut connection).await; // The player's own move.
+            let after_bot = next(&mut connection).await;
+            assert_eq!(
+                after_bot.state,
+                Some(json!({ "total": 10 + adds, "turn": 0 })),
+                "{level:?}"
+            );
+        }
+    }
+
+    /// A game of the given kind against the bot (at the middle level), for `creator`.
+    async fn bot_game_of(rooms: &Rooms, kind: &str, creator: Uuid) -> GameId {
+        let engine = rooms.games().get(kind).unwrap().clone();
+        rooms
+            .create_against_bot(&engine, creator, Level::Medium, false)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn a_room_goes_on_serving_while_its_bot_thinks(pool: PgPool) {
+        let rooms = rooms(&pool, Games::default().with::<Slow>());
+        let creator = user(&pool).await;
+        let id = bot_game_of(&rooms, "slow", creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+        connection.act(add(1)).await.unwrap();
+        next(&mut connection).await;
+        // The bot is due after its pause, and is then busy for `SLOW_THINKING`.
+        tokio::time::sleep(TEST_BOT_PAUSE * 4).await;
+
+        // Whatever the room does meanwhile is answered at once, and so is every other task on
+        // the thread: a second connection is made, and a timer keeps its time.
+        let before = Instant::now();
+        let second = rooms.connect(&id, creator).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let waited = before.elapsed();
+
+        assert!(
+            waited < SLOW_THINKING / 2,
+            "the room was held up for {waited:?} by the bot"
+        );
+        drop(second);
+        // The bot's move arrives when it is done.
+        let after_bot = next(&mut connection).await;
+        assert_eq!(
+            after_bot.state,
+            Some(json!({ "total": 2, "turn": 0, "over": false }))
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_move_the_bot_was_working_out_is_dropped_when_the_game_has_changed(pool: PgPool) {
+        let rooms = rooms(&pool, Games::default().with::<Slow>());
+        let creator = user(&pool).await;
+        let id = bot_game_of(&rooms, "slow", creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+        connection.act(add(1)).await.unwrap();
+        next(&mut connection).await;
+        tokio::time::sleep(TEST_BOT_PAUSE * 4).await;
+
+        // The player gives up while the bot is still thinking.
+        connection.forfeit().await.unwrap();
+        let over = next(&mut connection).await;
+        assert_eq!(
+            over.state,
+            Some(json!({ "total": 1, "turn": 1, "over": true }))
+        );
+        tokio::time::sleep(SLOW_THINKING * 2).await;
+
+        // The bot's move was for a game that isn't there any more: nothing is made of it.
+        assert_quiet(&mut connection).await;
+        assert_eq!(
+            stored(&pool, &id).await,
+            (2, 1, Some(json!({ "total": 1, "turn": 1, "over": true })))
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_bot_that_has_no_move_on_its_turn_is_not_asked_again_until_the_game_changes(
+        pool: PgPool,
+    ) {
+        let rooms = rooms(&pool, Games::default().with::<Stuck>());
+        let creator = user(&pool).await;
+        let id = bot_game_of(&rooms, "stuck", creator).await;
+        let mut connection = rooms.connect(&id, creator).await.unwrap();
+        connection.act(add(1)).await.unwrap();
+        next(&mut connection).await;
+
+        // Many times what it takes the room to ask once.
+        tokio::time::sleep(TEST_BOT_PAUSE * 15).await;
+
+        assert_eq!(STUCK_ASKED.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[sqlx::test]
@@ -2130,12 +2305,36 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn a_rematch_against_the_bot_is_against_the_same_level(pool: PgPool) {
+        let rooms = rooms(&pool, tally());
+        let player = user(&pool).await;
+        let engine = rooms.games().get("quick").unwrap().clone();
+        for level in [Level::Easy, Level::Hard] {
+            let id = rooms
+                .create_against_bot(&engine, player, level, false)
+                .await
+                .unwrap();
+            let connection = rooms.connect(&id, player).await.unwrap();
+            connection.act(json!({})).await.unwrap();
+
+            let reply = rooms.ask_rematch(&id, player).await.unwrap();
+
+            let following = next_game(reply);
+            assert_eq!(
+                players_of(&pool, &following).await,
+                [player, level.user()],
+                "{level:?}"
+            );
+        }
+    }
+
+    #[sqlx::test]
     async fn the_bot_agrees_to_a_rematch_at_once(pool: PgPool) {
         let rooms = rooms(&pool, tally());
         let player = user(&pool).await;
         let engine = rooms.games().get("quick").unwrap().clone();
         let id = rooms
-            .create_against_bot(&engine, player, false)
+            .create_against_bot(&engine, player, Level::Medium, false)
             .await
             .unwrap();
         let mut connection = rooms.connect(&id, player).await.unwrap();
@@ -2145,7 +2344,10 @@ mod tests {
         let reply = rooms.ask_rematch(&id, player).await.unwrap();
 
         let following = next_game(reply);
-        assert_eq!(players_of(&pool, &following).await, [player, BOT_USER]);
+        assert_eq!(
+            players_of(&pool, &following).await,
+            [player, Level::Medium.user()]
+        );
         assert_eq!(
             stored(&pool, &following).await,
             (0, 1, Some(json!({ "over": false })))

@@ -774,8 +774,11 @@ mod tests {
         // The bot answered every one of them, and began if it was White.
         let bot_turns = state["turns"][1].as_u64().unwrap();
         assert!(bot_turns >= 2, "the bot played only {bot_turns} turns");
-        assert_eq!(snapshot["players"][1], crate::bot::BOT_USER.to_string());
-        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+        assert_eq!(
+            snapshot["players"][1],
+            crate::bot::Level::Medium.user().to_string()
+        );
+        assert_eq!(snapshot["playerNames"], json!([null, "Medium bot"]));
     }
 
     #[sqlx::test]
@@ -825,8 +828,11 @@ mod tests {
         // The bot answered every one of them, and began if it was X.
         let bot_marks = marks(state, 1);
         assert!(bot_marks >= 2, "the bot marked only {bot_marks} cells");
-        assert_eq!(snapshot["players"][1], crate::bot::BOT_USER.to_string());
-        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+        assert_eq!(
+            snapshot["players"][1],
+            crate::bot::Level::Medium.user().to_string()
+        );
+        assert_eq!(snapshot["playerNames"], json!([null, "Medium bot"]));
     }
 
     #[sqlx::test]
@@ -1107,7 +1113,7 @@ mod guest_tests {
         let mut client = Client::sign_in(&server, &game_id, &human).await;
         let snapshot = client.next().await;
 
-        assert_eq!(snapshot["playerNames"], json!([null, "Bot"]));
+        assert_eq!(snapshot["playerNames"], json!([null, "Medium bot"]));
         assert_eq!(snapshot["playerGuests"], json!([true, false]));
     }
 

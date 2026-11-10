@@ -1064,27 +1064,42 @@ fn a_state_that_could_not_happen_fails_to_load() {
 
 // --- The bot ---
 
+fn bot_move_at(state: &State, seat: usize, level: Level) -> Option<(usize, usize)> {
+    UltimateTicTacToe::bot_action(state, seat, level)
+        .map(|Action::Play { board, cell }| (board, cell))
+}
+
+/// What the medium bot plays: the bot that the rest of these tests are about, unless they say
+/// another level.
 fn bot_move(state: &State, seat: usize) -> Option<(usize, usize)> {
-    UltimateTicTacToe::bot_action(state, seat).map(|Action::Play { board, cell }| (board, cell))
+    bot_move_at(state, seat, Level::Medium)
 }
 
 #[test]
-fn the_bot_has_nothing_to_play_out_of_turn_or_after_the_game() {
-    let game = fresh(0);
-    assert_eq!(bot_move(&game, 1), None);
-    assert!(bot_move(&game, 0).is_some());
+fn a_bot_of_every_level_has_nothing_to_play_out_of_turn_or_after_the_game() {
+    for level in Level::ALL {
+        let game = fresh(0);
+        assert_eq!(bot_move_at(&game, 1, level), None);
+        assert!(bot_move_at(&game, 0, level).is_some());
 
-    assert_eq!(bot_move(&fresh(0).forfeit(1).unwrap(), 0), None);
-    let won = mark(&about_to_win(), 8, 8).unwrap();
-    for seat in [0, 1] {
-        assert_eq!(bot_move(&won, seat), None);
+        assert_eq!(bot_move_at(&fresh(0).forfeit(1).unwrap(), 0, level), None);
+        let won = mark(&about_to_win(), 8, 8).unwrap();
+        for seat in [0, 1] {
+            assert_eq!(bot_move_at(&won, seat, level), None);
+        }
     }
 }
 
 #[test]
 fn the_bot_wins_the_game_when_it_can() {
     // Only cell 8 of board 9 wins, and it is also a board win; both come first.
-    assert_eq!(bot_move(&about_to_win(), X), Some((8, 8)));
+    for level in [Level::Medium, Level::Hard] {
+        assert_eq!(
+            bot_move_at(&about_to_win(), X, level),
+            Some((8, 8)),
+            "{level:?}"
+        );
+    }
 }
 
 #[test]
@@ -1120,6 +1135,8 @@ fn the_bot_does_not_send_the_opponent_where_they_can_win_a_board_if_it_can_help_
     assert_eq!(before.playable, vec![4]);
     assert_eq!(legal(&before), vec![(4, 0), (4, 1)]);
 
+    // That is the medium bot's rule of thumb. The hard bot looks further than it and may play
+    // otherwise for a reason, so this is not a test of it.
     for _ in 0..16 {
         assert_eq!(bot_move(&before, X), Some((4, 1)));
     }
@@ -1127,11 +1144,90 @@ fn the_bot_does_not_send_the_opponent_where_they_can_win_a_board_if_it_can_help_
 
 #[test]
 fn the_bot_picks_among_equal_moves_at_random() {
+    // Most of the 81 cells rank the same on an empty board.
     let seen: std::collections::HashSet<_> =
         (0..200).filter_map(|_| bot_move(&fresh(0), X)).collect();
 
-    // Most of the 81 cells rank the same on an empty board.
     assert!(seen.len() > 20, "{} different moves", seen.len());
+}
+
+#[test]
+fn the_easy_bot_plays_any_move_the_rules_allow() {
+    // On an empty board that is every cell, and where the player is sent it is the free cells
+    // of that board.
+    let seen: std::collections::HashSet<_> = (0..2000)
+        .filter_map(|_| bot_move_at(&fresh(0), X, Level::Easy))
+        .collect();
+    assert_eq!(seen.len(), 81);
+
+    // O has marked cell 4 of board 1, which sends X to board 4.
+    let sent = position(&[(4, "X.. ... ..."), (1, "....O....")], Some((1, 4)));
+    assert_eq!(sent.position.turn, X);
+    assert_eq!(sent.playable, vec![4]);
+    let moves: std::collections::HashSet<_> = (0..500)
+        .filter_map(|_| bot_move_at(&sent, X, Level::Easy))
+        .collect();
+    assert_eq!(moves, legal(&sent).into_iter().collect());
+}
+
+#[test]
+fn the_easy_bot_does_not_take_a_win_that_is_there_for_the_taking() {
+    // Medium and hard always take the winning cell; easy takes it about as often as any other.
+    let before = about_to_win();
+    let legal_moves = legal(&before).len();
+    assert!(legal_moves > 1);
+
+    let taken = (0..400)
+        .filter(|_| bot_move_at(&before, X, Level::Easy) == Some((8, 8)))
+        .count();
+
+    assert!(taken < 400, "easy took the win every time");
+}
+
+#[test]
+fn the_hard_bot_does_not_hand_the_opponent_the_game() {
+    // O has won boards 1 and 2, the first two of the top row, and board 3 is O's to win with
+    // cell 3. X is sent to board 6, where cells 3 and 7 are empty and neither wins or blocks.
+    //
+    // - Cell 3 sends O to board 3, where O wins the board and so the game.
+    // - Cell 7 sends O to board 7, where O can win a board too, but not the game. X is then sent
+    //   to board 2, which O has won, and takes cell 3 of board 3 from there.
+    //
+    // The medium bot only asks whether O can win *a* board, which is so for both, so it can't
+    // tell them apart. Seeing that one of them loses the game needs a look at O's answer.
+    let before = position(
+        &[
+            (0, "OOO XX. ..."),
+            (1, "OOO XX. ..."),
+            (2, "OO. X.X ..."),
+            (5, "XO. OXX .XO"),
+            (6, "O.O .X. ..."),
+            (8, "X.X ..X ..."),
+            (4, ".....O..."),
+        ],
+        Some((4, 5)),
+    );
+    assert_eq!(before.position.turn, X);
+    assert_eq!(before.playable, vec![5]);
+    assert_eq!(legal(&before), vec![(5, 2), (5, 6)]);
+
+    let medium: std::collections::HashSet<_> =
+        (0..100).filter_map(|_| bot_move(&before, X)).collect();
+    assert_eq!(medium.len(), 2, "medium plays either, as the comment says");
+
+    for _ in 0..16 {
+        assert_eq!(bot_move_at(&before, X, Level::Hard), Some((5, 6)));
+    }
+}
+
+#[test]
+fn the_hard_bot_plays_the_same_move_in_the_same_position_when_there_is_only_one_best() {
+    // With a single best move there is nothing to pick between, so it can't waver.
+    let before = about_to_win();
+    let first = bot_move_at(&before, X, Level::Hard);
+    for _ in 0..8 {
+        assert_eq!(bot_move_at(&before, X, Level::Hard), first);
+    }
 }
 
 /// A small, fixed random number generator for the tests that play whole games.
@@ -1150,12 +1246,18 @@ impl Rng {
     }
 }
 
+impl crate::bot::Random for Rng {
+    fn below(&mut self, n: usize) -> Option<usize> {
+        (n > 0).then(|| Rng::below(self, n))
+    }
+}
+
 /// How a player picks a move.
 #[derive(Clone, Copy)]
 enum Player {
-    /// Any legal move, at random.
+    /// Any legal move, at random, without going through the bot.
     Random,
-    Bot,
+    Bot(Level),
 }
 
 /// Plays a game to its end, `players` being the two seats, checking the rules as it goes. A
@@ -1168,8 +1270,11 @@ fn play_out(x: usize, players: [Player; 2], rng: &mut Rng) -> State {
         assert!(!moves.is_empty(), "a game that is on always has a move");
         let seat = game.position.turn;
         let (board, cell) = match players[seat] {
-            Player::Random => moves[rng.below(moves.len())],
-            Player::Bot => bot_move(&game, seat).expect("the bot has a move"),
+            Player::Random => moves[Rng::below(rng, moves.len())],
+            Player::Bot(level) => match bot::action(&game, seat, level, rng) {
+                Some(Action::Play { board, cell }) => (board, cell),
+                None => panic!("the bot has a move"),
+            },
         };
         assert!(
             moves.contains(&(board, cell)),
@@ -1213,26 +1318,100 @@ fn random_games_always_end_and_never_break_the_rules() {
 }
 
 #[test]
-fn the_bot_plays_only_legal_moves_against_a_random_player_on_either_side() {
+fn a_bot_of_every_level_plays_only_legal_moves_against_a_random_player_on_either_side() {
     let mut rng = Rng(0x1234_5678_9abc_def1);
-    for game in 0..200 {
-        // The bot takes seat 0 and seat 1 in turn, and either seat may be X.
-        let bot = game % 2;
-        let mut players = [Player::Random; 2];
-        players[bot] = Player::Bot;
+    for level in Level::ALL {
+        for game in 0..40 {
+            // The bot takes seat 0 and seat 1 in turn, and either seat may be X.
+            let bot = game % 2;
+            let mut players = [Player::Random; 2];
+            players[bot] = Player::Bot(level);
 
-        let end = play_out((game / 2) % 2, players, &mut rng);
+            let end = play_out((game / 2) % 2, players, &mut rng);
 
-        assert!(UltimateTicTacToe::is_over(&end));
+            assert!(UltimateTicTacToe::is_over(&end), "{level:?}");
+        }
     }
 }
 
 #[test]
-fn two_bots_play_a_game_to_the_end() {
+fn bots_of_every_pair_of_levels_play_a_game_to_the_end() {
     let mut rng = Rng(7);
-    for game in 0..60 {
-        let end = play_out(game % 2, [Player::Bot; 2], &mut rng);
+    for a in Level::ALL {
+        for b in Level::ALL {
+            for game in 0..6 {
+                let end = play_out(game % 2, [Player::Bot(a), Player::Bot(b)], &mut rng);
 
-        assert!(UltimateTicTacToe::is_over(&end));
+                assert!(UltimateTicTacToe::is_over(&end), "{a:?} against {b:?}");
+            }
+        }
+    }
+}
+
+/// How `a` does against `b` in `games` games, as [a's wins, b's wins, draws]. The two take
+/// both seats and both marks in turn, so that nobody has the first move more than the other.
+fn tournament(a: Level, b: Level, games: usize, seed: u64) -> [usize; 3] {
+    let mut rng = Rng(seed | 1);
+    let mut score = [0; 3];
+    for game in 0..games {
+        let a_seat = game % 2;
+        let x = (game / 2) % 2;
+        let mut players = [Player::Bot(b); 2];
+        players[a_seat] = Player::Bot(a);
+        match over(&play_out(x, players, &mut rng)) {
+            Phase::Over {
+                winner: Some(seat), ..
+            } if seat == a_seat => score[0] += 1,
+            Phase::Over {
+                winner: Some(_), ..
+            } => score[1] += 1,
+            _ => score[2] += 1,
+        }
+    }
+    score
+}
+
+#[test]
+fn the_medium_bot_beats_the_easy_bot_nine_games_in_ten() {
+    let [medium, easy, drawn] = tournament(Level::Medium, Level::Easy, 100, 11);
+
+    // The games are repeatable, so this never wavers: it is here to notice a change that makes
+    // the bot play worse, not to rate it.
+    assert!(
+        medium >= 85,
+        "medium won {medium}, easy {easy}, drawn {drawn}"
+    );
+}
+
+#[test]
+fn the_hard_bot_beats_the_medium_bot_nine_games_in_ten() {
+    let [hard, medium, drawn] = tournament(Level::Hard, Level::Medium, 40, 12);
+
+    assert!(
+        hard >= 34,
+        "hard won {hard}, medium {medium}, drawn {drawn}"
+    );
+}
+
+/// Prints how every level does against every other. Run it when changing a bot, in release mode
+/// because the hard bot is slow without it:
+/// `cargo test --release tournament_report -- --ignored --nocapture`
+#[test]
+#[ignore = "a measurement, not a check"]
+fn tournament_report() {
+    let games: usize = std::env::var("GAMES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(400);
+    for (a, b) in [
+        (Level::Medium, Level::Easy),
+        (Level::Hard, Level::Medium),
+        (Level::Hard, Level::Easy),
+    ] {
+        let [won, lost, drawn] = tournament(a, b, games, 2024);
+        println!(
+            "{a:?} against {b:?}: won {won}, lost {lost}, drawn {drawn} of {games} ({:.1}% won)",
+            100.0 * won as f64 / games as f64
+        );
     }
 }

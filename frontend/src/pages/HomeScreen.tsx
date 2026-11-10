@@ -2,7 +2,7 @@ import type { RowOf } from "millpond";
 import { GAME_STATE_TEXT, GameRow, gameState } from "../GameRow";
 import { Loading } from "../Loading";
 import { Modal } from "../Modal";
-import type { gamesList, myGames, newGame } from "../features/lobby";
+import { BOT_LEVELS, type BotLevel, type gamesList, type myGames, type newGame } from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";
 
@@ -22,6 +22,8 @@ export interface HomeScreenProps {
   onNewGame: (kind: string) => void;
   /** Picks the opponent in the dialog: the computer (true), or a friend. */
   onOpponent: (bot: boolean) => void;
+  /** Picks how well the computer plays, which the dialog offers once it is the opponent. */
+  onLevel: (level: BotLevel) => void;
   /** Ticks or unticks "public game" in the dialog. */
   onPublic: (isPublic: boolean) => void;
   onCreate: () => void;
@@ -41,6 +43,7 @@ export function HomeScreen({
   request,
   onNewGame,
   onOpponent,
+  onLevel,
   onPublic,
   onCreate,
   onClose,
@@ -89,6 +92,7 @@ export function HomeScreen({
             request={request}
             info={requestInfo}
             onOpponent={onOpponent}
+            onLevel={onLevel}
             onPublic={onPublic}
             onCreate={onCreate}
             onClose={onClose}
@@ -170,16 +174,21 @@ interface NewGameFormProps {
   /** The catalog entry for the kind, if the site has one. */
   info: GameInfo | undefined;
   onOpponent: (bot: boolean) => void;
+  onLevel: (level: BotLevel) => void;
   onPublic: (isPublic: boolean) => void;
   onCreate: () => void;
   onClose: () => void;
 }
 
+/** What each level of the bot is called in the dialog. */
+const LEVEL_NAMES: Record<BotLevel, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
+
 /**
  * What goes in the dialog: what the game is, who to play (if the game has a computer opponent
- * to choose), whether it is public, and the buttons.
+ * to choose) and, against the computer, how well it plays, whether the game is public, and the
+ * buttons.
  */
-function NewGameForm({ request, info, onOpponent, onPublic, onCreate, onClose }: NewGameFormProps) {
+function NewGameForm({ request, info, onOpponent, onLevel, onPublic, onCreate, onClose }: NewGameFormProps) {
   const creating = request.state === "creating";
   // Only a game the catalog knows can say it has a bot. Without one, a friend is the only choice.
   const bot = info?.bot === true && request.bot;
@@ -203,6 +212,23 @@ function NewGameForm({ request, info, onOpponent, onPublic, onCreate, onClose }:
           {info ? `${info.players}. ` : ""}You get a link to send to your opponent. Anyone who has
           it can watch.
         </p>
+      )}
+      {bot && (
+        <fieldset className="segmented" disabled={creating}>
+          <legend className="visually-hidden">Level</legend>
+          {BOT_LEVELS.map((level) => (
+            <label key={level} className="segmented-option">
+              <input
+                className="visually-hidden"
+                type="radio"
+                name="level"
+                checked={request.level === level}
+                onChange={() => onLevel(level)}
+              />
+              <span className="segmented-name">{LEVEL_NAMES[level]}</span>
+            </label>
+          ))}
+        </fieldset>
       )}
       <label className="check">
         <input

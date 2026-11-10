@@ -2,6 +2,8 @@ import { op } from "millpond";
 import type { z } from "zod";
 import type { gamesReplySchema, publicGamesReplySchema } from "./schemas";
 import {
+  type BotLevel,
+  DEFAULT_LEVEL,
   DEFAULT_PUBLIC,
   GAMES_LIST_ID,
   LOBBY_SETTINGS_ID,
@@ -37,6 +39,7 @@ export const openNewGame = op((tx, args: { kind: string }) => {
     state: "choosing",
     kind: args.kind,
     bot: false,
+    level: DEFAULT_LEVEL,
     public: remembered ?? DEFAULT_PUBLIC,
     error: null,
   });
@@ -72,6 +75,17 @@ export const chooseOpponent = op((tx, args: { bot: boolean }) => {
   const request = tx.read(newGame.get(NEW_GAME_ID));
   if (!request || request.state === "creating") return;
   tx.update(newGame, NEW_GAME_ID, { bot: args.bot });
+});
+
+/**
+ * Picks how well the computer plays. Ignored with no dialog, and while a game is being created,
+ * since the request has gone out as it was. The level is kept when the player goes back to a
+ * friend and then to the bot again, but only a game against the bot is made with one.
+ */
+export const chooseLevel = op((tx, args: { level: BotLevel }) => {
+  const request = tx.read(newGame.get(NEW_GAME_ID));
+  if (!request || request.state === "creating") return;
+  tx.update(newGame, NEW_GAME_ID, { level: args.level });
 });
 
 /** Closes the dialog. Ignored while a game is being created: that can't be taken back. */

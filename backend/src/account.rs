@@ -34,7 +34,6 @@ use uuid::Uuid;
 
 use crate::{
     auth::{AuthSession, AuthUser, create_session, end_session, sweep_expired_sessions},
-    bot::BOT_USER,
     error::ApiError,
     game_id::GameId,
     room::{RoomError, Rooms},
@@ -376,13 +375,12 @@ pub async fn delete(
     let games: Vec<(String, bool, bool, bool)> = sqlx::query_as(
         "SELECT g.id, g.finished, g.state IS NOT NULL,
                 EXISTS (SELECT 1 FROM game_players o JOIN users u ON u.id = o.user_id
-                         WHERE o.game_id = g.id AND o.user_id <> $1 AND o.user_id <> $2
+                         WHERE o.game_id = g.id AND o.user_id <> $1 AND NOT u.is_bot
                            AND u.deleted_at IS NULL)
            FROM games g JOIN game_players p ON p.game_id = g.id
           WHERE p.user_id = $1",
     )
     .bind(user_id)
-    .bind(BOT_USER)
     .fetch_all(&pool)
     .await
     .map_err(ApiError::database("could not list a user's games"))?;
@@ -475,11 +473,10 @@ async fn remove_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<GameId>, ApiErr
                         WHERE p.user_id = $1
                           AND NOT EXISTS (SELECT 1 FROM game_players o JOIN users u ON u.id = o.user_id
                                            WHERE o.game_id = p.game_id AND o.user_id <> $1
-                                             AND o.user_id <> $2 AND u.deleted_at IS NULL))
+                                             AND NOT u.is_bot AND u.deleted_at IS NULL))
       RETURNING id",
     )
     .bind(user_id)
-    .bind(BOT_USER)
     .fetch_all(&mut *tx)
     .await
     .map_err(db)?;
@@ -1260,6 +1257,11 @@ mod delete_tests {
         app.create_game(&session, GAME).await;
         let bot = app.create_bot_game(&session, GAME).await;
         assert_eq!(bot.status, StatusCode::CREATED);
+        // Whichever level the bot is.
+        for level in ["easy", "hard"] {
+            let bot = app.create_bot_game_at(&session, GAME, level).await;
+            assert_eq!(bot.status, StatusCode::CREATED);
+        }
 
         delete_me(&app, &session, Some(PASSWORD)).await;
 
