@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { copyText } from "../copyText";
+import { copyText } from "../../copyText";
 
 /** The link to share, with a way to copy it. */
 export function InviteBox({ url }: { url: string }) {

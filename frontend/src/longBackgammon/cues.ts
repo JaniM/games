@@ -23,8 +23,9 @@ export interface TimedCue {
   afterMs: number;
 }
 
-// How long the motions take to play, as in `--move-ms` and `--roll-ms` in styles.css. A
-// checker is heard where it lands, so its sound waits for the end of the flight.
+// How long the motions take to play, as in `--move-ms` and `--roll-ms` in
+// `styles/long-backgammon.css`. A checker is heard where it lands, so its sound waits for the end
+// of the flight.
 export const MOVE_MS = 225;
 export const ROLL_MS = 450;
 

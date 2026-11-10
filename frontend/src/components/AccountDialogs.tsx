@@ -8,8 +8,8 @@ import {
   closeAccountForm,
   openAccountForm,
   submitAccountForm,
-} from "./features/account";
-import { SESSION_ID, sessionFlags, sessionState, signedOutNoticeDismissed } from "./features/session";
+} from "../features/account";
+import { SESSION_ID, sessionFlags, sessionState, signedOutNoticeDismissed } from "../features/session";
 
 export type AccountRequestRow = RowOf<typeof accountRequest>;
 

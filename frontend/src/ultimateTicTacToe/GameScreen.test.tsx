@@ -8,8 +8,8 @@ import { GAME_ID, marks, utttSnapshotOf, utttState, wonBoard } from "../fixtures
 import { GameScreen, type GameScreenProps, type GameViewRow, isUtttView } from "./GameScreen";
 
 // Rendering to a string shows the first moment, before the loading text has waited its second.
-// This one says it at once, which shows whether the page is waiting (see immediateLoading.tsx).
-vi.mock("../Loading", () => import("../immediateLoading"));
+// This one says it at once, which shows whether the page is waiting (see components/immediateLoading.tsx).
+vi.mock("../components/Loading", () => import("../components/immediateLoading"));
 
 // What a page shows is a function of its props, so these render it to a string.
 // (There is no DOM here: clicks are covered by the board's tests and the ops they call.)

@@ -1,8 +1,8 @@
 import { useQuery } from "millpond/react";
-import { AccountDialogs } from "./AccountDialogs";
-import { AccountMenu } from "./AccountMenu";
-import { SiteFooter } from "./SiteFooter";
-import { SiteNav } from "./SiteNav";
+import { AccountDialogs } from "./components/AccountDialogs";
+import { AccountMenu } from "./components/AccountMenu";
+import { SiteFooter } from "./components/SiteFooter";
+import { SiteNav } from "./components/SiteNav";
 import { LOCATION_ID, locationState, parseRoute } from "./features/router";
 import { GamePage } from "./pages/GamePage";
 import { Home } from "./pages/Home";

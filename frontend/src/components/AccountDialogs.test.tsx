@@ -9,12 +9,12 @@ import {
   type AccountRequestRow,
   SignedOutNotice,
 } from "./AccountDialogs";
-import { account } from "./features/account";
-import { lobby } from "./features/lobby";
-import { profile } from "./features/profile";
-import { router } from "./features/router";
-import { session } from "./features/session";
-import { fakeServer, fakeStorage, settle } from "./testing";
+import { account } from "../features/account";
+import { lobby } from "../features/lobby";
+import { profile } from "../features/profile";
+import { router } from "../features/router";
+import { session } from "../features/session";
+import { fakeServer, fakeStorage, settle } from "../testing";
 
 // What a dialog shows is a function of its props, so these render it to a string.
 // (There is no DOM here: what a press does is covered by the ops, in the account tests.)

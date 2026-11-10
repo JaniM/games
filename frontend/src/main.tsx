@@ -8,7 +8,7 @@ import { bindBrowserLocation } from "./features/router";
 import { loadCredentials } from "./features/session";
 import { loadVolume } from "./features/sound";
 import { loadTheme } from "./features/theme";
-import "./styles.css";
+import "./styles/index.css";
 
 // Initial data comes from ops. This one inserts the health row and starts the first check.
 db.ops.backend.checkBackend();

@@ -268,7 +268,8 @@ export const autoPlay = effect({
 /**
  * How long to wait after the answer to one step of a combined move before sending the next:
  * long enough for the checker to land (`MOVE_MS` in `longBackgammon/cues.ts` is the length of
- * its trip, and `--move-ms` in styles.css), so that each hop can be followed on the board.
+ * its trip, and `--move-ms` in `styles/long-backgammon.css`), so that each hop can be followed
+ * on the board.
  */
 export const QUEUED_STEP_PAUSE_MS = 500;
 

@@ -1,7 +1,7 @@
 //! The board as an SVG, for the preview of a link to a game (see `preview`).
 //!
 //! It draws what `frontend/src/ultimateTicTacToe/Board.tsx` and the `.ttt*` rules of
-//! `frontend/src/styles.css` draw: the same grid of heavy and light lines,
+//! `frontend/src/styles/ultimate-tic-tac-toe.css` draw: the same grid of heavy and light lines,
 //! the marks, the big mark that claims a board that is won, the boards the next mark must go in,
 //! the cell of the last mark, and the boards of the line that won. The tints are the CSS's
 //! `color-mix`, worked out by [`mix`]. What only matters to someone at the board (buttons, focus,
@@ -14,7 +14,7 @@ use super::{BoardState, State};
 /// A colour, as red, green and blue.
 type Rgb = [u8; 3];
 
-// The dark palette of `styles.css`, the `prefers-color-scheme: dark` one.
+// The dark palette of `styles/tokens.css`, the `prefers-color-scheme: dark` one.
 const BG: Rgb = [0x16, 0x14, 0x0f];
 const FG: Rgb = [0xef, 0xeb, 0xe3];
 const LINE: Rgb = [0x6d, 0x67, 0x5a];
@@ -314,7 +314,8 @@ mod tests {
 
     #[test]
     fn the_tints_are_the_css_colour_mixes() {
-        // `--tint` and `--ttt-big` of `styles.css` in its dark colours, as a browser works them out.
+        // `--tint` (`styles/tokens.css`) and `--ttt-big` (`styles/ultimate-tic-tac-toe.css`) in
+        // the dark colours, as a browser works them out.
         assert_eq!(hex(mix(ACCENT, 9, BG)), "#281f17");
         assert_eq!(hex(mix(FG, 80, BG)), "#c4c0b9");
     }

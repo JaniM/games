@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// The dark colours are written twice in `styles.css`: for a device that is set to dark, and for a
+// The dark colours are written twice in `tokens.css`: for a device that is set to dark, and for a
 // visitor who picked dark. They would drift if one were changed alone, so this compares them.
 
 // Without the comments, which hold semicolons and braces of their own.
-const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const css = readFileSync(new URL("./tokens.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -32,7 +32,7 @@ const PICKED_DARK = ':root[data-theme="dark"]';
 
 const names = (declarations: string[]) => declarations.map((declaration) => declaration.split(":")[0]).sort();
 
-describe("the dark colours in styles.css", () => {
+describe("the dark colours in tokens.css", () => {
   it("are the same for a device that is set to dark and for a visitor who picked dark", () => {
     const device = blocks(DEVICE_DARK);
     const picked = blocks(PICKED_DARK).filter((declarations) => declarations.some((declaration) => declaration.startsWith("--")));

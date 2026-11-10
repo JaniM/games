@@ -1,0 +1,193 @@
+/*
+ * The board fills the screen, and everything else on the page is as wide as the board.
+ *
+ * The board is as wide as the page, so the page is as wide as the board should be: the width
+ * at which its height (the board is 720 by 520, see `geometry.ts`) is what is left of the screen
+ * after everything above and below it (`--game-chrome`), plus the page's own padding
+ * (`--game-pad`). Never wider than the window, and not narrower than 24rem, so that what is
+ * above and below the board has room for its lines; a window shorter than that scrolls. This is
+ * the layout for a screen too narrow to have the rest beside the board (see the landscape rules
+ * below), like a phone held upright.
+ *
+ * The chrome is counted in rem from the paddings and line heights (1.5) of what is there, and
+ * rounded up: too much leaves a little room, too little pushes the bottom of the page off the
+ * screen. It is for the fullest the page gets while a game is played, so that a line coming or
+ * going under the board does not resize it and move what the player is pressing.
+ *
+ *   6.75 = the bar at the top (3), 0.25 + 1 of padding, and the row of the two player bars (2.5)
+ * + 8.5  = the status band with every line it has (turn, a line under it, a warning, the buttons:
+ *          8.1875; ultimate tic-tac-toe has no warning), or the review bar instead (7.75 at most)
+ *
+ * Two states hold more, and the board is smaller for as long as they last (`:has` picks them):
+ *   - A panel over the board, to invite or to join (10 at most), with the status band without
+ *     its buttons (4.75): 6.75 + 10 + 4.75 = 21.5.
+ *   - The result of a game that is over (7.325, see `.result` in `game-panels.css`) under the
+ *     review bar (5.5 at most): 6.75 + 5.5 + 7.325 = 19.575, up to 19.75.
+ *
+ * The square board below has the same chrome: it is the same bars, status, review and result.
+ */
+.game-page {
+  --game-chrome: 15.25rem;
+  --game-pad: 1.5rem;
+  max-width: max(24rem, calc((100vh - var(--game-chrome)) * 720 / 520 + 2 * var(--game-pad)));
+  /* The board starts just under the bar at the top. */
+  padding: 0.25rem var(--game-pad) 1rem;
+}
+
+.game-page:has(.panel) {
+  --game-chrome: 21.5rem;
+}
+
+.game-page:has(.result) {
+  --game-chrome: 19.75rem;
+}
+
+/* Where the browser has them, the units that leave out the address bar of a phone. */
+@supports (height: 100dvh) {
+  .game-page {
+    max-width: max(24rem, calc((100dvh - var(--game-chrome)) * 720 / 520 + 2 * var(--game-pad)));
+  }
+}
+
+/* On a phone the board goes nearly to the edges. */
+@media (max-width: 46rem) {
+  .game-page {
+    --game-pad: 0.5rem;
+  }
+}
+
+/*
+ * A game with a square board (ultimate tic-tac-toe): its height is its width, so the page is as
+ * wide as what is left of the screen after the chrome, plus the padding. Not narrower than 24rem
+ * (a short window scrolls) and not wider than 40rem, which is a board as big as it is worth
+ * making. After the rules above, which it replaces.
+ */
+.game-page-square {
+  max-width: min(40rem, max(24rem, calc(100vh - var(--game-chrome) + 2 * var(--game-pad))));
+}
+
+@supports (height: 100dvh) {
+  .game-page-square {
+    max-width: min(40rem, max(24rem, calc(100dvh - var(--game-chrome) + 2 * var(--game-pad))));
+  }
+}
+
+/*
+ * A screen wider than it is tall, like a desktop's, a tablet's or a phone's on its side: the board
+ * is as tall as the screen, on the left, and everything else is in a column beside it: the panel
+ * and the bars at the top, then the review and the status. After the rules above, and the ones of
+ * `player-bars.css` (`index.css` imports this file after it), which it replaces; they are for a
+ * screen taller than it is wide, like a phone held upright.
+ *
+ * Such a screen has width to spare for the column, and is short of the height the stack above and
+ * below the board takes. Beside the column the square board is the bigger, and so is the long one
+ * on a screen 1.3 times as wide as it is tall or more. Below that the long board is a little smaller
+ * than it would be in the stack, but what is around it is in sight, where the stack would push it
+ * off the bottom of a screen that short.
+ *
+ * The board's column is as wide as the board is when it is as tall as the screen less the bar at
+ * the top and the page's padding (`--game-height`), but it leaves the side column at least 13rem. The side column is no
+ * wider than 22rem, and the two are centred together on a screen wider than they need. The size
+ * of the board comes from the screen alone, so nothing that comes or goes in the side column
+ * resizes it (there is no `--game-chrome` here).
+ *
+ * The board spans every row of the side column. The last row is flexible, so it takes what the
+ * board has beyond the column, and the rows above it are as tall as what is in them.
+ */
+@media (orientation: landscape) {
+  .game-page {
+    /* Just under the bar at the top, as above. */
+    --game-top: 0.25rem;
+    --game-bottom: 1rem;
+    --game-height: calc(100vh - var(--top-bar) - var(--game-top) - var(--game-bottom));
+    --game-side: 13rem;
+    --game-gap: 1rem;
+    display: grid;
+    grid-template-areas:
+      "board panel"
+      "board bars"
+      "board review"
+      "board status"
+      "board .";
+    grid-template-columns:
+      min(var(--game-height) * 720 / 520, 100% - var(--game-side) - var(--game-gap))
+      minmax(var(--game-side), 22rem);
+    grid-template-rows: auto auto auto auto 1fr;
+    column-gap: var(--game-gap);
+    justify-content: center;
+    align-items: start;
+    max-width: none;
+    padding: var(--game-top) var(--game-pad) var(--game-bottom);
+  }
+
+  /* The square board is as wide as it is tall, and no wider than 40rem, as above. */
+  .game-page-square {
+    max-width: none;
+    grid-template-columns:
+      min(40rem, var(--game-height), 100% - var(--game-side) - var(--game-gap))
+      minmax(var(--game-side), 22rem);
+  }
+
+  @supports (height: 100dvh) {
+    .game-page {
+      --game-height: calc(100dvh - var(--top-bar) - var(--game-top) - var(--game-bottom));
+    }
+  }
+
+  .game-page > .panel {
+    grid-area: panel;
+  }
+
+  /* The bars are one over the other, and the edge toward the board is the left one. */
+  .game-page > .player-bars {
+    grid-area: bars;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  /*
+   * The side column can be taller than the screen at its fullest (a game that is over, with its
+   * review, on the shortest screens), and then the page scrolls: the board stays where it can be
+   * seen, where it starts, and the column moves beside it.
+   */
+  .game-page > .board-wrap {
+    grid-area: board;
+    position: sticky;
+    top: calc(var(--top-bar) + var(--game-top));
+  }
+
+  .game-page > .review {
+    grid-area: review;
+  }
+
+  .game-page > .status-band,
+  .game-page > .result {
+    grid-area: status;
+  }
+
+  .player-bars .player-bar {
+    flex: none;
+    border-bottom-width: 0;
+    border-left-width: 2px;
+  }
+}
+
+/*
+ * A phone on its side, where every bit of the height counts: on a game page the bar at the top is
+ * lower, and its corners go in, to line up with the edges of the board, and the page has less
+ * padding.
+ */
+@media (orientation: landscape) and (max-height: 32rem) {
+  html:has(.game-page) {
+    --top-bar: 2.25rem;
+  }
+
+  html:has(.game-page) .site-top {
+    padding: 0.25rem 1rem 0;
+  }
+
+  .game-page {
+    --game-bottom: 0.5rem;
+    --game-pad: 1rem;
+  }
+}

@@ -1,6 +1,6 @@
 import { useOp, useQuery } from "millpond/react";
 import { type FormEvent, useState } from "react";
-import { PROFILE_ID, profileState, setName } from "./features/profile";
+import { PROFILE_ID, profileState, setName } from "../features/profile";
 
 /** The server accepts 1 to 32 characters. The input counts UTF-16 units, so it is never looser. */
 const MAX_NAME_LENGTH = 32;

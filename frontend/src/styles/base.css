@@ -1,0 +1,142 @@
+/* The page itself: what every element starts from, the column a page is in, and plain text. */
+
+/* The page's type and colours, which everything takes unless it says otherwise. */
+:root {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+ * `--top-bar` is the height of the bar along the top (`.site-top`): for what is sized by what is
+ * left of the screen under it (the game page), for what sticks under it, and for what the browser
+ * scrolls into sight, which it keeps out from under the bar.
+ */
+html {
+  --top-bar: 3rem;
+  scroll-padding-top: var(--top-bar);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/*
+ * Safari on a phone hides its bars as the page is scrolled down: the page itself, as something on
+ * it that scrolls by itself doesn't count. It keeps them on a page that fits the screen with them
+ * showing (`dvh`), which has nothing to scroll, and on one that is exactly as tall as the screen
+ * with them hidden (`lvh`, which is what `vh` is on a phone, so what the rule above makes a short
+ * page). So the page is a pixel taller than that, wherever the bars can be hidden: where `lvh` is
+ * more than `svh`, the screen with them showing. On a desktop the two are the same, and a page
+ * that fits does not scroll.
+ */
+@supports (height: 100lvh) {
+  body {
+    min-height: calc(100lvh + min(1px, 100lvh - 100svh));
+  }
+}
+
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+/* Controls take the page's type instead of the browser's own. */
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+/* One focus ring for everything that can have one. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Read by a screen reader, not seen. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The app is at least as tall as what is showing of the screen, as a column, so that the footer
+ * can sit at the bottom of a short page (`.site-footer`). `dvh` is the part of the screen that is
+ * showing: on a phone `vh` also counts the space under the browser's bars.
+ */
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+@supports (min-height: 100dvh) {
+  #root {
+    min-height: 100dvh;
+  }
+}
+
+.page {
+  /* A column does not stretch an item whose side margins are auto, so it must ask for the width. */
+  width: 100%;
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 4rem;
+}
+
+/* A page with room for a list beside something else. */
+.page-wide {
+  max-width: 68rem;
+}
+
+/* The title at the top of a page, and the line under it. */
+.page-header {
+  margin-bottom: 2.5rem;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: var(--text-title);
+  line-height: 1.1;
+}
+
+.page-header p {
+  margin: 0.5rem 0 0;
+  font-size: var(--text-lg);
+  color: var(--muted);
+}
+
+/* --- Plain text --- */
+
+.muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  color: var(--accent);
+  font-weight: 600;
+}

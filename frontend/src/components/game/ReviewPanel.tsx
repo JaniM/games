@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect } from "react";
 import { Loading } from "../Loading";
-import { type ReviewMove, moveForKey } from "../features/game";
+import { type ReviewMove, moveForKey } from "../../features/game";
 import type { FrameText } from "./people";
 
 export interface ReviewPanelProps {

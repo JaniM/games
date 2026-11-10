@@ -3,8 +3,8 @@ import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { AccountMenuView, type AccountMenuViewProps } from "./AccountMenu";
-import { profile } from "./features/profile";
-import { session } from "./features/session";
+import { profile } from "../features/profile";
+import { session } from "../features/session";
 
 // What the menu shows is a function of its props (the name field aside, which reads the profile),
 // so these render it to a string. There is no DOM here: what the buttons do is covered by the ops

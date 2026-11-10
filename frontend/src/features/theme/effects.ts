@@ -17,8 +17,8 @@ export const persistTheme = effect({
 });
 
 /**
- * Puts the theme on the page, as `data-theme` on the root element, which `styles.css` answers.
- * With none the page follows the device. (The first paint of a visit is the script in
+ * Puts the theme on the page, as `data-theme` on the root element, which `styles/tokens.css`
+ * answers. With none the page follows the device. (The first paint of a visit is the script in
  * `index.html`'s: this runs once the app has started.)
  */
 export function showTheme(theme: Theme): void {

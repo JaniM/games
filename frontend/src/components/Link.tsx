@@ -1,6 +1,6 @@
 import { useOp } from "millpond/react";
 import { type AnchorHTMLAttributes, type MouseEvent, useCallback } from "react";
-import { pathChanged, pushPath } from "./features/router";
+import { pathChanged, pushPath } from "../features/router";
 
 /**
  * Moves to another page of the site without reloading: puts the path in the address

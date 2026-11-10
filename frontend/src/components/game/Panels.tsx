@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { Link } from "../Link";
 import { Loading } from "../Loading";
-import { gamePath } from "../features/router";
+import { gamePath } from "../../features/router";
 import type { RematchStage, Result } from "./people";
 import type { AnyGameViewRow, JoinRequestRow } from "./rows";
 

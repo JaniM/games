@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from "react";
-import { Link } from "../Link";
+import { Link } from "../components/Link";
 import { OPERATOR, type Operator } from "../site";
 
 export interface PrivacyProps {

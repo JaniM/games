@@ -1,0 +1,305 @@
+/*
+ * The account menu in the top right corner: the button and the panel that drops from it, what is
+ * in the panel (the name, the actions, the volume and the theme), and the forms of the dialogs that
+ * its actions open.
+ */
+
+/* The button of the account menu in the corner, and the panel that drops from it. */
+.options {
+  position: relative;
+}
+
+.options-toggle {
+  cursor: pointer;
+  color: var(--muted);
+  /* Our own arrow below, the same in every browser. */
+  list-style: none;
+}
+
+.options-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.options-toggle::after {
+  content: " ▾";
+}
+
+.options[open] > .options-toggle::after {
+  content: " ▴";
+}
+
+.options-toggle:hover,
+.options[open] > .options-toggle {
+  color: var(--accent);
+}
+
+.options-panel {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  /* Over the board, which is drawn after the strip. */
+  z-index: 20;
+  min-width: 13rem;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.2);
+}
+
+/* A panel in the right corner lines up with the right edge of its button, and is never wider than the screen. */
+.options-panel-end {
+  left: auto;
+  right: 0;
+  width: max-content;
+  max-width: calc(100vw - 3rem);
+}
+
+/* The button of the account menu says the display name, which may be long: it is cut short. */
+.options-label-clipped {
+  display: inline-block;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* On a phone the name leaves room for the nav beside it. */
+@media (max-width: 46rem) {
+  .options-label-clipped {
+    max-width: 8rem;
+  }
+}
+
+/* What is in the panel: the display name and who the user is, then what they can do about it. */
+.account-block {
+  min-width: 15rem;
+  line-height: 1.5;
+}
+
+.account-label,
+.account-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.account-note {
+  margin-top: 0.25rem;
+}
+
+/* An account's name in the panel: text, not a button, since it can't be changed. */
+.account-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.account-note strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* The actions, one to a line between hairlines, like any list on the site. */
+.menu-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.25rem 0;
+  font: inherit;
+  line-height: 1.5;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.menu-item:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* One row of the account menu that is not a button: the volume slider, between hairlines like the buttons. */
+.menu-row {
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* --- The name --- */
+
+.name-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The name is text that can be changed, not a button to look at: dotted, like a field to fill in. */
+.name-button {
+  max-width: 14rem;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 0.3em;
+}
+
+.name-button:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+.name-button:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+
+.name-error {
+  color: var(--accent);
+}
+
+/*
+ * The form, while the name is edited, is in the account menu's panel. Its input gives way before
+ * its buttons do when the panel is narrower than the form would like, and the buttons wrap under
+ * it if they must.
+ */
+.options-panel .name-control {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* The name, in the panel, may use the width of the panel. */
+.options-panel .name-button {
+  max-width: 100%;
+}
+
+/* In the name's form the buttons keep their size, and the input gives way. */
+form.name-control .button {
+  flex: none;
+}
+
+/* --- The volume and the theme --- */
+
+/* The volume slider, in the account menu on a game page. */
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+}
+
+.volume-slider {
+  width: 7rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/*
+ * The theme in the account menu: its name, and Auto, Light and Dark side by side. The radios are
+ * hidden and their labels are the buttons; the picked one is tinted and in the accent, as what
+ * is picked is elsewhere. It wraps on a narrow panel rather than growing it.
+ */
+.theme {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  color: var(--muted);
+}
+
+.theme-options {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.theme-option {
+  cursor: pointer;
+}
+
+.theme-name {
+  display: block;
+  padding: 0 0.5rem;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.theme-option:hover .theme-name {
+  color: var(--accent);
+}
+
+.theme-option:has(input:checked) .theme-name {
+  color: var(--accent);
+  background: var(--tint);
+  border-color: var(--accent);
+}
+
+/* The radio is hidden, so its label takes the focus ring. */
+.theme-option:has(input:focus-visible) .theme-name {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- The forms in the dialogs --- */
+
+/* The forms in the dialogs: a label over its field, one under another. */
+.account-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.field {
+  display: block;
+  margin: 0 0 0.75rem;
+}
+
+.field-label {
+  display: block;
+  margin: 0 0 0.25rem;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.field-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* What a deletion does to the games, in a list between hairlines. */
+.account-effects {
+  margin: 0 0 0.75rem;
+  padding: 0;
+  font-size: var(--text-sm);
+  list-style: none;
+  border-bottom: 1px solid var(--rule);
+}
+
+.account-effects li {
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--rule);
+}

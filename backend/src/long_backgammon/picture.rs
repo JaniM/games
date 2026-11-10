@@ -1,17 +1,17 @@
 //! The board as an SVG, for the preview of a link to a game (see `preview`).
 //!
 //! It draws what `frontend/src/longBackgammon/Board.tsx` and `Dice.tsx` draw, from the places
-//! in `geometry.ts` and `layout.ts`, in the dark palette of `styles.css`: the frame, the points,
-//! the checkers, the trays with what is borne off, and the dice. The board is seen from seat 0's
-//! side, whose head is top right and home bottom right (see `layout.ts`'s `pointSlot`). What only
-//! matters to someone at the board (the moves they may make, motion) is left out, and so is the
-//! number a stack of more than five checkers shows: the SVG is rendered without text. Keep this in
-//! step with the frontend.
+//! in `geometry.ts` and `layout.ts`, in the dark palette of `styles/tokens.css`: the frame, the
+//! points, the checkers, the trays with what is borne off, and the dice. The board is seen from
+//! seat 0's side, whose head is top right and home bottom right (see `layout.ts`'s `pointSlot`).
+//! What only matters to someone at the board (the moves they may make, motion) is left out, and so
+//! is the number a stack of more than five checkers shows: the SVG is rendered without text. Keep
+//! this in step with the frontend.
 
 use super::{Phase, State};
 
-// The dark palette of `styles.css` (`prefers-color-scheme: dark`). Only the wood changes in it:
-// the checkers and the dice are the same in both.
+// The dark palette of `styles/tokens.css` (`prefers-color-scheme: dark`). Only the wood changes in
+// it: the checkers and the dice are the same in both.
 const FRAME: &str = "#4a3826";
 const BAR: &str = "#33261a";
 const TRI_A: &str = "#c8b48f";

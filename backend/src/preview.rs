@@ -40,8 +40,8 @@ const CARD_WIDTH: u32 = 1200;
 const CARD_HEIGHT: u32 = 630;
 /// The space round the board.
 const CARD_MARGIN: f32 = 24.0;
-/// The background of the page in its dark colours (`--bg` in `styles.css`), which the games'
-/// pictures are drawn in.
+/// The background of the page in its dark colours (`--bg` in `styles/tokens.css`), which the
+/// games' pictures are drawn in.
 const CARD_BACKGROUND: (u8, u8, u8) = (0x16, 0x14, 0x0f);
 
 /// How long what a program that unfolds links fetched may be kept. The address of a picture has

@@ -1,5 +1,5 @@
 import { Link } from "./Link";
-import { gamePath } from "./features/router";
+import { gamePath } from "../features/router";
 
 /** Where a game stands: being played, waiting for an opponent, or over. */
 export type GameState = "live" | "waiting" | "done";

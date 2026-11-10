@@ -1,5 +1,5 @@
-import type { Players, Seat } from "../features/game";
-import { playerName } from "../playerName";
+import type { Players, Seat } from "../../features/game";
+import { playerName } from "../../playerName";
 
 // The words about the people in a game, whatever the game: who is who in a sentence, and where
 // the rematch stands. Each game's own `status.ts` adds the words about its board.

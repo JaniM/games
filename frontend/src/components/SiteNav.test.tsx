@@ -3,7 +3,7 @@ import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { type NavPage, SiteNav } from "./SiteNav";
-import { router } from "./features/router";
+import { router } from "../features/router";
 
 // What the nav shows is a function of its props, so these render it to a string.
 

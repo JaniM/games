@@ -14,8 +14,8 @@ import {
 } from "./PublicGamesScreen";
 
 // Rendering to a string shows the first moment, before the loading text has waited its second.
-// This one says it at once, which shows whether the page is waiting (see immediateLoading.tsx).
-vi.mock("../Loading", () => import("../immediateLoading"));
+// This one says it at once, which shows whether the page is waiting (see components/immediateLoading.tsx).
+vi.mock("../components/Loading", () => import("../components/immediateLoading"));
 
 // What the page shows is a function of its props, so these render it to a string.
 

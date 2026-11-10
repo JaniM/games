@@ -1,0 +1,116 @@
+/*
+ * The tokens: the colours, the typefaces, the sizes and the radius that the other files use, and
+ * the dark colours that take the place of the light ones.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f4ef;
+  --fg: #1d1b18;
+  --muted: #6b655c;
+  --card: #fffdf9;
+  /* Between things; and the edge of a control, which has to be seen (--line, 3:1 on --bg). */
+  --rule: #ddd6c8;
+  --line: #8a8374;
+  --accent: #a4472b;
+  --on-accent: #fffdf9;
+  /* The accent, faintly: what is picked, and what is the player's turn. */
+  --tint: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  /*
+   * The two players' marks in ultimate tic-tac-toe. X is in ink, O in a blue-green that sits
+   * beside the accent without being it: the accent stays for what is the player's to do. The
+   * shapes differ too, so a mark never depends on its colour alone.
+   */
+  --mark-x: var(--fg);
+  --mark-o: #2c6e78;
+
+  --radius: 4px;
+
+  /*
+   * System fonts on purpose: nothing is fetched from anyone (the privacy page says so). The
+   * display stack is the old-style serif of each platform: Iowan Old Style on Apple devices,
+   * Palatino on Windows, Georgia as the last resort.
+   */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-title: clamp(2rem, 5.5vw, 2.75rem);
+}
+
+/*
+ * The dark colours, twice: for a device that is set to dark (unless the person picked light in
+ * the account menu), and for the person who picked dark (`data-theme` on the root element, see
+ * `features/theme`). The two blocks must hold the same, and a test checks that they do.
+ * `color-scheme` makes what the browser draws (fields, scroll bars) follow the choice.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16140f;
+    --fg: #efebe3;
+    --muted: #a39c8f;
+    --card: #1f1c16;
+    --rule: #2f2b23;
+    --line: #6d675a;
+    --accent: #e08a6a;
+    --mark-o: #7cc2cc;
+    --on-accent: #16140f;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16140f;
+  --fg: #efebe3;
+  --muted: #a39c8f;
+  --card: #1f1c16;
+  --rule: #2f2b23;
+  --line: #6d675a;
+  --accent: #e08a6a;
+  --mark-o: #7cc2cc;
+  --on-accent: #16140f;
+}
+
+/*
+ * The wood of the long backgammon board, and its checkers, which the swatches in the player bars
+ * show too.
+ */
+
+:root {
+  --board-frame: #6f5238;
+  --board-bar: #4f3a27;
+  --tri-a: #e4d3b4;
+  --tri-b: #a8704c;
+  --board-text: #efe3cc;
+  --checker-white: #fbf8f0;
+  --checker-black: #2a2622;
+  --swatch-stroke: #6b655c;
+}
+
+/* The dark wood, twice, as the dark colours at the top are. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --board-frame: #4a3826;
+    --board-bar: #33261a;
+    --tri-a: #c8b48f;
+    --tri-b: #8a5a3b;
+  }
+}
+
+:root[data-theme="dark"] {
+  --board-frame: #4a3826;
+  --board-bar: #33261a;
+  --tri-a: #c8b48f;
+  --tri-b: #8a5a3b;
+}

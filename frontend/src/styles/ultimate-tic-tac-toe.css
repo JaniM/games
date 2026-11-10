@@ -1,0 +1,176 @@
+/*
+ * Nine small boards in a 3 by 3 grid. The lines of the big grid are the gaps between the small
+ * boards, which show the background of `.ttt`, so they are heavy; the lines of a small board are
+ * the 1px gaps between its cells, which show the background of `.ttt-board`, so they are light.
+ * Neither has an outer edge, as in the game on paper. The board is square and as wide as the
+ * page; the size query lets the heavy lines grow with it. The motion of a new mark, like the
+ * rest of the board's, is not turned off by `prefers-reduced-motion` (see the end of
+ * `long-backgammon.css`).
+ */
+.ttt-wrap {
+  container-type: inline-size;
+}
+
+.ttt {
+  --ttt-big: color-mix(in srgb, var(--fg) 80%, var(--bg));
+  --ttt-small: color-mix(in srgb, var(--line) 45%, var(--bg));
+  display: grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  gap: clamp(3px, 0.9cqw, 6px);
+  aspect-ratio: 1;
+  background: var(--ttt-big);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.ttt-board {
+  --ttt-cell: var(--bg);
+  position: relative;
+  display: grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ttt-small);
+}
+
+/*
+ * A frame inside the board the next mark must go in, for everyone who looks, a spectator too.
+ * It is a box of its own over the cells, and not the board's `outline`: the cells are positioned
+ * (for their marks) and have a background, so they are painted over an outline, which would be
+ * hidden along the edge of the board where it is. It lets presses through to the cells. Faint for
+ * whoever can't play there now, and the full accent for who can.
+ */
+.ttt-board-target {
+  --ttt-cell: var(--tint);
+}
+
+.ttt-board-target::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.ttt-board-yours::after {
+  border-color: var(--accent);
+}
+
+/* The three boards that won the game are tinted, as the board to play in is. They have no frame or line. */
+.ttt-board-line {
+  --ttt-cell: var(--tint);
+}
+
+.ttt-cell {
+  position: relative;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--ttt-cell);
+}
+
+/* The cell the last mark went into. */
+.ttt-cell-last {
+  background: color-mix(in srgb, var(--accent) 18%, var(--ttt-cell));
+}
+
+/* A cell that can be marked is the only kind that is a button. */
+button.ttt-cell {
+  appearance: none;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.ttt-cell-open:hover,
+.ttt-cell-open:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, var(--ttt-cell));
+}
+
+/* The ring that every focused thing has would run into the next cell: it goes inside. */
+.ttt-cell-open:focus-visible {
+  outline-offset: -3px;
+}
+
+/* An X or an O: strokes in the colour of their player, on a 100 by 100 grid, drawn to fit their box. */
+.ttt-mark {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 11;
+  stroke-linecap: round;
+}
+
+.ttt-mark-x {
+  color: var(--mark-x);
+}
+
+.ttt-mark-o {
+  color: var(--mark-o);
+}
+
+.ttt-cell > .ttt-mark {
+  position: absolute;
+  inset: 14%;
+  width: 72%;
+  height: 72%;
+}
+
+/* In a player's bar the mark fills its box. */
+.player-mark .ttt-mark {
+  width: 100%;
+  height: 100%;
+}
+
+/* A won board is claimed with one big mark, over its cells. */
+.ttt-claim {
+  position: absolute;
+  inset: 8%;
+  pointer-events: none;
+}
+
+.ttt-claim .ttt-mark {
+  width: 100%;
+  height: 100%;
+  stroke-width: 6;
+}
+
+/* A board that is decided: its own marks step back. */
+.ttt-board-won .ttt-cell > .ttt-mark,
+.ttt-board-drawn .ttt-cell > .ttt-mark {
+  opacity: 0.25;
+}
+
+/* The strokes of a new mark are drawn in, one after the other. `pathLength` is 1 for each. */
+.ttt-mark-fresh path,
+.ttt-mark-fresh circle {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ttt-draw 0.2s ease-out both;
+}
+
+.ttt-mark-fresh path:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+/* The big mark of a board that was just won comes after the mark that won it. */
+.ttt-claim .ttt-mark-fresh path,
+.ttt-claim .ttt-mark-fresh circle {
+  animation-duration: 0.3s;
+  animation-delay: 0.2s;
+}
+
+.ttt-claim .ttt-mark-fresh path:nth-child(2) {
+  animation-delay: 0.35s;
+}
+
+@keyframes ttt-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}

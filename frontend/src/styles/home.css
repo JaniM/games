@@ -1,0 +1,243 @@
+/* The front page: the games to start, and the list of the user's games beside them. */
+
+/*
+ * The front page is as wide as the screen: its list is at the left edge, in line with the nav.
+ * Little padding under it, because the footer follows (see `.home-games`).
+ */
+.page-home {
+  max-width: none;
+  padding-bottom: 1.5rem;
+}
+
+.home {
+  display: grid;
+  grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr);
+  gap: 3rem;
+  align-items: start;
+}
+
+/*
+ * The list scrolls by itself, so a long one doesn't push the games, or the footer under them,
+ * out of sight: the front page is never taller than the screen for its sake. What is around the
+ * list is the bar at the top (3rem), the page's padding, 1rem over the list and 1.5rem under it,
+ * and the footer (one line of 0.875rem at 1.5, and 0.5rem under it: 1.8125rem). The list, with
+ * its title, is the screen less those 7.3125rem, rounded up. `dvh` is the part of the screen that
+ * is showing (see `#root` in `base.css`). It sticks where it starts, under the bar and the page's
+ * padding.
+ *
+ * Only the rows scroll: the title, and a line about the list (loading, empty, failed), stay over
+ * them.
+ */
+.home-games {
+  position: sticky;
+  top: calc(var(--top-bar) + 1rem);
+  display: flex;
+  flex-direction: column;
+  max-width: 19rem;
+  max-height: calc(100vh - 7.5rem);
+}
+
+@supports (max-height: 100dvh) {
+  .home-games {
+    max-height: calc(100dvh - 7.5rem);
+  }
+}
+
+.home-catalog {
+  width: 100%;
+  max-width: 46rem;
+  justify-self: center;
+}
+
+/*
+ * A phone on its side: the list is as narrow as it goes, and closer, so that the games to start
+ * have the width to be side by side (see the end of the game cards). Before the rules for a wider
+ * screen and a narrower one, which have columns of their own.
+ */
+@media (orientation: landscape) and (max-height: 32rem) {
+  .home {
+    grid-template-columns: 14rem minmax(0, 1fr);
+    gap: 2rem;
+  }
+}
+
+/*
+ * With room for both, the games to start are in the middle of the screen. An empty column as wide
+ * as the one for the list, on the other side, keeps them there.
+ */
+@media (min-width: 80rem) {
+  .home {
+    grid-template-columns: minmax(14rem, 1fr) minmax(0, 46rem) minmax(14rem, 1fr);
+  }
+
+  .home-catalog {
+    grid-column: 2;
+  }
+}
+
+/* The label over a list: small, and not in the display face. */
+.section-title {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/*
+ * On the front page the titles stay in sight under the bar at the top while what is under them
+ * scrolls with the page: the games to start on a short screen, and the list on a narrow one,
+ * where it is part of the page. On the page's colour, and with padding under it instead of a
+ * margin, which hides what goes under it. Over the cards, which are drawn after it when pressed.
+ */
+.home .section-title {
+  position: sticky;
+  top: var(--top-bar);
+  z-index: 1;
+  margin-bottom: 0;
+  padding-bottom: 0.75rem;
+  background: var(--bg);
+}
+
+/* On a narrow screen the games to start come first, and the list below them, as wide as they are. */
+@media (max-width: 44rem) {
+  .home {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2.5rem;
+  }
+
+  .home-catalog {
+    order: -1;
+  }
+
+  .home-games {
+    position: static;
+    max-width: none;
+    max-height: none;
+  }
+
+  /* The list is part of the page here, and a page this long scrolls: room before the footer. */
+  .page-home {
+    padding-bottom: 4rem;
+  }
+}
+
+.game-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * A button that opens the dialog for starting that game. It is boxed, as what is pressed is, and
+ * stands on an edge like a key's, which it goes down onto when pressed. Its "Play" is set as a
+ * button, so that the card reads as one thing to press.
+ */
+.game-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  height: 100%;
+  padding: 1.25rem;
+  text-align: left;
+  cursor: pointer;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 0 var(--line);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.1s;
+}
+
+.game-card:active {
+  box-shadow: none;
+  transform: translateY(2px);
+}
+
+.game-card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.game-card-text {
+  color: var(--muted);
+}
+
+.game-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.game-card-play {
+  padding: 0.25rem 0.75rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+  transition: background 0.15s;
+}
+
+/* Only with a pointer to hover with: a phone would leave the card it was tapped on lit. */
+@media (hover: hover) {
+  .game-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 0 var(--accent);
+  }
+
+  .game-card:hover .game-card-title {
+    color: var(--accent);
+  }
+
+  .game-card:hover .game-card-play {
+    background: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-card,
+  .game-card-play {
+    transition: none;
+  }
+}
+
+/*
+ * A phone on its side: the games are side by side, so that all of them are in sight on a screen
+ * this short. The columns are narrower, and the titles a step smaller, which keeps them on one
+ * line and the descriptions level.
+ */
+@media (orientation: landscape) and (max-height: 32rem) {
+  .game-list {
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .game-card {
+    padding: 1rem;
+  }
+
+  .game-card-title {
+    font-size: var(--text-lg);
+  }
+}
+
+/* On the front page the rows (`game-rows.css`) scroll by themselves, under the title (see `.home-games`). */
+.home-games .my-games {
+  min-height: 0;
+  overflow-y: auto;
+}

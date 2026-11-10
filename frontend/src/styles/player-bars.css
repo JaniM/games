@@ -1,0 +1,97 @@
+/*
+ * The two players, side by side over the board (`.player-bars`): the viewer first. The one to
+ * move is tinted, with a line in the accent on the edge that faces the board, as if the bar
+ * were joined to it. The line is there, transparent, on the other bar too, so that a turn
+ * passing moves nothing.
+ */
+.player-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem;
+  border: 0 solid transparent;
+}
+
+/*
+ * Both bars are in one row over the board, to leave the height to the board: the same width
+ * each, and the highlight on the bottom edge, the one toward the board. The row is 2.5 tall in
+ * all (`--game-chrome`), always one line: a name too long for its bar is cut off with an ellipsis
+ * (see `.player-name`), and the rest of the bar keeps its room.
+ */
+.player-bars {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.player-bars .player-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  border-bottom-width: 2px;
+}
+
+.player-bar-active {
+  background: var(--tint);
+  border-color: var(--accent);
+}
+
+/* The one part of the bar that gives way: a name that doesn't fit ends in an ellipsis. */
+.player-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-bar-active .player-name {
+  color: var(--accent);
+}
+
+.swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  border: 2px solid var(--swatch-stroke);
+}
+
+/* The player to move has a ring around their checker. */
+.player-bar-active .swatch {
+  box-shadow:
+    0 0 0 2px var(--tint),
+    0 0 0 4px var(--accent);
+}
+
+.swatch-white {
+  background: var(--checker-white);
+}
+
+.swatch-black {
+  background: var(--checker-black);
+}
+
+.swatch-none {
+  background: transparent;
+  border-style: dashed;
+}
+
+/* A player's mark, in a bar where long backgammon has its swatch. The player to move has the same ring. */
+.player-mark {
+  display: block;
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+}
+
+.player-mark-none {
+  border: 2px dashed var(--line);
+}
+
+.player-bar-active .player-mark {
+  box-shadow:
+    0 0 0 2px var(--tint),
+    0 0 0 4px var(--accent);
+}

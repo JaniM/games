@@ -1,0 +1,32 @@
+/*
+ * The look of the site, a file to each part, in the order a page is built: the tokens, the page,
+ * its corners and controls, the front page, the game page, the boards. The order is the cascade's
+ * too: a file can override one before it (`game-page.css` rearranges the parts of a game page for
+ * a wide screen), so a new file goes where its part is built. Four rules hold it together:
+ *
+ *  - Two typefaces, each with a job. The display face (`--font-display`) is for titles and for
+ *    nothing else; everything else is the UI face. Sizes come from the `--text-*` scale and the
+ *    weights are 400 and 600. A size or weight that is not on the scale is a mistake.
+ *  - One corner radius (`--radius`). Round is for things that are round: dots, swatches, radios.
+ *  - Lists are divided by hairlines (`--rule`), not boxed. A box is for what floats above the
+ *    page (the dialog, the menu) and for what is pressed (buttons, fields).
+ *  - The accent is for what is the player's to do, and for what is picked. Not for decoration.
+ */
+
+@import "./tokens.css";
+@import "./base.css";
+@import "./site.css";
+@import "./controls.css";
+@import "./account.css";
+@import "./dialog.css";
+
+@import "./home.css";
+@import "./game-rows.css";
+
+@import "./game-panels.css";
+@import "./player-bars.css";
+@import "./game-page.css";
+@import "./long-backgammon.css";
+@import "./ultimate-tic-tac-toe.css";
+
+@import "./prose.css";

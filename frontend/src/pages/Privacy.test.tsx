@@ -2,7 +2,7 @@ import { createDb } from "millpond";
 import { DbProvider } from "millpond/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { SiteFooter } from "../SiteFooter";
+import { SiteFooter } from "../components/SiteFooter";
 import { router } from "../features/router";
 import { Privacy, type PrivacyProps } from "./Privacy";
 

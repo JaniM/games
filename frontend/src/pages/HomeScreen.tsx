@@ -1,7 +1,7 @@
 import type { RowOf } from "millpond";
-import { GAME_STATE_TEXT, GameRow, gameState } from "../GameRow";
-import { Loading } from "../Loading";
-import { Modal } from "../Modal";
+import { GAME_STATE_TEXT, GameRow, gameState } from "../components/GameRow";
+import { Loading } from "../components/Loading";
+import { Modal } from "../components/Modal";
 import { BOT_LEVELS, type BotLevel, type gamesList, type myGames, type newGame } from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";

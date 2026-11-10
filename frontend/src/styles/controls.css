@@ -1,0 +1,82 @@
+/* What is typed in and what is pressed, wherever it is. */
+
+/* --- Fields --- */
+
+.name-input,
+.invite-url {
+  padding: 0.25rem 0.625rem;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.name-input {
+  flex: 0 1 11rem;
+  width: 11rem;
+  min-width: 0;
+}
+
+/*
+ * Safari on a phone zooms into an input whose text is smaller than 16px when it gets focus
+ * (the name's form is focused as it opens, the invite link when it is pressed), and does not
+ * zoom back out, which leaves the page too big for the screen. So no input on a touch screen
+ * gets smaller text than that. In px: it is the size on the screen that counts.
+ */
+@media (pointer: coarse) {
+  .name-input,
+  .invite-url {
+    font-size: 16px;
+  }
+}
+
+/* --- Buttons --- */
+
+.button {
+  display: inline-block;
+  padding: 0.5rem 1.25rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--fg));
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* For the choice that isn't the point of the page, e.g. Cancel next to Create. */
+.button-quiet {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--line);
+}
+
+.button-quiet:hover:not(:disabled) {
+  color: var(--accent);
+  background: transparent;
+  border-color: var(--accent);
+}
+
+/* A quiet button that is a switch, and is on. */
+.button-quiet[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* For the corner, where the buttons sit among the lines of text. */
+.button-small {
+  padding: 0.125rem 0.75rem;
+  font-size: var(--text-sm);
+}

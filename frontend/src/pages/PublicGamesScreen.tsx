@@ -1,6 +1,6 @@
 import type { RowOf } from "millpond";
-import { GameRow, gameState } from "../GameRow";
-import { Loading } from "../Loading";
+import { GameRow, gameState } from "../components/GameRow";
+import { Loading } from "../components/Loading";
 import type { publicGames, publicList } from "../features/lobby";
 import type { GameInfo } from "../games";
 import { playerName } from "../playerName";

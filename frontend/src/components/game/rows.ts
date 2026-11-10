@@ -1,5 +1,5 @@
 import type { RowOf } from "millpond";
-import type { gameViews, joinRequests, rematchRequests, reviews } from "../features/game";
+import type { gameViews, joinRequests, rematchRequests, reviews } from "../../features/game";
 
 // The rows a game screen is drawn from. A screen gets them as props, so that it can be
 // rendered without a db.

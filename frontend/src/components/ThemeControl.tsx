@@ -1,4 +1,4 @@
-import { THEMES, type Theme } from "./features/theme";
+import { THEMES, type Theme } from "../features/theme";
 
 export interface ThemeControlProps {
   theme: Theme;

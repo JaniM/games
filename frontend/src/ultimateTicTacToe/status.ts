@@ -1,5 +1,5 @@
 import type { Seat, UtttSnapshot, UtttState } from "../features/game";
-import { type FrameText, type Result, inSentence, nameOf } from "../gameUi/people";
+import { type FrameText, type Result, inSentence, nameOf } from "../components/game/people";
 
 // The words on the page, derived from a snapshot. Kept apart from the components so that
 // every sentence can be tested. Boards and cells are counted from 0 in the state, and from 1

@@ -3,12 +3,12 @@ import { NameControl } from "./NameControl";
 import { OptionsMenu } from "./OptionsMenu";
 import { ThemeControl } from "./ThemeControl";
 import { VolumeControl } from "./VolumeControl";
-import { ACCOUNT_ID, accountRequest, openAccountForm, signOut } from "./features/account";
-import { PROFILE_ID, profileState } from "./features/profile";
-import { SESSION_ID, sessionState } from "./features/session";
-import { DEFAULT_VOLUME, SOUND_ID, setVolume, soundSettings } from "./features/sound";
-import { DEFAULT_THEME, THEME_ID, type Theme, setTheme, themeSettings } from "./features/theme";
-import { playCue } from "./longBackgammon/sounds";
+import { ACCOUNT_ID, accountRequest, openAccountForm, signOut } from "../features/account";
+import { PROFILE_ID, profileState } from "../features/profile";
+import { SESSION_ID, sessionState } from "../features/session";
+import { DEFAULT_VOLUME, SOUND_ID, setVolume, soundSettings } from "../features/sound";
+import { DEFAULT_THEME, THEME_ID, type Theme, setTheme, themeSettings } from "../features/theme";
+import { playCue } from "../longBackgammon/sounds";
 
 /** The volume of the game sounds, and what the slider does. */
 export interface SoundProps {

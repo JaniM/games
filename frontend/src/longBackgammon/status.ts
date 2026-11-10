@@ -7,12 +7,12 @@ import {
   inSentence,
   nameOf,
   rematchStage,
-} from "../gameUi/people";
+} from "../components/game/people";
 import { landing, pointNumber } from "./layout";
 
 // The words on the page, derived from a snapshot. Kept apart from the components so that
 // every sentence can be tested. The words about the people (names, the rematch) are the same for
-// every game: they are in `gameUi/people.ts`, and come out of here too.
+// every game: they are in `components/game/people.ts`, and come out of here too.
 
 export { barNameOf, nameOf, rematchStage };
 export type { FrameText, RematchStage, Result };

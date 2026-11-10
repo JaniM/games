@@ -1,0 +1,77 @@
+/* The corners of the site: the bar along the top, with the nav in it, and the footer. */
+
+/*
+ * The bar along the top: the nav in the left corner and the account menu in the right, in the
+ * corners of the whole page, not of the centred column. It stays at the top while the page
+ * scrolls under it, on the page's colour, which hides what goes under it. The two have the same
+ * line, so that their text sits on one baseline, and the bar is as tall as that line and the room
+ * over it, whatever is in it. The account menu's panel floats over the page under the bar.
+ */
+.site-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg);
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  height: var(--top-bar);
+  padding: 1rem 1.5rem 0;
+  font-size: var(--text-sm);
+  line-height: 2rem;
+}
+
+/* The account menu gives way to the nav on a narrow screen: its name is cut short. */
+.top-right {
+  min-width: 0;
+}
+
+/* The top left corner of every page: where the site goes, beside where the name is. */
+.site-nav {
+  display: flex;
+  flex: none;
+  gap: 1.5rem;
+}
+
+.site-nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--accent);
+}
+
+/* The page you are on is what is picked: the accent, heavier, and underlined. A link under the pointer is only the accent. */
+.site-nav a[aria-current="page"] {
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.4em;
+}
+
+/* --- The privacy link on the front page --- */
+
+/*
+ * The last thing on the page, in the bottom right corner. A page shorter than the screen
+ * leaves it at the bottom of the screen (the auto margin takes up the rest of `#root`); a
+ * longer page leaves it at the very end, after everything, and not over the content. Its
+ * right edge lines up with the account menu in the top right corner (`.top-right`).
+ */
+.site-footer {
+  margin-top: auto;
+  align-self: flex-end;
+  padding: 0 1.5rem 0.5rem;
+  font-size: var(--text-sm);
+}
+
+.site-footer a {
+  color: var(--muted);
+}
+
+.site-footer a:hover {
+  color: var(--accent);
+}

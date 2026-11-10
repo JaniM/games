@@ -1,0 +1,329 @@
+/* The long backgammon board: the dice, the board, what is laid over it, and how it moves. */
+
+.die-face {
+  fill: #fffdf9;
+  stroke: #3a2f22;
+  stroke-width: 1.2;
+}
+
+.die-pip {
+  fill: #1d1b18;
+}
+
+.die {
+  transition: opacity 0.25s;
+}
+
+.die-used {
+  opacity: 0.3;
+}
+
+/* The board is drawn in its own units and scales with the page. */
+.board {
+  /* How long a checker takes to cross the board, and the dice to settle. */
+  --move-ms: 225ms;
+  --roll-ms: 450ms;
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.board-frame {
+  fill: var(--board-frame);
+}
+
+.board-bar {
+  fill: var(--board-bar);
+}
+
+.board-inlay {
+  fill: none;
+  stroke: var(--board-text);
+  stroke-opacity: 0.18;
+  pointer-events: none;
+}
+
+.tri-a {
+  fill: var(--tri-a);
+}
+
+.tri-b {
+  fill: var(--tri-b);
+}
+
+.hit {
+  fill: transparent;
+}
+
+.checker-white {
+  fill: var(--checker-white);
+  stroke: #3a2f22;
+  stroke-width: 1.5;
+}
+
+.checker-black {
+  fill: var(--checker-black);
+  stroke: #0e0c0a;
+  stroke-width: 1.5;
+}
+
+.checker-count {
+  font-size: 18px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.checker-count-white {
+  fill: #2a2622;
+}
+
+.checker-count-black {
+  fill: #fbf8f0;
+}
+
+.tray-box {
+  fill: var(--board-bar);
+  stroke: var(--board-text);
+  stroke-opacity: 0.25;
+}
+
+/* A checker can be borne off (the selected one, or the farthest if none is): the whole tray is where to press, and shows it. */
+.tray-box-active {
+  stroke: var(--accent);
+  stroke-opacity: 1;
+  stroke-width: 3;
+}
+
+.point-bg-active,
+.point-pieces-active,
+.ghost,
+.bear-off {
+  cursor: pointer;
+}
+
+.point-source .checker {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.point-selected .tri {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.point-target .tri {
+  fill: var(--accent);
+  fill-opacity: 0.7;
+}
+
+.ghost-mark {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 5 4;
+  /* An outline only catches presses on its line. `.ghost-hit` is what catches them. */
+  pointer-events: none;
+}
+
+/*
+ * A combined move (several dice by one checker) is a solid, tinted disc where a single die is a
+ * dashed outline, so the two read as different things when both show on the same board.
+ */
+.ghost-combo .ghost-mark {
+  fill: var(--accent);
+  fill-opacity: 0.3;
+  stroke-dasharray: none;
+}
+
+/* Transparent, not none: an unpainted shape doesn't receive presses. */
+.ghost-hit {
+  fill: transparent;
+}
+
+.ghost text {
+  fill: #fffdf9;
+  stroke: #1d1b18;
+  stroke-width: 3;
+  paint-order: stroke;
+  font-size: 20px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.bear-off-label {
+  fill: var(--accent);
+}
+
+/* Transparent, not none: an unpainted shape doesn't receive presses. */
+.bear-off-hit {
+  fill: transparent;
+}
+
+.bear-off text {
+  fill: #fffdf9;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.point-bg:focus-visible,
+.point-pieces:focus-visible,
+.bear-off:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- Over the board --- */
+
+/*
+ * The board scales with the page, and so does what is laid over it. The size query lets
+ * the button grow with the board, with a floor so that it stays easy to tap on a phone.
+ */
+.board-wrap {
+  position: relative;
+  container-type: inline-size;
+}
+
+.under-dice,
+.between-trays {
+  position: absolute;
+  white-space: nowrap;
+  font-size: clamp(0.8rem, 2.2cqw, 1.05rem);
+}
+
+/* Under the dice, in the middle strip of the board (`underDiceSpot` gives left and top). */
+.under-dice {
+  transform: translateX(-50%);
+}
+
+/*
+ * Centred in the gap between the two trays (`betweenTraysSpot` gives left and top). The gap is
+ * 80 board units wide, which is under 50px on a phone, so the button gives up some of its side
+ * padding to stay inside the board.
+ */
+.between-trays {
+  transform: translate(-50%, -50%);
+  padding-inline: 0.5rem;
+}
+
+/* A quiet button is see-through, which would not read over the board's frame. */
+.between-trays.button-quiet {
+  background: var(--card);
+}
+
+/* --- Motion on the board --- */
+
+/*
+ * The dice are thrown in from the right, spinning, and settle where they lie. Each die
+ * starts a little after the one before it. The group is new for every throw, so the
+ * animation runs once per throw and never when a board opens mid-game.
+ */
+/* Spin and scale about the middle of the die / checker, which is also the group's origin. */
+.die-roll,
+.flyer-body {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.dice-rolling .die-roll {
+  animation: tumble var(--roll-ms) cubic-bezier(0.15, 0.75, 0.25, 1) both;
+  animation-delay: calc(var(--i) * 70ms);
+}
+
+@keyframes tumble {
+  from {
+    transform: translate(var(--from-x), var(--from-y)) rotate(var(--spin)) scale(0.6, 0.6);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(0px, 0px) rotate(0deg) scale(1, 1);
+    opacity: 1;
+  }
+}
+
+/*
+ * A moved checker is drawn at its new place at once, but hidden until it arrives, while a
+ * copy of it flies there from the old place on top of the board. Both are over at the same
+ * moment, so they swap without a gap. The copy ends hidden and stays so: it is dropped
+ * with the next position.
+ */
+.checker-arriving {
+  animation: hold var(--move-ms);
+}
+
+@keyframes hold {
+  from,
+  to {
+    visibility: hidden;
+  }
+}
+
+/*
+ * The flight is an arc made of three layers (see `Flight`). The outer one goes along the
+ * straight line, the middle one pushes the checker off it (down on the top side, up on the
+ * bottom side, not at all from one side to the other) and back, and the inner one swells it
+ * at the top. The push is quick at first and slows at the top, then falls the same way in
+ * reverse, which makes the path a parabola.
+ */
+.flyer {
+  animation: travel var(--move-ms) ease-in-out both;
+}
+
+.flyer-lift {
+  animation: hop var(--move-ms) linear both;
+}
+
+.flyer-body {
+  animation: swell var(--move-ms) ease-in-out both;
+}
+
+@keyframes travel {
+  from {
+    transform: translate(var(--dx), var(--dy));
+    visibility: visible;
+  }
+
+  to {
+    transform: translate(0px, 0px);
+    visibility: hidden;
+  }
+}
+
+@keyframes hop {
+  from {
+    transform: translate(0px, 0px);
+    animation-timing-function: cubic-bezier(0.5, 1, 0.89, 1);
+  }
+
+  50% {
+    transform: translate(var(--hop-x), var(--hop-y));
+    animation-timing-function: cubic-bezier(0.11, 0, 0.5, 0);
+  }
+
+  to {
+    transform: translate(0px, 0px);
+  }
+}
+
+@keyframes swell {
+  from {
+    transform: scale(var(--sx0), var(--sy0));
+  }
+
+  50% {
+    transform: scale(1.25, 1.25);
+  }
+
+  to {
+    transform: scale(var(--sx1), var(--sy1));
+  }
+}
+
+/*
+ * There is deliberately no `prefers-reduced-motion` override here: these animations are how
+ * a player sees what the opponent just did, and the site's owner wants them always on.
+ */

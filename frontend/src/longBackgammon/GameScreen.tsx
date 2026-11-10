@@ -10,11 +10,11 @@ import {
   seatOf,
   shownIndex,
 } from "../features/game";
-import { ForfeitControl } from "../gameUi/ForfeitControl";
-import { InviteBox } from "../gameUi/InviteBox";
-import { GameShell, JoinPanel, ResultSection, gameNotice } from "../gameUi/Panels";
-import { ReviewPanel } from "../gameUi/ReviewPanel";
-import type { AnyGameViewRow, JoinRequestRow, RematchRequestRow, ReviewRow } from "../gameUi/rows";
+import { ForfeitControl } from "../components/game/ForfeitControl";
+import { InviteBox } from "../components/game/InviteBox";
+import { GameShell, JoinPanel, ResultSection, gameNotice } from "../components/game/Panels";
+import { ReviewPanel } from "../components/game/ReviewPanel";
+import type { AnyGameViewRow, JoinRequestRow, RematchRequestRow, ReviewRow } from "../components/game/rows";
 import { Board } from "./Board";
 import type { TimedCue } from "./cues";
 import { betweenTraysSpot, underDiceSpot } from "./geometry";
